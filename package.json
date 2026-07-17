@@ -1,0 +1,37 @@
+{
+  "name": "rm-toddle-middleware",
+  "version": "0.1.0",
+  "description": "Middleware de integração assíncrona TOTVS RM Educacional <-> Toddle (Open API V2)",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "worker:students": "tsx src/workers/rm-to-toddle/studentSync.worker.ts",
+    "enqueue:students": "tsx src/scripts/enqueueStudentSync.ts",
+    "schedule": "tsx src/scripts/scheduleJobs.ts",
+    "seed:yeargroups": "tsx src/scripts/seedYearGroups.ts",
+    "dlq": "tsx src/scripts/dlq.ts"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "bullmq": "^5.34.0",
+    "dotenv": "^16.4.7",
+    "ioredis": "^5.4.2",
+    "mssql": "^11.0.1",
+    "pg": "^8.13.1",
+    "pino": "^9.5.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/mssql": "^9.1.5",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

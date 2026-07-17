@@ -1,0 +1,24 @@
+# Infraestrutura local do middleware (Redis para o BullMQ + Postgres para a id_mapping).
+# O SQL Server do RM e as APIs (RM/Toddle) são externos e vêm do .env.
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: middleware
+      POSTGRES_PASSWORD: middleware
+      POSTGRES_DB: rm_toddle
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+volumes:
+  redis-data:
+  pg-data:
