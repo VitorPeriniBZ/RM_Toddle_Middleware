@@ -27,7 +27,7 @@ const envSchema = z.object({
   RM_SQL_TRUST_CERT: stringBool,
   RM_CODCOLIGADA: z.coerce.number().int().default(1),
 
-  // --- Toddle Open API V2 (Toddle 1.0) ---
+  // --- Toddle Open API V2 (Toddle 2.0 — modelo TeacherCourse, usado pela EAV) ---
   TODDLE_REGION: z.string().default('us-east-1'),
   TODDLE_BASE_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   TODDLE_TOKEN: z.string().min(1),

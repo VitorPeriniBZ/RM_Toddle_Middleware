@@ -8,6 +8,7 @@ export const QUEUE = {
   RM_TO_TODDLE_STUDENTS: 'rm-to-toddle.students',
   RM_TO_TODDLE_STAFF: 'rm-to-toddle.staff',
   RM_TO_TODDLE_PARENTS: 'rm-to-toddle.parents',
+  // Toddle 2.0: turmas seguem o modelo TeacherCourse (ver README, Fluxo 2).
   RM_TO_TODDLE_COURSES: 'rm-to-toddle.courses',
 
   // Fluxo 2: Toddle -> TOTVS RM (acadêmico, via SQL)

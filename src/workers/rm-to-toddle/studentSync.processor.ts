@@ -2,6 +2,7 @@ import { Job } from 'bullmq';
 import { env } from '../../config/env';
 import { totvsClient } from '../../clients/totvs/totvsEducationalClient';
 import { toddleClient } from '../../clients/toddle/toddleClient';
+import { isToddleStudentArchived } from '../../clients/toddle/types';
 import { idMappingRepository } from '../../repositories/idMappingRepository';
 import {
   StudentSyncItem,
@@ -151,7 +152,7 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
       const rmCode = rmCodeFromSourceId(student.sourceId);
 
       // Aluno existe no Toddle mas está arquivado: reativar antes do update.
-      if (student.archived) {
+      if (isToddleStudentArchived(student)) {
         await toddleClient.unarchiveStudent(student.id);
         log.info({ rmCode, toddleId: student.id }, 'Aluno desarquivado no Toddle');
       }

@@ -1,6 +1,17 @@
 import { pgPool } from '../db/pool';
 
-export const ENTITY_TYPES = ['STUDENT', 'STAFF', 'PARENT', 'COURSE', 'SUBJECT', 'YEAR_GROUP'] as const;
+export const ENTITY_TYPES = [
+  'STUDENT',
+  'STAFF',
+  'PARENT',
+  'COURSE',
+  // Toddle 2.0: a EAV usa o modelo TeacherCourse (uma "turma do professor" por
+  // disciplina/docente), distinto do course clássico do 1.0. O Fluxo 2 mapeia
+  // STURMADISC do RM para TEACHER_COURSE.
+  'TEACHER_COURSE',
+  'SUBJECT',
+  'YEAR_GROUP',
+] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 export interface IdMapping {

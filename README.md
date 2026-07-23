@@ -130,14 +130,16 @@ Utilitários: `npm run typecheck`, `npm run dlq -- list`, `npm run dlq -- reproc
 
 As filas já existem (`toddle-to-rm.*`); os workers seguem o mesmo padrão do Fluxo 1 (processor + worker + schemas). Pontos de atenção **antes** de implementar:
 
+- **A EAV usa o Toddle 2.0 (modelo TeacherCourse).** Turmas não seguem o `course` clássico do 1.0: cada oferta é um **TeacherCourse** (turma-disciplina-docente), o que casa bem com o `STURMADISC` do RM. Por isso a `id_mapping` já tem o entity_type `TEACHER_COURSE` (migration 002). As notas de etapa passam pelo **novo Grade Scale** do 2.0 — a escala de notas precisa ser lida/mapeada antes de lançar `SNOTAS`.
+- **Os endpoints exatos de TeacherCourse e do novo Grade Scale vêm da coleção do Toddle 2.0** (documentação distinta da V2 "clássica"). Confirme path, campos obrigatórios e shape de resposta na skill `toddle-api` **na versão 2.0** antes de escrever esses workers — não reaproveite às cegas os endpoints de `course`/`term-grades` do 1.0.
 - **Escrever direto no banco do RM é arriscado**: as regras de negócio vivem na aplicação, não no schema. Valide cada tabela/coluna/constraint com o dicionário de dados (GDIC) e teste exaustivamente em homologação. Prefira um usuário SQL com permissão mínima (INSERT/UPDATE apenas nas tabelas necessárias).
-- Tabelas-alvo típicas: `SFREQUENCIA` (frequência), `SNOTAS` (notas), `SMATRICULA`/`SMATRICPL` (matrículas), `STURMA`/`STURMADISC` (turmas), `SHORARIOTURMA` (horários). Sempre casando `CODCOLIGADA` e preenchendo `RECCREATEDBY`/`RECCREATEDON` para auditoria.
+- Tabelas-alvo típicas: `SFREQUENCIA` (frequência), `SNOTAS` (notas), `SMATRICULA`/`SMATRICPL` (matrículas), `STURMA`/`STURMADISC` (turmas → TeacherCourse), `SHORARIOTURMA` (horários). Sempre casando `CODCOLIGADA` e preenchendo `RECCREATEDBY`/`RECCREATEDON` para auditoria.
 - A tradução Toddle → RM usa a mesma `id_mapping` (agora no sentido inverso: `toddle_id` → `rm_code`/`rm_internal_id`).
 - Captura de eventos: webhooks do Toddle (se disponíveis no plano da escola) ou polling agendado com paginação por cursor (`count` + `cursor`) nos endpoints que o usam.
 
 ## Limitações conhecidas
 
-- **Toddle 1.0 vs 2.0**: esta implementação segue a Open API V2 do Toddle 1.0. Confirme a versão da sua escola — as docs divergem.
+- **Toddle 2.0 (TeacherCourse) — versão da EAV.** O Fluxo 1 (alunos) usa o núcleo de endpoints estável entre 1.0 e 2.0 (`/public/v2/students`, `/public/v2/year-groups`), então roda igual nas duas versões. As diferenças do 2.0 (modelo **TeacherCourse** e **novo Grade Scale**) afetam o **Fluxo 2** (turmas/notas) e têm documentação própria — leia a skill `toddle-api` 2.0 antes de implementar esses workers.
 - **Rate limits e emissão de token do Toddle não são documentados** — o token vem do suporte/onboarding; o limiter está conservador de propósito.
 - **Domínios de `MajorStatus`/`TermStatus`** do RM não são documentados: levante os valores do seu ambiente e configure `RM_ACTIVE_TERM_STATUSES`.
 - **Staff e Parents exigem e-mail** no Toddle (alunos não). Parents exigem `children[]` — carregue alunos antes de responsáveis. Ordem de carga sugerida: estrutura Toddle → subjects → staff → students → parents → courses.
