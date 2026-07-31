@@ -26,11 +26,25 @@ export interface RmStudentContext {
   CourseCode?: string | number;
   MajorCode?: string | number;
   ClassCode?: string | number;
+  /** Nome da turma (ex.: '10th grade A - 1ª série') — carrega a série no texto. */
+  ClassName?: string;
+  /** Campus (CODFILIAL). Escopo da integração controlado por RM_CODFILIAL. */
+  BranchCode?: string;
   TermCode?: string | number;
 
   /** Domínios NÃO documentados nos specs — filtrar via RM_ACTIVE_TERM_STATUSES. */
   MajorStatus?: string | number;
   TermStatus?: string | number;
+
+  /**
+   * Flag de matrícula ativa vindo do PRÓPRIO RM (SSTATUS.PLATIVO, "indica se
+   * está ativo no P. Letivo"), materializado como 'S'/'N'. Quando presente,
+   * dispensa adivinhar códigos de status em RM_ACTIVE_TERM_STATUSES — é a
+   * definição de "ativo" que a escola já mantém no RM.
+   */
+  IsActiveTerm?: string;
+  /** Descrição legível do status (ex.: 'Matriculado', 'Transferido') — só log. */
+  TermStatusName?: string;
 
   FatherName?: string;
   MotherName?: string;

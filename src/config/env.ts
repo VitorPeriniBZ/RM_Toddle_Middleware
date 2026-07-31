@@ -9,15 +9,37 @@ import { z } from 'zod';
 const stringBool = z.enum(['true', 'false']).default('true').transform((v) => v === 'true');
 
 const envSchema = z.object({
-  // --- TOTVS RM Educacional (API TTALK: {host}/api/educational/v1) ---
-  TOTVS_RM_HOST: z.string().url(),
-  /** Valor COMPLETO do header Authorization (o esquema depende do ambiente do RM). */
-  TOTVS_RM_AUTH_HEADER: z.string().min(1),
+  // --- TOTVS RM Educacional (API TTALK REST) — OPCIONAL ---
+  // No CloudTOTVS o REST educacional em geral NÃO está publicado; a fonte de
+  // dados do RM é o wsConsultaSQL (SOAP) abaixo. Deixe vazio se não houver REST.
+  TOTVS_RM_HOST: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  TOTVS_RM_AUTH_HEADER: z.string().optional(),
   TOTVS_RM_PAGE_SIZE: z.coerce.number().int().positive().default(200),
   /** CSV de MajorStatus/TermStatus "ativos" — domínios não documentados nos specs. Vazio = aceita todos. */
   RM_ACTIVE_TERM_STATUSES: z.string().default(''),
 
-  // --- Banco do RM (SQL Server) — opcional; sem ele o enriquecimento é pulado ---
+  // --- TBC / wsConsultaSQL (SOAP) — fonte de dados do RM ---
+  RM_WS_BASEURL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  RM_WS_USER: z.string().optional(),
+  RM_WS_PASS: z.string().optional(),
+  /** Sistema RM das Sentenças educacionais (normalmente "S"). */
+  RM_WS_SISTEMA: z.string().default('S'),
+  /** Código da Sentença que devolve o roster de alunos (obrigatória p/ o Fluxo 1 via SOAP). */
+  RM_SENTENCA_STUDENTS: z.string().optional(),
+  /** Período letivo passado à Sentença de alunos (ex.: "2026"). */
+  RM_CODPERLET: z.string().optional(),
+  /** Sentenças do Fluxo 2 (roadmap). */
+  RM_SENTENCA_FREQUENCIA: z.string().optional(),
+  RM_SENTENCA_NOTAS: z.string().optional(),
+  RM_CODCOLIGADA: z.coerce.number().int().default(1),
+  /**
+   * Campus (CODFILIAL) no escopo da integração, em CSV. Vazio = todos.
+   * Nesta escola: 1 = Infantil + Fundamental I; 2 = campus do aeroporto
+   * (Fundamental II + Médio). Só o 2 está no escopo do Toddle.
+   */
+  RM_CODFILIAL: z.string().default(''),
+
+  // --- Banco do RM (SQL Server) — legado/opcional; só o Fluxo 2 escrita usaria ---
   RM_SQL_SERVER: z.string().optional(),
   RM_SQL_PORT: z.coerce.number().int().default(1433),
   RM_SQL_DATABASE: z.string().optional(),
@@ -25,7 +47,6 @@ const envSchema = z.object({
   RM_SQL_PASSWORD: z.string().optional(),
   RM_SQL_ENCRYPT: stringBool,
   RM_SQL_TRUST_CERT: stringBool,
-  RM_CODCOLIGADA: z.coerce.number().int().default(1),
 
   // --- Toddle Open API V2 (Toddle 2.0 — modelo TeacherCourse, usado pela EAV) ---
   TODDLE_REGION: z.string().default('us-east-1'),
@@ -68,7 +89,12 @@ export const env = {
   TODDLE_BASE_URL: raw.TODDLE_BASE_URL ?? `https://${raw.TODDLE_REGION}-production-apis.toddleapp.com`,
 };
 
-/** O enriquecimento via SQL (e o Fluxo 2) só rodam se a conexão do RM estiver configurada. */
+/** Fonte de dados do RM via SOAP (wsConsultaSQL) — usada no Fluxo 1. */
+export const isRmSoapConfigured = Boolean(
+  raw.RM_WS_BASEURL && raw.RM_WS_USER && raw.RM_WS_PASS,
+);
+
+/** Acesso direto ao banco (mssql) — legado; só o Fluxo 2 escrita usaria. */
 export const isRmSqlConfigured = Boolean(
   raw.RM_SQL_SERVER && raw.RM_SQL_DATABASE && raw.RM_SQL_USER && raw.RM_SQL_PASSWORD,
 );

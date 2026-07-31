@@ -1,6 +1,5 @@
 import { Job } from 'bullmq';
 import { env } from '../../config/env';
-import { totvsClient } from '../../clients/totvs/totvsEducationalClient';
 import { toddleClient } from '../../clients/toddle/toddleClient';
 import { isToddleStudentArchived } from '../../clients/toddle/types';
 import { idMappingRepository } from '../../repositories/idMappingRepository';
@@ -10,7 +9,7 @@ import {
   studentExtractJobSchema,
   studentUpsertBatchJobSchema,
 } from '../../schemas/jobs.schema';
-import { enrichStudentsFromRmDatabase } from '../../services/studentEnrichment';
+import { fetchStudentsFromRm } from '../../services/rmStudentSource';
 import { toCreatePayload, toSyncItem, toUpdatePayload } from '../../services/studentTransformer';
 import { buildSourceId, rmCodeFromSourceId } from '../../services/sourceId';
 import { resolveYearGroupId } from '../../services/yearGroupResolver';
@@ -48,30 +47,29 @@ export async function processStudentExtract(job: Job): Promise<{
 }> {
   const { trigger } = studentExtractJobSchema.parse(job.data ?? {});
   const log = logger.child({ jobId: job.id, jobName: job.name, trigger });
-  log.info('Extract de alunos iniciado (RM /StudentContexts)');
+  log.info('Extract de alunos iniciado (RM wsConsultaSQL)');
 
-  // 1. Varre todas as páginas do RM, deduplicando por RA.
-  //    Um aluno aparece em VÁRIOS contextos (curso/turma/período) — mantemos
-  //    o primeiro contexto ATIVO encontrado (ou o primeiro geral, na ausência).
+  // 1. Lê o roster completo via Sentença SQL (SOAP) — email/dob/gênero já vêm
+  //    no mesmo rowset (enrichmentByCode), sem segundo round-trip.
+  const { contexts, enrichmentByCode } = await fetchStudentsFromRm();
+  await job.updateProgress({ phase: 'reading-rm', totalContexts: contexts.length });
+
+  // Deduplica por RA: um aluno pode vir em várias linhas (curso/turma/período);
+  // um contexto ATIVO tem prioridade sobre um inativo.
   const byStudentCode = new Map<string, RmStudentContext>();
-  let totalContexts = 0;
+  const totalContexts = contexts.length;
+  for (const ctx of contexts) {
+    const code = ctx.StudentCode !== undefined && ctx.StudentCode !== null
+      ? String(ctx.StudentCode).trim()
+      : '';
+    if (!code) continue;
 
-  for await (const page of totvsClient.iterateStudentContexts()) {
-    totalContexts += page.length;
-    for (const ctx of page) {
-      const code = ctx.StudentCode !== undefined && ctx.StudentCode !== null
-        ? String(ctx.StudentCode).trim()
-        : '';
-      if (!code) continue;
-
-      const existing = byStudentCode.get(code);
-      if (!existing) {
-        byStudentCode.set(code, ctx);
-      } else if (!isActiveContext(existing) && isActiveContext(ctx)) {
-        byStudentCode.set(code, ctx); // contexto ativo tem prioridade
-      }
+    const existing = byStudentCode.get(code);
+    if (!existing) {
+      byStudentCode.set(code, ctx);
+    } else if (!isActiveContext(existing) && isActiveContext(ctx)) {
+      byStudentCode.set(code, ctx); // contexto ativo tem prioridade
     }
-    await job.updateProgress({ phase: 'reading-rm', totalContexts });
   }
 
   // 2. Filtra por status ativo (RM_ACTIVE_TERM_STATUSES; vazio = aceita todos).
@@ -80,10 +78,6 @@ export async function processStudentExtract(job: Job): Promise<{
     { totalContexts, uniqueStudents: byStudentCode.size, active: activeContexts.length },
     'Leitura do RM concluída',
   );
-
-  // 3. Enriquecimento opcional via banco do RM (e-mail, nascimento, gênero).
-  const codes = activeContexts.map((ctx) => String(ctx.StudentCode).trim());
-  const enrichmentByCode = await enrichStudentsFromRmDatabase(codes);
 
   // 4. Normaliza para itens neutros de sincronização.
   const items: StudentSyncItem[] = [];
@@ -110,8 +104,27 @@ export async function processStudentExtract(job: Job): Promise<{
   return { totalContexts, uniqueStudents: items.length, batches: batches.length };
 }
 
-/** Status "ativo" configurável — os domínios de MajorStatus/TermStatus não são documentados. */
+/**
+ * Um aluno está "ativo"? Em ordem de preferência:
+ *
+ *  1. O flag do PRÓPRIO RM (SSTATUS.PLATIVO -> 'S'/'N'), quando a Sentença o
+ *     devolve. É a definição que a escola já mantém no RM e sobrevive à criação
+ *     de novos códigos de status — não precisa manter lista no .env.
+ *  2. RM_ACTIVE_TERM_STATUSES: lista explícita de códigos, para Sentenças que
+ *     não expõem o flag.
+ *  3. Sem nenhum dos dois, aceita todos (comportamento histórico).
+ *
+ * Verificado nesta base em 2026-07-31: PLATIVO='S' cobre Matriculado (484),
+ * Matrícula em andamento (24), Matrícula não enturmado (1) e Aluno Visitante
+ * (1); 'N' cobre Transferido, Cancelado-Matrícula/Rematrícula e Reopção de
+ * Turma — esta última é a linha da turma ANTIGA de quem trocou de turma, e é
+ * exatamente o que não pode vencer a desduplicação por RA.
+ */
 function isActiveContext(ctx: RmStudentContext): boolean {
+  const flag = ctx.IsActiveTerm?.trim().toUpperCase();
+  if (flag === 'S' || flag === 'T' || flag === '1') return true;
+  if (flag === 'N' || flag === 'F' || flag === '0') return false;
+
   const allowed = env.RM_ACTIVE_TERM_STATUSES
     .split(',')
     .map((s) => s.trim())

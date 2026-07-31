@@ -31,10 +31,10 @@ export async function resolveYearGroupId(yearGroupKey?: string): Promise<string>
 
 /**
  * Qual campo do contexto do RM representa a "série/ano" do aluno.
- * Ajuste aqui se na sua escola a série estiver em outro campo
- * (ex.: MajorCode ou parte do ClassCode).
+ * Nesta escola o de-para é por TURMA (COD_TURMA -> ClassCode); CourseCode/
+ * MajorCode ficam como fallback caso a turma não venha.
  */
 export function yearGroupKeyFromContext(ctx: RmStudentContext): string | undefined {
-  const key = ctx.CourseCode ?? ctx.MajorCode;
+  const key = ctx.ClassCode ?? ctx.CourseCode ?? ctx.MajorCode;
   return key !== undefined && key !== null ? String(key) : undefined;
 }

@@ -15,7 +15,7 @@ services:
       POSTGRES_PASSWORD: middleware
       POSTGRES_DB: rm_toddle
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
 

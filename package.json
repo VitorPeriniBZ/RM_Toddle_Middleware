@@ -14,12 +14,14 @@
     "enqueue:students": "tsx src/scripts/enqueueStudentSync.ts",
     "schedule": "tsx src/scripts/scheduleJobs.ts",
     "seed:yeargroups": "tsx src/scripts/seedYearGroups.ts",
+    "check:student": "tsx src/scripts/checkStudent.ts",
     "dlq": "tsx src/scripts/dlq.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
     "bullmq": "^5.34.0",
     "dotenv": "^16.4.7",
+    "fast-xml-parser": "^4.5.7",
     "ioredis": "^5.4.2",
     "mssql": "^11.0.1",
     "pg": "^8.13.1",
