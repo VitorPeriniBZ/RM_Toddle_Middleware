@@ -172,10 +172,19 @@ export class ToddleClient {
     );
   }
 
-  /** Year groups da escola — obrigatórios no create de aluno. */
-  async getYearGroups(): Promise<ToddleYearGroup[]> {
+  /**
+   * Year groups da escola — obrigatórios no create de aluno.
+   *
+   * SEM `curriculumId` a API devolve a org INTEIRA, achatando os currículos:
+   * a EAV tem dois, e os nomes colidem entre eles (existe "Year 1" nos dois,
+   * com ids diferentes) — a resposta não traz campo de currículo para
+   * desempatar. Passe `curriculumId` sempre que for montar de-para.
+   */
+  async getYearGroups(curriculumId?: string): Promise<ToddleYearGroup[]> {
     const { data } = await this.withRetry('GET /year-groups', () =>
-      this.http.get<ToddleYearGroupsResponse>('/public/v2/year-groups'),
+      this.http.get<ToddleYearGroupsResponse>('/public/v2/year-groups', {
+        params: curriculumId ? { curriculumId } : undefined,
+      }),
     );
     return data?.response?.yearGroups ?? [];
   }
