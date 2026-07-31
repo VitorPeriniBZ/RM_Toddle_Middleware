@@ -44,7 +44,12 @@ export interface ToddleStudentResponse {
 
 export interface ToddleYearGroup {
   id: string;
+  /** Coorte de formatura, ex.: "Batch of 2032" — NÃO é a série. */
   name?: string;
+  /** Série(s) ligada(s) à coorte, ex.: [{ id, name: "Grade 6" }]. */
+  grades?: Array<{ id: string; name?: string }>;
+  organizationId?: string;
+  organizationName?: string;
   [key: string]: unknown;
 }
 
