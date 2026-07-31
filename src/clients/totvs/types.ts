@@ -24,6 +24,18 @@ export interface RmStudentContext {
   StudentName?: string;
 
   CourseCode?: string | number;
+  /**
+   * Curso/matriz do aluno (SHABILITACAOFILIAL). É O QUE DETERMINA O CURRÍCULO
+   * do Toddle: a EAV tem dois programas (IB_MYP e UBD/Independent) cujas
+   * escadas de série se sobrepõem — 10º ano existe como 'Grade 10' no UBD e
+   * como 'Year 5' no MYP. Sem curso, o de-para turma -> year group é escolha
+   * entre duas escadas sem critério.
+   */
+  CourseName?: string;
+  /** SMATRICPL.IDHABILITACAOFILIAL — a matriz aplicada, chave estável do curso. */
+  AppliedMatrixId?: string;
+  /** STIPOCURSO.NOME. Na base da EAV vem 'Ensino Básico' em tudo — pouco útil. */
+  EducationLevel?: string;
   MajorCode?: string | number;
   ClassCode?: string | number;
   /** Nome da turma (ex.: '10th grade A - 1ª série') — carrega a série no texto. */
