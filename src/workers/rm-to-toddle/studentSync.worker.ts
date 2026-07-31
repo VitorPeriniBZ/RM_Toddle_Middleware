@@ -15,9 +15,12 @@ import { logger } from '../../utils/logger';
  * Worker da fila `rm-to-toddle.students`.
  * Rodar com: npm run worker:students
  *
- * - concurrency 3: lotes em paralelo sem afogar as APIs
- * - limiter 5 req/s: os rate limits do Toddle NÃO são documentados — comece
- *   conservador e ajuste com dados reais
+ * - concurrency 1 + limiter 2 req/s: medido em 2026-07-31 — com concurrency 3
+ *   e 5 req/s o Toddle devolveu HTTP 429 em massa e 3 lotes foram para a DLQ.
+ *   Os limites do Toddle não são documentados; estes valores sincronizaram 510
+ *   alunos sem rate limit. O cliente ainda retenta 429/5xx por conta própria
+ *   (ToddleClient.withRetry), então isto é a primeira linha de defesa, não a
+ *   única.
  */
 const worker = new Worker(
   QUEUE.RM_TO_TODDLE_STUDENTS,
@@ -33,8 +36,8 @@ const worker = new Worker(
   },
   {
     connection: redisConnection,
-    concurrency: 3,
-    limiter: { max: 5, duration: 1_000 },
+    concurrency: 1,
+    limiter: { max: 2, duration: 1_000 },
   },
 );
 
