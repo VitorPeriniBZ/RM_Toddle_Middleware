@@ -256,6 +256,83 @@ frequência oficial no homeroom e não por disciplina, a via de volta precisa de
 política para dizer a qual turma-disciplina do RM aquilo corresponde — e isso é
 decisão pedagógica, não técnica.
 
+### 5.5 A grade do Toddle tem TRÊS níveis, e o terceiro está bloqueado
+
+Medido em 04/08/2026, tentando lançar uma frequência de teste.
+
+```
+período         →  o que é uma "aula 2"                7 de 7    criados
+bell schedule   →  a que hora a "aula 2" começa        1 de 1    criada
+timetable slot  →  qual turma tem aula 2 na segunda    0 de 518  BLOQUEADO
+routine         →  qual grade de horário vale em qual dia       VAZIA
+```
+
+O `POST /public/v2/attendance` recusa com `"Attendance Record is not valid"`
+enquanto não houver timetable slot. **Isso não é peculiaridade da nossa
+integração: sem os slots, professor nenhum consegue lançar chamada por
+disciplina no Toddle.**
+
+E o `POST /public/v2/timetable-slots` **devolve `{ isSuccess: true }` sem criar
+nada**. Verificado: criei um slot, o POST confirmou, e o `GET` não o devolve em
+nenhuma janela. A consulta está certa — as variantes erradas devolvem 400
+nomeando o problema (`academicYearId is invalid`, `curriculumId is required`,
+`The difference between start date and end date should not exceed one month`), e
+a nossa não devolve erro nenhum, só `totalCount=0`.
+
+**A causa está na routine.** A única routine do currículo (`ENC`,
+`404046160261573423`, modo `OPERATIONAL_DAYS`, vigência 30/01 → 20/11/2026) tem:
+
+```
+bellSchedulesMapping: []     ← vazio
+dayPatterns:          []
+rotationDays:         []
+```
+
+`bellScheduleMap` é **obrigatório** ao criar routine, e no modo
+`OPERATIONAL_DAYS` tem a forma `{ weekday, bellScheduleId }`. Esta routine foi
+criada sem nenhum, então não existe estrutura de dia onde um slot se fixe.
+
+**Por que não corrigi:** a routine `ENC` cobre as **15 séries** do currículo, de
+Pre-K a Grade 12. As 185 turma-disciplina em escopo são só **MS (114) e HS (71)**
+— Grade 6 a 12. Mapear a grade do campus 2 nessa routine aplicaria o horário do
+campus 2 a Pre-K, K1, K2 e Year 1–5, que estão **fora de escopo por decisão da
+escola**. Alterar configuração compartilhada de outros segmentos não é decisão
+de implementação.
+
+Os dois caminhos, ambos de decisão da escola:
+
+1. **Routine nova**, restrita às séries de Grade 6 a 12, com `bellScheduleMap`
+   apontando para a grade `EAV Campus 2 - Fund II e Medio (RM)`. Aditivo e
+   corretamente escopado. **Não verificado** se duas routines no mesmo currículo
+   e vigência conflitam.
+2. **Configurar pelo portal**, por quem administra o Toddle da escola.
+
+Enquanto isso não existir, `npm run seed:timetable` para na sonda: ele cria UM
+slot, lê de volta, e aborta se o GET não o devolver — justamente para não criar
+518 registros sem `DELETE` numa estrutura que não os materializa.
+
+### 5.6 Não existe carga histórica
+
+`POST /attendance` para 02/03/2026 recusou com
+`"The student is not enrolled on the given date"`. As matrículas no Toddle foram
+criadas em agosto de 2026, então qualquer data anterior é recusada.
+
+Consequência: a frequência de fevereiro a julho de 2026 não pode ser espelhada no
+Toddle nem reconciliada por ele. A via de volta só vale para o que for lançado a
+partir de agora.
+
+### 5.7 O calendário virou recusa dura
+
+`POST /timetable-slots` com `applicableTill = 2026-12-11` (vigência do horário no
+RM) foi recusado:
+
+> `Applicable till should be within academic year start and end date`
+
+O ano acadêmico do Toddle termina em **20/11/2026**; o ano letivo do RM vai até
+**11/12/2026**. Dos 518 horários, **494 precisam ser limitados**. As aulas entre
+21/11 e 11/12 não podem ter grade no Toddle, logo não aceitam chamada lá. É
+decisão de calendário da escola — nenhuma escolha de implementação contorna.
+
 ## 6. Armadilhas
 
 ### 6.1 `DATA` não tem fuso

@@ -166,3 +166,39 @@ export interface ToddleBellScheduleResponse {
     pageInfo?: ToddlePageInfo;
   };
 }
+
+/**
+ * Slot da grade: qual turma ocupa qual período em qual dia da semana.
+ *
+ * É o nível que o Toddle valida quando alguém lança frequência — sem slot, o
+ * `POST /attendance` recusa com "Attendance Record is not valid". Corresponde
+ * 1:1 a uma linha de `SHorarioTurma` do RM.
+ *
+ * O GET devolve EXPANDIDO POR DATA: um slot semanal aparece uma vez por
+ * ocorrência na janela consultada, com `date` preenchida.
+ */
+export interface ToddleTimetableSlot {
+  periodId?: string;
+  courseId?: string;
+  /** Dia da semana. Mesma convenção do DIASEMANA do RM (segunda = 2). */
+  weekday?: number;
+  rotationDayId?: string | null;
+  staffIds?: string[];
+  location?: string;
+  subjectInfo?: string;
+  startTime?: string;
+  endTime?: string;
+  curriculumProgramId?: string;
+  /** Ocorrência concreta, "YYYY-MM-DD". */
+  date?: string;
+  routineId?: string;
+  [key: string]: unknown;
+}
+
+export interface ToddleTimetableSlotsResponse {
+  response?: {
+    totalCount?: number;
+    edges?: ToddleTimetableSlot[];
+    pageInfo?: ToddlePageInfo;
+  };
+}

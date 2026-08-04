@@ -4,6 +4,8 @@ import { chunk } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 import {
   ToddleAttendance,
+  ToddleTimetableSlot,
+  ToddleTimetableSlotsResponse,
   ToddleBellSchedule,
   ToddleBellScheduleResponse,
   ToddleAttendanceCode,
@@ -554,6 +556,87 @@ export class ToddleClient {
       }>('/public/v2/curriculums'),
     );
     return data?.response?.curriculums ?? [];
+  }
+
+  /**
+   * Slots da grade — qual turma ocupa qual período em qual dia.
+   *
+   * A resposta vem EXPANDIDA POR DATA: um slot semanal recorrente aparece uma
+   * vez por ocorrência dentro da janela consultada. Para saber se um slot
+   * existe, consulte uma semana representativa e olhe a tupla
+   * (courseId, periodId, weekday) — não conte linhas.
+   *
+   * `curriculumIds` vai como array JSON; `academicYearId` é SINGULAR aqui
+   * (diferente de /periods e /bell-schedule, que usam `academicYearIds` plural).
+   */
+  async listTimetableSlots(params: {
+    curriculumId: string;
+    academicYearId: string;
+    startDate: string;
+    endDate: string;
+    courseIds?: string[];
+  }): Promise<ToddleTimetableSlot[]> {
+    const slots: ToddleTimetableSlot[] = [];
+    let cursor: string | undefined;
+
+    for (;;) {
+      const query: Record<string, string | number> = {
+        curriculumIds: JSON.stringify([params.curriculumId]),
+        academicYearId: params.academicYearId,
+        startDate: params.startDate,
+        endDate: params.endDate,
+        count: ATTENDANCE_PAGE_SIZE,
+      };
+      if (cursor) query.cursor = cursor;
+      if (params.courseIds?.length) query.courseIds = JSON.stringify(params.courseIds);
+
+      const { data } = await this.withRetry('GET /timetable-slots', () =>
+        this.http.get<ToddleTimetableSlotsResponse>('/public/v2/timetable-slots', { params: query }),
+      );
+
+      slots.push(...(data?.response?.edges ?? []));
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info?.endCursor) break;
+      cursor = info.endCursor;
+    }
+    return slots;
+  }
+
+  /**
+   * Cria um slot da grade. Espelha uma linha de `SHorarioTurma` do RM.
+   *
+   * DUAS COISAS QUE LIMITAM O USO:
+   *
+   *  - A resposta é só `{ isSuccess: true }`, SEM id. Não há como guardar um
+   *    de-para slot ↔ horário do RM; a identificação é a tupla
+   *    (courseId, periodId, weekDay), recuperável pelo GET.
+   *  - NÃO existe DELETE de timetable-slot na API (só POST e GET). Existe
+   *    `isEnabled`, mas desligar depois não foi verificado. Trate cada criação
+   *    como permanente.
+   *
+   * `applicableTill` tem de cair DENTRO do ano acadêmico, senão a API recusa com
+   * "Applicable till should be within academic year start and end date". O ano
+   * letivo do RM pode passar do ano acadêmico do Toddle — quem chama decide o
+   * que fazer com a sobra, e não deve limitar em silêncio.
+   */
+  async createTimetableSlot(payload: {
+    curriculumId: string;
+    academicYearId: string;
+    courseId: string;
+    weekDay: number;
+    periodId: string;
+    startTime?: string;
+    endTime?: string;
+    applicableFrom?: string;
+    applicableTill?: string;
+    isEnabled?: boolean;
+  }): Promise<void> {
+    const { data } = await this.withRetry('POST /timetable-slots', () =>
+      this.http.post<{ response?: { isSuccess?: boolean } }>('/public/v2/timetable-slots', payload),
+    );
+    if (data?.response?.isSuccess !== true) {
+      throw new ToddleApiError('POST /timetable-slots não confirmou isSuccess', undefined, data);
+    }
   }
 
   /**

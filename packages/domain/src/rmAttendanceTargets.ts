@@ -275,6 +275,14 @@ export class RmAttendanceTargets {
     return { etapa: cobrem[0] };
   }
 
+  /**
+   * Todos os horários do índice, achatados. Usado por quem precisa espelhar a
+   * grade inteira (ex.: criar timetable slots no Toddle), não só resolver um.
+   */
+  todosHorarios(): RmHorario[] {
+    return [...this.horariosPorChave.values()].flat();
+  }
+
   /** Turmas-disciplina do escopo que ficaram sem nenhum horário no índice. */
   turmaDiscSemHorario(idsTurmaDisc: string[]): string[] {
     const comHorario = new Set(
