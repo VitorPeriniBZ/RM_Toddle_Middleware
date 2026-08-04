@@ -19,7 +19,7 @@ FLUXO 1 (cadastros)                          FLUXO 2 (acadêmico) — roadmap
 ```
 
 - **Fluxo 1 (RM → Toddle)** — pessoas, alunos, professores e responsáveis nascem no RM. O middleware lê a API TTALK, enriquece via banco, transforma no padrão Toddle e faz upsert usando `sourceId` como elo. **Implementado neste repositório: alunos (Students).**
-- **Fluxo 2 (Toddle → RM)** — turmas, matrículas, notas, frequência, diário e horários são geridos no Toddle. O middleware captura os eventos, traduz IDs pela tabela de mapeamento e escreve nas tabelas do RM via SQL (a API do RM é majoritariamente leitura). **Roadmap — ver seção no fim.**
+- **Fluxo 2 (Toddle → RM)** — notas e frequência lançadas no Toddle voltam para o RM. **Escopo real é menor do que parece:** a API do RM Educacional **não tem POST para aluno, turma nem professor** (só leitura via `/StudentContexts`, `/ProfessorContexts`, `/Professors/{id}/disciplineclasses`); o que ela permite escrever é estrutura acadêmica (`/Academics/{id}/Courses`, `/Majors`, `/CurriculumGrids`, `/appliedmatrixes`, `/terms`, `/Periods`, `/griddisciplines`) e `POST /attendance`. E no CloudTOTVS da EAV esse REST **não está publicado**. Mas o `wsConsultaSQL` NÃO é o único acesso: o **`wsDataServer`** está exposto na mesma porta 1951 e escreve via `SaveRecord`, passando pela camada DataServer do RM (ver seção de decisões). Portanto a volta é viável — o que falta é governança acadêmica, não infraestrutura. **Roadmap — ver seção no fim.**
 
 ## Estrutura de pastas
 
@@ -132,6 +132,15 @@ As filas já existem (`toddle-to-rm.*`); os workers seguem o mesmo padrão do Fl
 
 - **A EAV usa o Toddle 2.0 (modelo TeacherCourse).** Turmas não seguem o `course` clássico do 1.0: cada oferta é um **TeacherCourse** (turma-disciplina-docente), o que casa bem com o `STURMADISC` do RM. Por isso a `id_mapping` já tem o entity_type `TEACHER_COURSE` (migration 002). As notas de etapa passam pelo **novo Grade Scale** do 2.0 — a escala de notas precisa ser lida/mapeada antes de lançar `SNOTAS`.
 - **Os endpoints exatos de TeacherCourse e do novo Grade Scale vêm da coleção do Toddle 2.0** (documentação distinta da V2 "clássica"). Confirme path, campos obrigatórios e shape de resposta na skill `toddle-api` **na versão 2.0** antes de escrever esses workers — não reaproveite às cegas os endpoints de `course`/`term-grades` do 1.0.
+- **CORRIGIDO em 2026-08-04: existe caminho de escrita, e ele já está exposto.** Até esta data a conclusão registrada era "o acesso ao RM é read-only; escrever exige publicar o REST ou abrir a porta 1433". **Errado.** O `wsConsultaSQL` é read-only *por natureza* (executa Sentenças `SELECT`), mas o **`wsDataServer`** está publicado no MESMO host e MESMA porta 1951, autentica com as mesmas credenciais e responde: um `ReadRecord` em `EduAlunoData` devolveu o registro completo de um aluno (117 KB, dataset `EduAluno`/`SAluno`). A operação de escrita é `SaveRecord` na mesma interface, e passa pela camada **DataServer**, que aplica as validações do produto — diferente de `INSERT` direto. O `wsProcess` também responde.
+
+  DataServers confirmados por sondagem (`ReadRecord` com chave inválida: `"Classe não encontrada"` = não existe; erro de formato = existe):
+  `EduFrequenciaDiariaData`, `EduHorarioTurmaData`, `EduNotasData`, `EduNotaEtapaData`, `EduTurmaDiscData`, `EduMatriculaData`, `EduProfessorData`.
+  Não existem: `EduFrequenciaData`, `SFrequenciaData`, `EduFaltaData`, `EduAulaData`, `EduDiarioClasseData`.
+
+  Contexto obrigatório nas chamadas: `CODCOLIGADA;CODFILIAL;CODTIPOCURSO;CODSISTEMA`. Sem ele o RM responde *"Contexto inválido OU não foram configurados os parâmetros do Educacional"*.
+
+  **O bloqueio deixou de ser infraestrutura e passou a ser governança acadêmica.** O RM é o sistema de registro legal da escola. Antes de qualquer escrita: definir o que o Toddle está autorizado a lançar, quem aprova, qual a unidade oficial de frequência, e a política de conflito Toddle × RM. Sonda de escrita sem persistir dado: `docs/rm-sentencas/testar-saverecord.sh`.
 - **Escrever direto no banco do RM é arriscado**: as regras de negócio vivem na aplicação, não no schema. Valide cada tabela/coluna/constraint com o dicionário de dados (GDIC) e teste exaustivamente em homologação. Prefira um usuário SQL com permissão mínima (INSERT/UPDATE apenas nas tabelas necessárias).
 - Tabelas-alvo típicas: `SFREQUENCIA` (frequência), `SNOTAS` (notas), `SMATRICULA`/`SMATRICPL` (matrículas), `STURMA`/`STURMADISC` (turmas → TeacherCourse), `SHORARIOTURMA` (horários). Sempre casando `CODCOLIGADA` e preenchendo `RECCREATEDBY`/`RECCREATEDON` para auditoria.
 - A tradução Toddle → RM usa a mesma `id_mapping` (agora no sentido inverso: `toddle_id` → `rm_code`/`rm_internal_id`).
