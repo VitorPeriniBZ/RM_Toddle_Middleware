@@ -100,6 +100,29 @@ const envSchema = z.object({
     .string()
     .min(1, 'TENANT_SLUG é obrigatória: informe o slug da escola (ex.: "eav")'),
 
+  // --- API (plano de controle) ---
+  API_PORT: z.coerce.number().int().min(1).max(65535).default(3333),
+  API_HOST: z.string().default('127.0.0.1'),
+  /**
+   * Modo de autenticação. OBRIGATÓRIO e sem default — a API expõe dados de
+   * alunos (PII), e "esqueci de configurar" não pode virar "aberta".
+   *
+   *   google-oidc  produção: exige Bearer token do Google, valida assinatura
+   *                (JWKS), audience, expiração e a claim `hd` do Workspace.
+   *   localhost    desenvolvimento: dispensa token, mas SÓ escuta em 127.0.0.1 e
+   *                recusa subir com NODE_ENV=production. Loga aviso em toda
+   *                requisição, de propósito — não deve passar despercebido.
+   */
+  API_AUTH_MODE: z.enum(['google-oidc', 'localhost'], {
+    errorMap: () => ({
+      message: 'API_AUTH_MODE é obrigatória: "google-oidc" (produção) ou "localhost" (dev)',
+    }),
+  }),
+  /** Client ID do Google — é o `aud` esperado no token. Exigido no modo google-oidc. */
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  /** Domínios do Workspace aceitos (claim `hd`), em CSV. Exigido no modo google-oidc. */
+  GOOGLE_ALLOWED_HD: z.string().optional(),
+
   // --- Infra do middleware ---
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().default('redis://localhost:6379'),
@@ -120,6 +143,38 @@ if (!parsed.success) {
 }
 
 const raw = parsed.data;
+
+// Validações que cruzam campos — o Zod por campo não alcança.
+const erros: string[] = [];
+
+if (raw.API_AUTH_MODE === 'google-oidc') {
+  if (!raw.GOOGLE_CLIENT_ID) erros.push('API_AUTH_MODE=google-oidc exige GOOGLE_CLIENT_ID');
+  if (!raw.GOOGLE_ALLOWED_HD) {
+    erros.push(
+      'API_AUTH_MODE=google-oidc exige GOOGLE_ALLOWED_HD (domínios do Workspace aceitos). ' +
+        'Sem isso, qualquer conta Google entraria.',
+    );
+  }
+}
+
+if (raw.API_AUTH_MODE === 'localhost') {
+  // Fail-closed: modo sem token só existe para desenvolvimento local.
+  if (raw.NODE_ENV === 'production') {
+    erros.push('API_AUTH_MODE=localhost é proibido com NODE_ENV=production');
+  }
+  if (!['127.0.0.1', 'localhost', '::1'].includes(raw.API_HOST)) {
+    erros.push(
+      `API_AUTH_MODE=localhost exige API_HOST local (recebido "${raw.API_HOST}"). ` +
+        'Expor a API sem autenticação em outra interface publicaria dados de alunos.',
+    );
+  }
+}
+
+if (erros.length > 0) {
+  // eslint-disable-next-line no-console
+  console.error('Configuração inválida:\n' + erros.map((e) => ' - ' + e).join('\n'));
+  process.exit(1);
+}
 
 export const env = {
   ...raw,

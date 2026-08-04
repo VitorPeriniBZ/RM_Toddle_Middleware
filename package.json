@@ -14,7 +14,8 @@
     "schedule": "tsx apps/worker/src/scripts/scheduleJobs.ts",
     "seed:yeargroups": "tsx apps/worker/src/scripts/seedYearGroups.ts",
     "check:student": "tsx apps/worker/src/scripts/checkStudent.ts",
-    "dlq": "tsx apps/worker/src/scripts/dlq.ts"
+    "dlq": "tsx apps/worker/src/scripts/dlq.ts",
+    "api": "tsx apps/api/src/server.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
