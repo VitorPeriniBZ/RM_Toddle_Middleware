@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<xs:schema xmlns:mstns="http://tempuri.org/EduFrequenciaDiaria.xsd" xmlns="http://tempuri.org/EduFrequenciaDiaria.xsd" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" id="EduFrequenciaDiaria" targetNamespace="http://tempuri.org/EduFrequenciaDiaria.xsd" attributeFormDefault="qualified" elementFormDefault="qualified">
+  <xs:element name="EduFrequenciaDiaria" msdata:IsDataSet="true" msdata:UseCurrentLocale="true" msdata:EnforceConstraints="False">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="SFREQUENCIA">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="CODCOLIGADA" msdata:Caption="Coligada" type="xs:short" default="1"/>
+              <xs:element name="IDHORARIOTURMA" msdata:Caption="Identificador do horário da turma" type="xs:int"/>
+              <xs:element name="IDTURMADISC" msdata:Caption="Turma disciplina" type="xs:int"/>
+              <xs:element name="RA" msdata:Caption="R.A.">
+                <xs:simpleType>
+                  <xs:restriction base="xs:string">
+                    <xs:maxLength value="20"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:element>
+              <xs:element name="DATA" msdata:Caption="Data" msdata:DateTimeMode="Unspecified" type="xs:dateTime"/>
+              <xs:element name="PRESENCA" msdata:Caption="Presença">
+                <xs:simpleType>
+                  <xs:restriction base="xs:string">
+                    <xs:maxLength value="1"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:element>
+              <xs:element name="JUSTIFICADA" msdata:Caption="Abona" minOccurs="0">
+                <xs:simpleType>
+                  <xs:restriction base="xs:string">
+                    <xs:maxLength value="1"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:element>
+              <xs:element name="IDJUSTIFICATIVAFALTA" type="xs:int" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="PARAMS">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="CODCOLIGADA" type="xs:short"/>
+              <xs:element name="IDTURMADISC" type="xs:int"/>
+              <xs:element name="CODETAPA" type="xs:string"/>
+              <xs:element name="AULASDADAS" type="xs:int" minOccurs="0"/>
+              <xs:element name="CODSUBTURMA" type="xs:string" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="AlunosFreq">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="CODCOLIGADA" type="xs:short"/>
+              <xs:element name="RA" type="xs:string"/>
+              <xs:element name="IDTURMADISC" type="xs:int"/>
+              <xs:element name="IDTURMADISCORIGEM" type="xs:int" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="PlanoAulaFreq">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="CODCOLIGADA" type="xs:int" minOccurs="0"/>
+              <xs:element name="IDTURMADISC" type="xs:int" minOccurs="0"/>
+              <xs:element name="CODETAPA" type="xs:int" minOccurs="0"/>
+              <xs:element name="AULA" type="xs:int" minOccurs="0"/>
+              <xs:element name="FREQUENCIADISPWEB" type="xs:int" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+    </xs:complexType>
+    <xs:unique name="Constraint1" msdata:PrimaryKey="true">
+      <xs:selector xpath=".//mstns:SFREQUENCIA"/>
+      <xs:field xpath="mstns:CODCOLIGADA"/>
+      <xs:field xpath="mstns:IDHORARIOTURMA"/>
+      <xs:field xpath="mstns:IDTURMADISC"/>
+      <xs:field xpath="mstns:RA"/>
+      <xs:field xpath="mstns:DATA"/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>
