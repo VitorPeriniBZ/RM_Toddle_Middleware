@@ -142,6 +142,23 @@ export class ToddleClient {
     return found;
   }
 
+  /**
+   * Uma página do roster da organização, sem filtro de sourceId.
+   *
+   * ATENÇÃO: alunos ARQUIVADOS não vêm aqui — a API não os devolve em nenhum
+   * GET e não há parâmetro para incluí-los. Portanto esta listagem responde
+   * "quem está ativo no destino", nunca "quem existe no destino". Para saber de
+   * arquivados, a fonte é a id_mapping.
+   */
+  async listStudentsPage(pageNumber: number): Promise<ToddleStudent[]> {
+    const { data } = await this.withRetry('GET /students (página)', () =>
+      this.http.get<ToddleStudentsListResponse>('/public/v2/students', {
+        params: { pageNumber, pageSize: env.TODDLE_PAGE_SIZE },
+      }),
+    );
+    return data?.response?.students ?? [];
+  }
+
   async createStudent(payload: Record<string, unknown>): Promise<ToddleStudent> {
     const { data } = await this.withRetry('POST /students', () =>
       this.http.post<ToddleStudentResponse>('/public/v2/students', payload),
@@ -187,6 +204,134 @@ export class ToddleClient {
       }),
     );
     return data?.response?.yearGroups ?? [];
+  }
+
+  // -------------------------------------------------------------------------
+  // Staff (professores)
+  // -------------------------------------------------------------------------
+
+  /** Uma página do staff. Arquivados NÃO vêm (mesma regra dos alunos). */
+  async listStaffPage(pageNumber: number): Promise<Array<Record<string, unknown>>> {
+    const { data } = await this.withRetry('GET /staff', () =>
+      this.http.get<{ response?: { staff?: Array<Record<string, unknown>> } }>('/public/v2/staff', {
+        params: { pageNumber, pageSize: 100 },
+      }),
+    );
+    return data?.response?.staff ?? [];
+  }
+
+  /**
+   * Cria staff. O Toddle EXIGE `email` e o usa como IDENTIDADE — e-mail errado
+   * gera conta inacessível que só pode ser arquivada, nunca excluída.
+   */
+  async createStaff(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const { data } = await this.withRetry('POST /staff', () =>
+      this.http.post<{ response?: Record<string, unknown> }>('/public/v2/staff', payload),
+    );
+    return data?.response ?? {};
+  }
+
+  async archiveStaff(staffId: string): Promise<void> {
+    await this.withRetry('PUT /staff/:id/archive', () =>
+      this.http.put(`/public/v2/staff/${staffId}/archive`),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // TeacherCourse e Class (turmas)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Cria TeacherCourse (disciplina/nível). `academicCourseId` é OBRIGATÓRIO — a
+   * API responde "Academic Course ID is required. Teacher courses can only be
+   * created when linked to an academic course." E o vínculo é DEFINITIVO: o
+   * PUT de update só aceita title/description, e não existe DELETE.
+   */
+  async createTeacherCourse(payload: Record<string, unknown>): Promise<string> {
+    const { data } = await this.withRetry('POST /teacher-courses', () =>
+      this.http.post<{ response?: { teacherCourseId?: string } }>('/public/v2/teacher-courses', payload),
+    );
+    const id = data?.response?.teacherCourseId;
+    if (!id) throw new ToddleApiError('Toddle não devolveu teacherCourseId', undefined, data);
+    return id;
+  }
+
+  /** Cria Class (o "course" da API V2). Exige teacherCourseId + curriculumId. */
+  async createClass(payload: Record<string, unknown>): Promise<string> {
+    const { data } = await this.withRetry('POST /courses', () =>
+      this.http.post<{ response?: { course?: { id?: string } } }>('/public/v2/courses', payload),
+    );
+    const id = data?.response?.course?.id;
+    if (!id) throw new ToddleApiError('Toddle não devolveu o id da class', undefined, data);
+    return id;
+  }
+
+  async listClasses(): Promise<Array<Record<string, unknown>>> {
+    const { data } = await this.withRetry('GET /courses', () =>
+      this.http.get<{ response?: { courses?: Array<Record<string, unknown>> } }>('/public/v2/courses'),
+    );
+    return data?.response?.courses ?? [];
+  }
+
+  async addStudentsToClass(classId: string, studentIds: string[]): Promise<void> {
+    await this.withRetry('PUT /courses/:id/students/add', () =>
+      this.http.put(`/public/v2/courses/${classId}/students/add`, { studentIds }),
+    );
+  }
+
+  async addStaffToClass(classId: string, staffIds: string[]): Promise<void> {
+    await this.withRetry('PUT /courses/:id/staffs/add', () =>
+      this.http.put(`/public/v2/courses/${classId}/staffs/add`, { staffIds }),
+    );
+  }
+
+  async archiveClass(classId: string): Promise<void> {
+    await this.withRetry('PUT /courses/:id/archive', () =>
+      this.http.put(`/public/v2/courses/${classId}/archive`),
+    );
+  }
+
+  /**
+   * Confirma que o token aponta para a organização declarada em TODDLE_ORG_ID e
+   * ABORTA se divergir. Chamar UMA vez, antes de qualquer escrita.
+   *
+   * Por que existe: a estrutura acadêmica do Toddle é somente leitura na API e é
+   * criada pela escola no portal, então os ids guardados na id_mapping pertencem
+   * a UMA organização. Trocar o token sem trocar o de-para faria o sync escrever
+   * noutra organização reusando ids que não existem lá — e silenciosamente,
+   * porque nada na resposta obriga a conferir. A organização vem no payload de
+   * /year-groups (campo organizationId), que já lemos de todo jeito.
+   */
+  async assertTargetOrganization(): Promise<string> {
+    const yearGroups = await this.getYearGroups();
+    const orgIds = [...new Set(
+      yearGroups
+        .map((yg) => (typeof yg.organizationId === 'string' ? yg.organizationId : undefined))
+        .filter((id): id is string => Boolean(id)),
+    )];
+
+    if (orgIds.length === 0) {
+      throw new ToddleApiError(
+        'Não foi possível identificar a organização do Toddle: /year-groups não devolveu ' +
+          'organizationId. A estrutura acadêmica pode não estar criada nesta organização.',
+      );
+    }
+    if (orgIds.length > 1) {
+      throw new ToddleApiError(
+        `/year-groups devolveu mais de uma organização (${orgIds.join(', ')}) — inesperado; ` +
+          'o token deveria estar restrito a uma.',
+      );
+    }
+    if (orgIds[0] !== env.TODDLE_ORG_ID) {
+      throw new ToddleApiError(
+        `Organização divergente: o token resolve para ${orgIds[0]}, mas TODDLE_ORG_ID declara ` +
+          `${env.TODDLE_ORG_ID}. Abortando ANTES de qualquer escrita — os mapeamentos da ` +
+          'id_mapping pertencem à organização declarada e não valem na outra.',
+      );
+    }
+
+    logger.info({ organizationId: orgIds[0] }, 'Organização do Toddle confirmada');
+    return orgIds[0];
   }
 }
 
