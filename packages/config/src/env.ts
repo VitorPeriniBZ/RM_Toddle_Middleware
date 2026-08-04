@@ -118,6 +118,12 @@ const envSchema = z.object({
       message: 'API_AUTH_MODE é obrigatória: "google-oidc" (produção) ou "localhost" (dev)',
     }),
   }),
+  /**
+   * Origens autorizadas a chamar a API (CORS), em CSV. Allowlist explícita, nunca
+   * "*": a UI manda o header Authorization, e com origem aberta qualquer página
+   * no navegador do usuário poderia usar o token dele contra esta API.
+   */
+  WEB_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   /** Client ID do Google — é o `aud` esperado no token. Exigido no modo google-oidc. */
   GOOGLE_CLIENT_ID: z.string().optional(),
   /** Domínios do Workspace aceitos (claim `hd`), em CSV. Exigido no modo google-oidc. */

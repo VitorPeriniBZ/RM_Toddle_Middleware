@@ -21,5 +21,6 @@
       "@rm-toddle/queues": ["packages/queues/src/index.ts"]
     }
   },
-  "include": ["apps/**/*.ts", "packages/**/*.ts"]
+  "include": ["apps/**/*.ts", "packages/**/*.ts"],
+  "exclude": ["apps/web", "node_modules", "dist"]
 }

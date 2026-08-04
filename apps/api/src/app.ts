@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { env, logger, configVersion, configVersionDetalhe } from '@rm-toddle/config';
 import { pgPool, idMappingRepository, ENTITY_TYPES, type EntityType } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
@@ -17,10 +18,28 @@ import { autenticar } from './auth';
 export function construirApp() {
   const app = Fastify({ loggerInstance: logger });
 
+  /*
+   * CORS por ALLOWLIST, nunca "*". A UI roda em outra origem (Vite na 5173) e
+   * precisa mandar o header Authorization; com origem liberada para qualquer
+   * site, qualquer página aberta no navegador do usuário poderia chamar esta API
+   * usando o token dele.
+   *
+   * localhost e 127.0.0.1 são origens DIFERENTES para o navegador (e para o
+   * Google), então as duas entram — senão o login falha por origin_mismatch
+   * dependendo de como a página foi aberta.
+   */
+  const origensPermitidas = env.WEB_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+  void app.register(cors, {
+    origin: origensPermitidas,
+    methods: ['GET', 'POST', 'PUT'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+  });
+
   // Autentica tudo, exceto o health check — que precisa responder para o
   // orquestrador mesmo quando a autenticação está mal configurada.
   app.addHook('onRequest', async (req, reply) => {
-    if (req.url === '/health' || req.url.startsWith('/health?')) return;
+    const publicas = ['/health', '/auth/config'];
+    if (publicas.some((r) => req.url === r || req.url.startsWith(r + '?'))) return;
     await autenticar(req, reply);
   });
 
@@ -42,6 +61,20 @@ export function construirApp() {
       dependencias: deps,
     };
   });
+
+  /**
+   * Configuração que a UI precisa para montar o login. SEM autenticação, de
+   * propósito: o client ID do Google é público por desenho — ele aparece nas
+   * requisições do navegador de qualquer forma.
+   *
+   * Expor por aqui evita duplicar o valor num VITE_* e, principalmente, evita
+   * afrouxar o envPrefix do Vite, o que arriscaria varrer TODDLE_TOKEN e
+   * RM_WS_PASS para dentro do bundle.
+   */
+  app.get('/auth/config', async () => ({
+    authMode: env.API_AUTH_MODE,
+    clientId: env.API_AUTH_MODE === 'google-oidc' ? env.GOOGLE_CLIENT_ID : null,
+  }));
 
   /** Configuração de escopo/destino em vigor. Nenhum segredo é exposto. */
   app.get('/config', async () => configVersionDetalhe());
