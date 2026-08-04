@@ -202,3 +202,29 @@ export interface ToddleTimetableSlotsResponse {
     pageInfo?: ToddlePageInfo;
   };
 }
+
+/**
+ * Routine — qual grade de horário vale em qual dia, para quais séries.
+ *
+ * `bellSchedulesMapping` VAZIO é o que torna a grade inerte: com ele vazio,
+ * `POST /timetable-slots` responde `{ isSuccess: true }` e nada é criado.
+ * Medido em 04/08/2026 na routine "ENC" desta organização.
+ */
+export interface ToddleRoutine {
+  id: string;
+  label?: string;
+  curriculumProgramId?: string;
+  academicYearId?: string;
+  /** 'OPERATIONAL_DAYS' | 'ROTATION_CYCLE' */
+  routineMode?: string;
+  dayPatternType?: string;
+  countHolidayAsRotationDay?: boolean;
+  validity?: { startDate?: string; endDate?: string };
+  rotationDays?: Array<Record<string, unknown>>;
+  dayPatterns?: Array<Record<string, unknown>>;
+  grades?: Array<{ id: string; name?: string }>;
+  /** Leitura: como o GET devolve o mapeamento dia → grade de horário. */
+  bellSchedulesMapping?: Array<Record<string, unknown>>;
+  routineUpdateEvents?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}

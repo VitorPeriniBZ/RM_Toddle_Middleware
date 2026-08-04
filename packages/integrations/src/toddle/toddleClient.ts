@@ -4,6 +4,7 @@ import { chunk } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 import {
   ToddleAttendance,
+  ToddleRoutine,
   ToddleTimetableSlot,
   ToddleTimetableSlotsResponse,
   ToddleBellSchedule,
@@ -637,6 +638,73 @@ export class ToddleClient {
     if (data?.response?.isSuccess !== true) {
       throw new ToddleApiError('POST /timetable-slots não confirmou isSuccess', undefined, data);
     }
+  }
+
+  /**
+   * Routine: qual grade de horário vale em qual dia, para quais séries.
+   *
+   * É o nível que faltava. Um `timetable-slot` só materializa se a routine do
+   * currículo tiver `bellSchedulesMapping` — sem ele, `POST /timetable-slots`
+   * devolve `{ isSuccess: true }` e não cria nada (medido em 04/08/2026).
+   */
+  async getRoutine(routineId: string): Promise<ToddleRoutine> {
+    const { data } = await this.withRetry('GET /routine/:id', () =>
+      this.http.get<{ response?: { routine?: ToddleRoutine } }>(`/public/v2/routine/${routineId}`),
+    );
+    const routine = data?.response?.routine;
+    if (!routine) throw new ToddleApiError('Toddle não retornou a routine', undefined, data);
+    return routine;
+  }
+
+  async listRoutines(curriculumId: string, academicYearId: string): Promise<ToddleRoutine[]> {
+    const { data } = await this.withRetry('GET /routines', () =>
+      this.http.get<{ response?: { routines?: ToddleRoutine[] } }>('/public/v2/routines', {
+        params: {
+          curriculumIds: JSON.stringify([curriculumId]),
+          academicYearIds: JSON.stringify([academicYearId]),
+          count: 100,
+        },
+      }),
+    );
+    return data?.response?.routines ?? [];
+  }
+
+  /**
+   * Cria uma routine. `bellScheduleMap` é OBRIGATÓRIO — e é o campo cuja ausência
+   * deixa a grade inerte. No modo `OPERATIONAL_DAYS` cada entrada é
+   * `{ weekday, bellScheduleId }`.
+   *
+   * ATENÇÃO: as séries (`gradeIds`) podem já pertencer a outra routine. Não está
+   * documentado se o Toddle compartilha ou MOVE a série. Confira a routine antiga
+   * depois de criar.
+   */
+  async createRoutine(payload: {
+    label: string;
+    gradeIds: string[];
+    routineMode: string;
+    startDate: string;
+    endDate: string;
+    curriculumId: string;
+    academicYearId: string;
+    countHolidayAsRotationDay: boolean;
+    bellScheduleMap: Array<{ weekday: number; bellScheduleId: string }>;
+  }): Promise<string> {
+    const { data } = await this.withRetry('POST /routine', () =>
+      this.http.post<{ response?: { routine?: { id?: string }; id?: string } }>(
+        '/public/v2/routine',
+        payload,
+      ),
+    );
+    const id = data?.response?.routine?.id ?? data?.response?.id;
+    if (!id) throw new ToddleApiError('Toddle não retornou a routine criada', undefined, data);
+    return String(id);
+  }
+
+  /** Remove uma routine. Existe DELETE aqui — o desfazer é real. */
+  async deleteRoutine(routineId: string): Promise<void> {
+    await this.withRetry('DELETE /routine/:id', () =>
+      this.http.delete(`/public/v2/routine/${routineId}`),
+    );
   }
 
   /**

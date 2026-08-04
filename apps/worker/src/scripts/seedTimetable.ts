@@ -59,6 +59,21 @@ interface SlotPlanejado {
 
 const soData = (v: string): string => v.slice(0, 10);
 
+/**
+ * DIASEMANA do RM → weekday do Toddle. É um OFF-BY-ONE, medido em 04/08/2026.
+ *
+ * O RM usa domingo=1, logo segunda=2 … sexta=6.
+ * O Toddle usa segunda=1 … sexta=5. Descoberto por eliminação: `POST /routine`
+ * só aceita `bellScheduleMap` cobrindo TODOS os dias operacionais, e o conjunto
+ * que passou a validação foi [1,2,3,4,5] — os outros (1..7, 2..7, 0..6, 2..6)
+ * foram recusados com "must include all operational days".
+ *
+ * ATENÇÃO: isso está provado para `bellScheduleMap.weekday`. Que
+ * `timetable-slots.weekDay` use a MESMA convenção é suposição — é justamente o
+ * que a sonda confere, comparando a data que o GET devolve com o dia pedido.
+ */
+const weekDayToddle = (diaSemanaRmValor: string): number => Number(diaSemanaRmValor) - 1;
+
 async function alvos(): Promise<Alvos> {
   const cursos = await idMappingRepository.listByType('COURSE', 'active');
   if (cursos.length === 0) throw new Error('Nenhum mapeamento COURSE ativo.');
@@ -156,7 +171,7 @@ async function main(): Promise<void> {
       horario: h,
       courseId,
       periodId,
-      weekDay: Number(h.diaSemana),
+      weekDay: weekDayToddle(h.diaSemana),
       applicableFrom: from,
       applicableTill: till,
       limitado,
@@ -215,7 +230,8 @@ async function main(): Promise<void> {
 
   const porDia = new Map<number, number>();
   for (const p of aCriar) porDia.set(p.weekDay, (porDia.get(p.weekDay) ?? 0) + 1);
-  console.log('  a criar por dia da semana:', JSON.stringify(Object.fromEntries([...porDia].sort())));
+  console.log('  a criar por weekday do TODDLE (1=segunda):',
+    JSON.stringify(Object.fromEntries([...porDia].sort())));
 
   if (!executar) {
     console.log('\n  NADA FOI ESCRITO. --executar para criar.');
@@ -276,10 +292,12 @@ async function main(): Promise<void> {
     );
   }
 
+  // A data devolvida é conferida contra o dia do RM, convertendo de volta: se o
+  // Toddle materializou a ocorrência noutro dia, a convenção divergiu.
   const datasErradas = daSonda
     .map((s) => String(s.date ?? '').slice(0, 10))
     .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-    .filter((d) => diaSemanaRm(d) !== String(sonda.weekDay));
+    .filter((d) => diaSemanaRm(d) !== String(sonda.weekDay + 1));
 
   if (datasErradas.length > 0) {
     throw new Error(
