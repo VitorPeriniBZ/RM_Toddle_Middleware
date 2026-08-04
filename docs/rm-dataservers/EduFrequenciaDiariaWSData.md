@@ -333,6 +333,73 @@ O ano acadêmico do Toddle termina em **20/11/2026**; o ano letivo do RM vai at�
 21/11 e 11/12 não podem ter grade no Toddle, logo não aceitam chamada lá. É
 decisão de calendário da escola — nenhuma escolha de implementação contorna.
 
+### 5.8 A routine: o que é possível, e o que é irreversível
+
+Sondado em 04/08/2026 com payloads **desenhados para falhar** — `400` não altera
+nada, e a routine foi conferida antes e depois de cada tentativa (intacta).
+
+**A rota de update é `PUT /public/v2/routine/:id`.** A documentação diz `POST`, e
+está errada: `POST` devolve `Route Not Found`. Também não existem
+`PATCH /routine/:id`, `POST /routines/:id` nem `POST /routine/:id/update`.
+
+**`routineMode` não pode ir no payload:** `"Routine mode cannot be updated"`.
+
+**O update é substituição, não remendo.** `label`, `gradeIds`, `startDate`,
+`endDate`, `countHolidayAsRotationDay` e `bellScheduleMap` são todos obrigatórios
+— mandar só o `bellScheduleMap` não funciona.
+
+**Os dias operacionais da organização são 1 a 5**, e isso significa que
+**o Toddle usa 1 = segunda**, contra 2 = segunda no RM. Descoberto por
+eliminação: só `[1,2,3,4,5]` passou a validação; `1..7`, `2..7`, `0..6` e `2..6`
+foram recusados com *"must include all operational days"*. Não há endpoint que
+liste esses dias — a única forma de saber é provocar o erro.
+
+> Este off-by-one estava no `seedTimetable` já commitado: ele mandava
+> `weekDay = DIASEMANA` do RM, e a grade inteira cairia um dia adiantada, 518
+> vezes, sem `DELETE` para corrigir. Foi a sonda do próprio script que impediu.
+
+**O payload que funcionaria**, confirmado por eliminação (a última sonda falhou
+*só* no `bellScheduleId`, com `"Invalid bellScheduleIds"`, provando que todo o
+resto foi aceito):
+
+```
+PUT /public/v2/routine/404046160261573423
+{
+  "label": "ENC",
+  "gradeIds": [ …as 15 séries… ],
+  "startDate": "2026-01-30",
+  "endDate": "2026-11-20",
+  "countHolidayAsRotationDay": false,
+  "bellScheduleMap": [
+    { "weekday": 1, "bellScheduleId": "411470826336962945" },
+    …até weekday 5…
+  ]
+}
+```
+
+#### É IRREVERSÍVEL
+
+`bellScheduleMap: []` é **recusado**: `"Invalid or missing Bell Schedule"`. E
+`bellScheduleMap` é obrigatório **também no create**. Logo o estado atual da
+`ENC` — mapeamento vazio — **não é alcançável pela API**, nem por update nem
+apagando e recriando.
+
+Consequência: mapear a grade na `ENC` é uma via de mão única. Dá para trocar por
+outra grade depois, não para voltar a "nenhuma". Reverter exigiria o portal (se
+ele permitir) ou o suporte do Toddle.
+
+#### E uma routine nova não resolve
+
+`POST /routine` com as 7 séries de Grade 6 a 12 é recusado:
+`"Routine already exists for selected grades for specified validity period."`
+A `ENC` já detém essas séries de 30/01 a 20/11/2026 — a nossa janela inteira.
+Uma série não pode estar em duas routines com vigências sobrepostas.
+
+Ou seja: **todo caminho passa por alterar a `ENC`**, que cobre as 15 séries do
+currículo. As 185 turma-disciplina em escopo são só MS e HS. O efeito nas outras
+8 séries (Pre-K a Grade 5) seria inerte no dado — elas não têm turma nem slot no
+nosso sync — mas a grade apareceria para elas na interface. É decisão da escola.
+
 ## 6. Armadilhas
 
 ### 6.1 `DATA` não tem fuso
