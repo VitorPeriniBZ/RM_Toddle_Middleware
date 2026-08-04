@@ -4,3 +4,7 @@ export * from './sourceId';
 export * from './studentTransformer';
 export * from './yearGroupResolver';
 export * from './studentEnrichment';
+export * from './rmAttendanceTargets';
+export * from './periodTimeIndex';
+export * from './attendanceProjection';
+export * from './frequenciaXml';

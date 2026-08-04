@@ -130,7 +130,7 @@ que a API do Toddle devolve em `GET /public/v2/attendance`.
 | `IDTURMADISC` | `courseId` do Toddle | `id_mapping` `COURSE`, 185 ativos, modelo 1:1 com `STURMADISC` |
 | `RA` | `studentId` do Toddle | `id_mapping` `STUDENT`, 253 ativos |
 | `DATA` | `date` do Toddle | ver a armadilha de fuso em §6 |
-| `IDHORARIOTURMA` | `periodId` + `date` | ver §5.1 |
+| `IDHORARIOTURMA` | `periodId` + `date` | ver §5.1 — e §5.3, que é onde isso hoje trava |
 | `CODETAPA` (`PARAMS`) | `date` | ver §5.2 |
 
 ### 5.1 `IDHORARIOTURMA` — resolvido, e único
@@ -194,6 +194,56 @@ determinístico.
 `FREQMIN` = 75,00 nas etapas de falta. `ETAPAENCERRADA='N'` em todas as 2.035 —
 coerente com ser o ambiente de desenvolvimento; **em produção isso será
 diferente e escrever em etapa encerrada é alterar registro acadêmico fechado.**
+
+### 5.3 O lado do Toddle NÃO fecha ainda — medido em 04/08/2026 no shadow mode
+
+Resolver o `IDHORARIOTURMA` precisa da HORA da aula. Três medições, na ordem em
+que apareceram:
+
+1. **O `startTime` do registro de frequência vem NULO** — 800 de 800 numa
+   amostra, mesmo em registros que têm `periodId`. Não dá para depender dele.
+2. **A hora existe em `GET /public/v2/bell-schedule`**, no `periodSet`, como
+   `{ periodId, startTime, endTime }`. Duas armadilhas: a rota é **singular**
+   (`/bell-schedules` devolve "Route Not Found" com HTTP 400, o que parece
+   inexistência) e `academicYearIds` é obrigatório, como ARRAY SERIALIZADO EM
+   JSON — a mesma armadilha do `sourceIds`.
+3. **`periodId` sozinho não determina a hora.** Dos 57 períodos com hora, **9
+   aparecem em bell schedules diferentes com horas diferentes** (um deles em 4
+   faixas: 08:00–08:45, 08:15–08:45, 08:15–09:00, 09:15–10:00). O registro de
+   frequência não diz qual grade vale.
+
+E o bloqueio de fato:
+
+| | faixas |
+|---|---|
+| RM (campus 2) | 7 |
+| Toddle (11 bell schedules) | 44 |
+| **em comum** | **0** |
+
+As 11 grades do Toddle são de demonstração (PYP, DP, Early Years, Summer,
+Winter, MYP, ENC, UBD ×2, IPC), em malha de 15/30/45 minutos. A grade real do
+campus 2 nunca foi cadastrada lá.
+
+**Consequência:** enquanto isso não mudar, nenhum lançamento do Toddle tem como
+apontar para uma aula do RM — e é correto que o shadow mode devolva zero
+projetáveis. Não é bug.
+
+**Saída:** criar no Toddle os 7 períodos da grade do RM com `sourceId` próprio
+(`rm:period:001…007`, o sufixo do `CODHOR`) e um bell schedule ligando cada um à
+sua faixa. Aí a relação `periodId → faixa` é 1:1 por construção, sem a
+ambiguidade dos 9. É escrita no Toddle, mas `DELETE /period` existe, então é
+reversível de verdade — diferente de aluno e turma.
+
+### 5.4 Metade da chamada é de homeroom
+
+No diagnóstico de 13–17/07/2026, dos 1.302 registros lidos, **642 (49%) vêm com
+`courseId` nulo** — chamada de homeroom (`masterAttendance`). Sem curso não há
+`IDTURMADISC`, e a projeção recusa.
+
+Isso não é defeito do dado: é um modelo diferente. Se a escola lança a
+frequência oficial no homeroom e não por disciplina, a via de volta precisa de
+política para dizer a qual turma-disciplina do RM aquilo corresponde — e isso é
+decisão pedagógica, não técnica.
 
 ## 6. Armadilhas
 
@@ -288,6 +338,12 @@ O ano letivo do Toddle termina em **20/11/2026**; as aulas no RM vão até
 Toddle** — frequência lançada nesses dias não tem onde cair.
 
 ### 7.4 O domínio de `PRESENCA` não foi verificado
+
+Continua não verificado depois do shadow mode: as únicas opções que aparecem no
+dado real são `Present [P]` e `Absent [A]`, mas isso é o que o **Toddle** usa —
+não prova o que o **RM** aceita.
+
+
 
 `'A'` = ausência e `'P'` = presença (que remove a ausência correspondente) vêm
 **da documentação da TOTVS**, não de medição — por causa de §6.4 não foi possível

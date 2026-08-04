@@ -3,6 +3,12 @@ import { env } from '@rm-toddle/config';
 import { chunk } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 import {
+  ToddleAttendance,
+  ToddleBellSchedule,
+  ToddleBellScheduleResponse,
+  ToddleAttendanceCode,
+  ToddleAttendanceCodesResponse,
+  ToddleAttendanceListResponse,
   ToddleStudent,
   ToddleStudentResponse,
   ToddleStudentsListResponse,
@@ -26,6 +32,9 @@ export class ToddleApiError extends Error {
 
 /** Quantos sourceIds mandar por chamada no GET (querystring tem limite prático). */
 const SOURCE_IDS_PER_REQUEST = 50;
+
+/** Tamanho de página do GET /attendance (paginação por cursor). */
+const ATTENDANCE_PAGE_SIZE = 400;
 
 /**
  * Status que merecem nova tentativa: 429 é rate limit (os limites do Toddle NÃO
@@ -289,6 +298,158 @@ export class ToddleClient {
     await this.withRetry('PUT /courses/:id/archive', () =>
       this.http.put(`/public/v2/courses/${classId}/archive`),
     );
+  }
+
+  /**
+   * Frequência lançada no Toddle — a origem da via Toddle -> RM.
+   *
+   * Paginação por CURSOR, não por pageNumber: a resposta traz
+   * `pageInfo.endCursor`/`hasNextPage` e os registros em `edges`. Diferente de
+   * /students, que usa pageNumber.
+   *
+   * ATENÇÃO a três coisas medidas na estrutura da resposta:
+   *
+   * 1. `courseId` e `periodId` podem vir NULOS — é o caso da chamada de homeroom
+   *    (`masterAttendance`). Sem curso não há IDTURMADISC, e o registro não pode
+   *    ser projetado. Isso é recusa, nunca chute.
+   * 2. `startTime`/`endTime` podem vir nulos ou como a STRING "null".
+   * 3. `isDeleted` marca exclusão em vez de o registro desaparecer.
+   *
+   * As datas são strings "YYYY-MM-DD" em todos os filtros.
+   */
+  async listAttendance(filtros: {
+    startDate?: string;
+    endDate?: string;
+    courseIds?: string[];
+    studentIds?: string[];
+    modifiedSince?: string;
+    modifiedTill?: string;
+    /** Teto de segurança: aborta se a origem devolver mais que isto. */
+    maxRecords?: number;
+  } = {}): Promise<ToddleAttendance[]> {
+    const registros: ToddleAttendance[] = [];
+    const teto = filtros.maxRecords ?? Infinity;
+    let cursor: string | undefined;
+
+    for (;;) {
+      const params: Record<string, string | number> = { count: ATTENDANCE_PAGE_SIZE };
+      if (cursor) params.cursor = cursor;
+      if (filtros.startDate) params.startDate = filtros.startDate;
+      if (filtros.endDate) params.endDate = filtros.endDate;
+      if (filtros.modifiedSince) params.modifiedSince = filtros.modifiedSince;
+      if (filtros.modifiedTill) params.modifiedTill = filtros.modifiedTill;
+      // Mesma armadilha do sourceIds: array vai SERIALIZADO EM JSON, não CSV.
+      if (filtros.courseIds?.length) params.courseIds = JSON.stringify(filtros.courseIds);
+      if (filtros.studentIds?.length) params.studentIds = JSON.stringify(filtros.studentIds);
+
+      const { data } = await this.withRetry('GET /attendance', () =>
+        this.http.get<ToddleAttendanceListResponse>('/public/v2/attendance', { params }),
+      );
+
+      const pagina = data?.response?.edges ?? [];
+      registros.push(...pagina);
+      logger.debug(
+        { lidos: pagina.length, acumulado: registros.length, totalCount: data?.response?.totalCount },
+        'Toddle GET /attendance página lida',
+      );
+
+      if (registros.length > teto) {
+        throw new ToddleApiError(
+          `GET /attendance devolveu mais de ${teto} registros — abortando antes de processar. ` +
+            'Estreite a janela de datas ou a lista de cursos. Este tenant tem dezenas de ' +
+            'milhares de registros de DEMONSTRAÇÃO, e volume inesperado é sinal de escopo errado.',
+        );
+      }
+
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info?.endCursor) break;
+      cursor = info.endCursor;
+    }
+
+    return registros;
+  }
+
+  /** Códigos de chamada configurados (Present, Absent, Late, …) por currículo/ano. */
+  async listAttendanceCodes(academicYearIds?: string[]): Promise<ToddleAttendanceCode[]> {
+    const codigos: ToddleAttendanceCode[] = [];
+    let cursor: string | undefined;
+
+    for (;;) {
+      const params: Record<string, string | number> = { count: ATTENDANCE_PAGE_SIZE };
+      if (cursor) params.cursor = cursor;
+      if (academicYearIds?.length) params.academicYearIds = JSON.stringify(academicYearIds);
+
+      const { data } = await this.withRetry('GET /attendance-codes', () =>
+        this.http.get<ToddleAttendanceCodesResponse>('/public/v2/attendance-codes', { params }),
+      );
+
+      codigos.push(...(data?.response?.edges ?? []));
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info?.endCursor) break;
+      cursor = info.endCursor;
+    }
+
+    return codigos;
+  }
+
+  /**
+   * Anos acadêmicos da organização. Necessários porque /periods e /bell-schedule
+   * EXIGEM `academicYearIds` — sem o parâmetro os dois devolvem HTTP 400
+   * ("Route Not Found" no caso do bell-schedule, o que engana).
+   */
+  async listAcademicYears(): Promise<Array<Record<string, unknown>>> {
+    const { data } = await this.withRetry('GET /academic-years', () =>
+      this.http.get<{ response?: { academicYears?: Array<Record<string, unknown>> } }>(
+        '/public/v2/academic-years',
+      ),
+    );
+    return data?.response?.academicYears ?? [];
+  }
+
+  /**
+   * Grades de horário (bell schedules) — a ÚNICA fonte de hora de aula na API.
+   *
+   * Medido em 04/08/2026: o `startTime`/`endTime` do registro de frequência vem
+   * NULO (800 de 800 na amostra). Quem carrega a hora é o `periodSet` do bell
+   * schedule, no formato `{ periodId, startTime, endTime }`.
+   *
+   * Duas armadilhas:
+   *  - A rota é SINGULAR. `/bell-schedules` devolve "Route Not Found" com HTTP
+   *    400, o que parece "não existe" e não é.
+   *  - `academicYearIds` é obrigatório e vai como ARRAY SERIALIZADO EM JSON.
+   *
+   * ATENÇÃO ao usar: o MESMO periodId aparece em bell schedules diferentes com
+   * horas diferentes (9 dos 57 medidos). O periodId sozinho NÃO determina a
+   * hora — quem resolve precisa tratar conflito como ambiguidade, não escolher.
+   */
+  async listBellSchedules(academicYearIds: string[]): Promise<ToddleBellSchedule[]> {
+    if (academicYearIds.length === 0) {
+      throw new ToddleApiError(
+        'listBellSchedules exige academicYearIds — sem o parâmetro a API devolve HTTP 400.',
+      );
+    }
+
+    const todas: ToddleBellSchedule[] = [];
+    for (const ay of academicYearIds) {
+      let cursor: string | undefined;
+      for (;;) {
+        const params: Record<string, string | number> = {
+          academicYearIds: JSON.stringify([ay]),
+          count: ATTENDANCE_PAGE_SIZE,
+        };
+        if (cursor) params.cursor = cursor;
+
+        const { data } = await this.withRetry('GET /bell-schedule', () =>
+          this.http.get<ToddleBellScheduleResponse>('/public/v2/bell-schedule', { params }),
+        );
+
+        todas.push(...(data?.response?.bellSchedules ?? []));
+        const info = data?.response?.pageInfo;
+        if (!info?.hasNextPage || !info?.endCursor) break;
+        cursor = info.endCursor;
+      }
+    }
+    return todas;
   }
 
   /**

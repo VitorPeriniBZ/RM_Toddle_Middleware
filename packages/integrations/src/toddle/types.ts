@@ -68,3 +68,101 @@ export interface ToddleYearGroupsResponse {
 export function isToddleStudentArchived(student: ToddleStudent): boolean {
   return student.isArchived === true || student['is_archived'] === true;
 }
+
+/**
+ * Um registro de chamada, como o GET /public/v2/attendance devolve.
+ *
+ * Os campos anuláveis não são detalhe: `courseId`/`periodId` nulos é o caso real
+ * da chamada de homeroom (`masterAttendance`), e `startTime` pode vir como a
+ * STRING "null". Tudo isso é motivo de RECUSA na projeção para o RM, nunca de
+ * inferência — sem curso não existe IDTURMADISC, e sem horário não existe
+ * IDHORARIOTURMA.
+ */
+export interface ToddleAttendance {
+  id: string | number;
+  studentId: string | number | null;
+  courseId: string | number | null;
+  periodId: string | number | null;
+  /** "YYYY-MM-DD" */
+  date: string;
+  /** ISO 8601 com Z, ex.: "2024-09-16T01:29:58.365Z". */
+  lastModifiedTimeStamp?: string;
+  isDeleted?: boolean;
+  notes?: string | null;
+  /** "8:00:00" — sem zero à esquerda, e às vezes a string "null". */
+  startTime?: string | null;
+  endTime?: string | null;
+  attendanceOption?: {
+    id: string | number;
+    label?: string;
+    abbreviation?: string;
+  } | null;
+  [key: string]: unknown;
+}
+
+/** Paginação por cursor (edges/pageInfo), diferente do pageNumber de /students. */
+export interface ToddlePageInfo {
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  startCursor?: string | null;
+  endCursor?: string | null;
+}
+
+export interface ToddleAttendanceListResponse {
+  response?: {
+    totalCount?: number;
+    edges?: ToddleAttendance[];
+    pageInfo?: ToddlePageInfo;
+  };
+}
+
+/** Código de chamada configurado no Toddle (Present, Absent, Late, …). */
+export interface ToddleAttendanceCode {
+  id: string | number;
+  label?: string;
+  abbreviation?: string;
+  /** 1.0 = presença plena, 0.0 = ausência; usado no cálculo do Toddle. */
+  value?: number;
+  isDefault?: boolean;
+  curriculumId?: string;
+  academicYearId?: string;
+  [key: string]: unknown;
+}
+
+export interface ToddleAttendanceCodesResponse {
+  response?: {
+    totalCount?: number;
+    edges?: ToddleAttendanceCode[];
+    pageInfo?: ToddlePageInfo;
+  };
+}
+
+/**
+ * Grade de horário. É a única fonte de hora de aula na API: o `startTime` do
+ * registro de frequência vem nulo (medido: 800 de 800).
+ *
+ * O `periodSet` liga períodos a horas. O mesmo `periodId` pode aparecer em bell
+ * schedules diferentes com horas diferentes — quem resolve precisa detectar isso
+ * e recusar, não escolher.
+ */
+export interface ToddleBellSchedule {
+  id: string;
+  label?: string;
+  curriculumId?: string;
+  academicYearId?: string;
+  periodSet?: Array<{
+    periodId: string;
+    /** "08:00:00" */
+    startTime?: string | null;
+    endTime?: string | null;
+  }>;
+  [key: string]: unknown;
+}
+
+export interface ToddleBellScheduleResponse {
+  response?: {
+    totalCount?: number;
+    bellSchedules?: ToddleBellSchedule[];
+    pageInfo?: ToddlePageInfo;
+  };
+}
