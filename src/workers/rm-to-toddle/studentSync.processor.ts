@@ -142,6 +142,7 @@ function isActiveContext(ctx: RmStudentContext): boolean {
 export async function processStudentUpsertBatch(job: Job): Promise<{
   created: number;
   updated: number;
+  unarchived: number;
   failed: number;
 }> {
   const batch = studentUpsertBatchJobSchema.parse(job.data);
@@ -185,6 +186,7 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
   // retentativa idempotente (viram "update").
   let created = 0;
   let updated = 0;
+  let unarchived = 0;
   const failures: Array<{ studentCode: string; error: string }> = [];
 
   for (const item of batch.students) {
@@ -192,7 +194,25 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
       const mapping = mappings.get(item.studentCode);
 
       if (mapping) {
+        // Mapeamento 'archived' = aluno que saiu do escopo e voltou. Desarquivar
+        // ANTES do update: o registro está arquivado no Toddle e atualizá-lo
+        // nesse estado não o traz de volta às listagens ativas.
+        //
+        // Este caminho só existe porque a linha é PRESERVADA no arquivamento —
+        // o GET /students não devolve arquivado nem por sourceId, então a
+        // camada 2 (busca remota) jamais o encontraria. É a id_mapping que
+        // segura o toddle_id.
+        if (mapping.state === 'archived') {
+          await toddleClient.unarchiveStudent(mapping.toddleId);
+          unarchived += 1;
+          log.info(
+            { studentCode: item.studentCode, toddleId: mapping.toddleId, motivoAnterior: mapping.archiveReason },
+            'Aluno voltou ao escopo — desarquivado no Toddle',
+          );
+        }
+
         await toddleClient.updateStudent(mapping.toddleId, toUpdatePayload(item));
+        // O upsert devolve o estado para 'active' e limpa archived_at/reason.
         await idMappingRepository.upsert({
           entityType: 'STUDENT',
           rmCode: item.studentCode,
@@ -220,7 +240,7 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
     }
   }
 
-  log.info({ created, updated, failed: failures.length }, 'Upsert de lote concluído');
+  log.info({ created, updated, unarchived, failed: failures.length }, 'Upsert de lote concluído');
 
   if (failures.length > 0) {
     // Dispara a retentativa exponencial do BullMQ (3x) e, esgotada, a DLQ.
@@ -230,5 +250,5 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
     );
   }
 
-  return { created, updated, failed: 0 };
+  return { created, updated, unarchived, failed: 0 };
 }

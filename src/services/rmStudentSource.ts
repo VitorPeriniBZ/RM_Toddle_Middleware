@@ -52,12 +52,21 @@ export async function fetchStudentsFromRm(): Promise<{
   const contexts: RmStudentContext[] = [];
   const enrichmentByCode = new Map<string, StudentEnrichment>();
 
-  // Escopo por campus: a integração com o Toddle cobre apenas o(s) CODFILIAL
-  // listado(s) em RM_CODFILIAL. Vazio = todos os campi.
-  const allowedBranches = env.RM_CODFILIAL
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Escopo por campus: a integração cobre apenas o(s) CODFILIAL listado(s) em
+  // RM_CODFILIAL. O literal "ALL" inclui todos os campi — mas é uma DECLARAÇÃO
+  // explícita, não o default de antes. Variável ausente não chega aqui: o Zod
+  // aborta o processo (ver config/env.ts).
+  const allBranches = env.RM_CODFILIAL.trim().toUpperCase() === 'ALL';
+  const allowedBranches = allBranches
+    ? []
+    : env.RM_CODFILIAL.split(',').map((s) => s.trim()).filter(Boolean);
+
+  if (!allBranches && allowedBranches.length === 0) {
+    throw new Error(
+      `RM_CODFILIAL="${env.RM_CODFILIAL}" não produziu nenhum campus válido. ` +
+        'Informe os códigos separados por vírgula (ex.: "2") ou "ALL".',
+    );
+  }
   let outOfScope = 0;
 
   for (const row of rows) {
@@ -65,7 +74,7 @@ export async function fetchStudentsFromRm(): Promise<{
     if (!studentCode) continue; // linha sem RA não sincroniza
 
     const branchCode = pick(row, 'CODFILIAL', 'BRANCHCODE');
-    if (allowedBranches.length > 0 && (!branchCode || !allowedBranches.includes(branchCode))) {
+    if (!allBranches && (!branchCode || !allowedBranches.includes(branchCode))) {
       outOfScope += 1;
       continue;
     }

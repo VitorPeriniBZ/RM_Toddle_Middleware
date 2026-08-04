@@ -33,11 +33,20 @@ const envSchema = z.object({
   RM_SENTENCA_NOTAS: z.string().optional(),
   RM_CODCOLIGADA: z.coerce.number().int().default(1),
   /**
-   * Campus (CODFILIAL) no escopo da integração, em CSV. Vazio = todos.
+   * Campus (CODFILIAL) no escopo da integração, em CSV. OBRIGATÓRIA.
+   *
    * Nesta escola: 1 = Infantil + Fundamental I; 2 = campus do aeroporto
    * (Fundamental II + Médio). Só o 2 está no escopo do Toddle.
+   *
+   * NÃO tem default. Vazio antes significava "todos os campi", e em 31/07/2026
+   * isso sincronizou 586 alunos em vez de 253 — o campus 1 inteiro foi criado no
+   * Toddle e depois teve de ser arquivado um a um. Configuração ausente não pode
+   * AMPLIAR escopo de dados de alunos; tem que abortar. Para incluir todos os
+   * campi de propósito, declare o literal "ALL".
    */
-  RM_CODFILIAL: z.string().default(''),
+  RM_CODFILIAL: z
+    .string()
+    .min(1, 'RM_CODFILIAL é obrigatória: liste os CODFILIAL em escopo (ex.: "2") ou "ALL" para todos'),
 
   // --- Banco do RM (SQL Server) — legado/opcional; só o Fluxo 2 escrita usaria ---
   RM_SQL_SERVER: z.string().optional(),
@@ -52,6 +61,20 @@ const envSchema = z.object({
   TODDLE_REGION: z.string().default('us-east-1'),
   TODDLE_BASE_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   TODDLE_TOKEN: z.string().min(1),
+  /**
+   * Organização Toddle que este processo tem permissão de escrever. OBRIGATÓRIA.
+   *
+   * É a `target_instance_key` da id_mapping: um mesmo RA pode ter mapeamento no
+   * sandbox e na organização final sem colidir. Serve de travessa de segurança —
+   * o cliente compara isto com a organização que a API devolve e ABORTA se
+   * divergir. Sem isso, trocar o token aponta o sync para outra organização
+   * silenciosamente, reusando ids que não existem lá.
+   *
+   * Sandbox atual: 404045532130986859 (Escola Americana de Vitória_Sandbox).
+   */
+  TODDLE_ORG_ID: z
+    .string()
+    .min(1, 'TODDLE_ORG_ID é obrigatória: declare a organização Toddle de destino'),
   /** GET /students exige paginação; pageSize documentado entre 100 e 400. */
   TODDLE_PAGE_SIZE: z.coerce.number().int().min(100).max(400).default(400),
   TODDLE_DEFAULT_YEAR_GROUP_ID: z.string().optional(),
