@@ -39,6 +39,14 @@ export type StudentSyncItem = z.infer<typeof studentSyncItemSchema>;
 export const studentUpsertBatchJobSchema = z.object({
   runId: z.string().min(1),
   batchIndex: z.number().int().nonnegative(),
+  /**
+   * Impressão digital da configuração de escopo/destino no momento do extract
+   * (ver config/configVersion.ts). O processor RECUSA o lote se divergir da
+   * configuração atual: um job antigo carrega uma decisão de escopo que ninguém
+   * mais tomaria. Opcional só para não invalidar jobs enfileirados antes desta
+   * versão do código — ausente, o lote passa com aviso no log.
+   */
+  configVersion: z.string().min(1).optional(),
   students: z.array(studentSyncItemSchema).min(1),
 });
 export type StudentUpsertBatchJob = z.infer<typeof studentUpsertBatchJobSchema>;

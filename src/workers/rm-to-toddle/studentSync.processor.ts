@@ -1,5 +1,6 @@
 import { Job } from 'bullmq';
 import { env } from '../../config/env';
+import { configVersion, configVersionDetalhe } from '../../config/configVersion';
 import { toddleClient } from '../../clients/toddle/toddleClient';
 import { isToddleStudentArchived } from '../../clients/toddle/types';
 import { idMappingRepository } from '../../repositories/idMappingRepository';
@@ -93,8 +94,13 @@ export async function processStudentExtract(job: Job): Promise<{
   const batches = chunk(items, env.SYNC_BATCH_SIZE);
   const queue = getQueue(QUEUE.RM_TO_TODDLE_STUDENTS);
 
+  // Cada lote carrega a impressão digital da configuração vigente AGORA. O
+  // upsert recusa o lote se ela divergir na hora de processar.
+  const versao = configVersion();
+  log.info(configVersionDetalhe(), 'Configuração de escopo/destino deste run');
+
   for (const [batchIndex, students] of batches.entries()) {
-    const payload: StudentUpsertBatchJob = { runId, batchIndex, students };
+    const payload: StudentUpsertBatchJob = { runId, batchIndex, configVersion: versao, students };
     await queue.add(STUDENT_JOB.UPSERT_BATCH, payload, {
       jobId: `${runId}:students:${batchIndex}`,
     });
@@ -147,7 +153,25 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
 }> {
   const batch = studentUpsertBatchJobSchema.parse(job.data);
   const log = logger.child({ jobId: job.id, runId: batch.runId, batchIndex: batch.batchIndex });
-  log.info({ students: batch.students.length }, 'Upsert de lote iniciado');
+
+  // Recusa ANTES de qualquer escrita: um lote montado sob outra configuração de
+  // escopo/destino aplica uma decisão que ninguém mais tomaria. Em 04/08/2026
+  // jobs de 31/07 — montados quando RM_CODFILIAL estava vazio — executaram dias
+  // depois e tentaram criar alunos de um campus que já havia saído de escopo.
+  const atual = configVersion();
+  if (batch.configVersion && batch.configVersion !== atual) {
+    throw new Error(
+      `Lote recusado: foi montado com configuração "${batch.configVersion}" e a atual é ` +
+        `"${atual}". Escopo ou destino mudou desde o extract — reenfileire o run em vez ` +
+        'de aplicar um lote velho. ' +
+        JSON.stringify(configVersionDetalhe()),
+    );
+  }
+  if (!batch.configVersion) {
+    log.warn({ configVersionAtual: atual }, 'Lote sem configVersion (enfileirado por versão anterior do código) — processando sem a verificação');
+  }
+
+  log.info({ students: batch.students.length, configVersion: atual }, 'Upsert de lote iniciado');
 
   const rmCodes = batch.students.map((s) => s.studentCode);
 
