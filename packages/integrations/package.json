@@ -1,0 +1,8 @@
+{
+  "name": "@rm-toddle/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Adaptadores dos sistemas externos (TOTVS RM, Toddle).",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@rm-toddle/config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Configuração validada, logger e utilitários puros. Não conhece RM nem Toddle.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

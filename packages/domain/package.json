@@ -1,0 +1,8 @@
+{
+  "name": "@rm-toddle/domain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Regras de negócio puras. Onde vive a decisão do que pode ser escrito.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

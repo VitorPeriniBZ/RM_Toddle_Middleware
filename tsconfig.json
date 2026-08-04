@@ -5,13 +5,21 @@
     "moduleResolution": "node",
     "lib": ["ES2022"],
     "outDir": "dist",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@rm-toddle/config": ["packages/config/src/index.ts"],
+      "@rm-toddle/contracts": ["packages/contracts/src/index.ts"],
+      "@rm-toddle/db": ["packages/db/src/index.ts"],
+      "@rm-toddle/integrations": ["packages/integrations/src/index.ts"],
+      "@rm-toddle/domain": ["packages/domain/src/index.ts"],
+      "@rm-toddle/queues": ["packages/queues/src/index.ts"]
+    }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["apps/**/*.ts", "packages/**/*.ts"]
 }

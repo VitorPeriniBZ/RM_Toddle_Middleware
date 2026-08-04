@@ -1,0 +1,8 @@
+{
+  "name": "@rm-toddle/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Interface. Nunca fala com RM, Toddle, Redis ou Postgres — só com a API.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

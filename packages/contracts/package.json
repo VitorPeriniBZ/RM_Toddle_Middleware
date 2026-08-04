@@ -1,0 +1,8 @@
+{
+  "name": "@rm-toddle/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Schemas Zod compartilhados entre worker, API e formulários da UI.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

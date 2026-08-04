@@ -1,0 +1,8 @@
+{
+  "name": "@rm-toddle/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plano de EXECUÇÃO: consome as filas e executa as operações.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

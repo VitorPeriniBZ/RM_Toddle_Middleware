@@ -1,0 +1,8 @@
+{
+  "name": "@rm-toddle/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PostgreSQL do middleware: migrations e repositórios.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}
