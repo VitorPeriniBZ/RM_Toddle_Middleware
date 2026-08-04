@@ -18,7 +18,8 @@
     "api": "tsx apps/api/src/server.ts",
     "web": "npm run dev --workspace @rm-toddle/web",
     "typecheck:web": "npm run typecheck --workspace @rm-toddle/web",
-    "shadow:frequencia": "tsx apps/worker/src/scripts/shadowAttendance.ts"
+    "shadow:frequencia": "tsx apps/worker/src/scripts/shadowAttendance.ts",
+    "seed:periodos": "tsx apps/worker/src/scripts/seedPeriodos.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",

@@ -14,6 +14,13 @@ export const ENTITY_TYPES = [
   'YEAR_GROUP',
   /** Registro que existe no Toddle e NAO tem contrapartida no RM (demo do sandbox). */
   'TODDLE_DEMO',
+  /**
+   * Faixa de horário: rm_code = sufixo do CODHOR ('001'..'007'), toddle_id =
+   * periodId. O Toddle não aceita sourceId em POST /period, então este de-para é
+   * a ÚNICA identificação dos períodos que criamos — não há como recuperá-lo
+   * pela API, ao contrário de aluno e turma. Ver migração 007.
+   */
+  'PERIOD',
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 

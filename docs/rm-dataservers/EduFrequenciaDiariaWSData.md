@@ -228,11 +228,22 @@ campus 2 nunca foi cadastrada lá.
 apontar para uma aula do RM — e é correto que o shadow mode devolva zero
 projetáveis. Não é bug.
 
-**Saída:** criar no Toddle os 7 períodos da grade do RM com `sourceId` próprio
-(`rm:period:001…007`, o sufixo do `CODHOR`) e um bell schedule ligando cada um à
-sua faixa. Aí a relação `periodId → faixa` é 1:1 por construção, sem a
-ambiguidade dos 9. É escrita no Toddle, mas `DELETE /period` existe, então é
-reversível de verdade — diferente de aluno e turma.
+**RESOLVIDO em 04/08/2026** por `npm run seed:periodos -- --executar`: criamos os
+7 períodos e a grade `EAV Campus 2 - Fund II e Medio (RM)` no currículo
+`404045620567895976` (`UBD` / "Independent Programme" — o mesmo que as 185 turmas
+declaram) e no ano acadêmico `404045942505890665` (`isCurrent`).
+
+Depois disso: **7 faixas em comum**, e os 7 novos períodos não são ambíguos.
+Verificado com um registro no formato real (`startTime: null` + `periodId`): a
+projeção resolve `IDTURMADISC`, `IDHORARIOTURMA` e `CODETAPA` sem nenhum chute.
+
+Uma ressalva que não dá para contornar: **`POST /public/v2/period` não aceita
+`sourceId`** — o Toddle gera o dele (`TDP-<id>`). Então não existe idempotência
+por chave nossa, e o de-para `faixa → periodId` vive só no `id_mapping` (tipo
+`PERIOD`, migração 007). Perder essas 7 linhas é perder a identificação dos
+períodos que criamos; uma segunda execução criaria duplicados indistinguíveis
+pela API. `DELETE /period` existe, então o desfazer é real —
+`npm run seed:periodos -- --remover --executar`.
 
 ### 5.4 Metade da chamada é de homeroom
 

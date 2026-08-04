@@ -453,6 +453,110 @@ export class ToddleClient {
   }
 
   /**
+   * Cria um período. ATENÇÃO ao que o endpoint NÃO aceita:
+   *
+   *  - `startTime`/`endTime`: a hora não mora no período, mora no bell schedule.
+   *  - `sourceId`: o Toddle gera o dele ('TDP-<id>'). Portanto NÃO existe
+   *    idempotência por chave nossa aqui — reexecutar cria período duplicado.
+   *    Quem chama tem de consultar o de-para local antes.
+   *
+   * `label` precisa ser único, e `type` é 'REGULAR' nos períodos de aula.
+   */
+  async createPeriod(payload: {
+    label: string;
+    abbreviation: string;
+    type: string;
+    curriculumId: string;
+    academicYearId: string;
+  }): Promise<{ id: string; label: string }> {
+    const { data } = await this.withRetry('POST /period', () =>
+      this.http.post<{ response?: { period?: { id?: string; label?: string } } }>(
+        '/public/v2/period',
+        payload,
+      ),
+    );
+    const period = data?.response?.period;
+    if (!period?.id) {
+      throw new ToddleApiError('Toddle não retornou o período criado', undefined, data);
+    }
+    return { id: String(period.id), label: String(period.label ?? payload.label) };
+  }
+
+  /** Remove um período. Existe DELETE aqui — diferente de aluno e turma. */
+  async deletePeriod(periodId: string): Promise<void> {
+    await this.withRetry('DELETE /period/:id', () =>
+      this.http.delete(`/public/v2/period/${periodId}`),
+    );
+  }
+
+  /**
+   * Cria a grade de horário, ligando cada período à sua faixa.
+   * `periods[].startTime`/`endTime` no formato "HH:MM:SS".
+   */
+  async createBellSchedule(payload: {
+    label: string;
+    curriculumId: string;
+    academicYearId: string;
+    periods: Array<{ periodId: string; startTime: string; endTime: string }>;
+  }): Promise<string> {
+    const { data } = await this.withRetry('POST /bell-schedule', () =>
+      this.http.post<{ response?: { isSuccess?: boolean; id?: string } }>(
+        '/public/v2/bell-schedule',
+        payload,
+      ),
+    );
+    const id = data?.response?.id;
+    if (!id) {
+      throw new ToddleApiError('Toddle não retornou a grade criada', undefined, data);
+    }
+    return String(id);
+  }
+
+  /** Remove uma grade de horário. */
+  async deleteBellSchedule(bellScheduleId: string): Promise<void> {
+    await this.withRetry('DELETE /bell-schedule/:id', () =>
+      this.http.delete(`/public/v2/bell-schedule/${bellScheduleId}`),
+    );
+  }
+
+  /**
+   * Currículos da organização. O nome vem em DOIS campos e os dois importam:
+   * `title` é o código do programa ('UBD', 'IB_MYP') e `label` é o nome de
+   * exibição ('Independent Programme'). Não existe campo `name`.
+   *
+   * Traz também `attendanceVersion` e `timetableVersion`, que determinam qual
+   * modelo de chamada e de grade aquele currículo usa.
+   */
+  async listCurriculums(): Promise<
+    Array<{
+      id: string;
+      title?: string;
+      label?: string;
+      setupType?: string;
+      attendanceVersion?: string;
+      timetableVersion?: string;
+      organizationName?: string;
+    }>
+  > {
+    const { data } = await this.withRetry('GET /curriculums', () =>
+      this.http.get<{
+        response?: {
+          curriculums?: Array<{
+            id: string;
+            title?: string;
+            label?: string;
+            setupType?: string;
+            attendanceVersion?: string;
+            timetableVersion?: string;
+            organizationName?: string;
+          }>;
+        };
+      }>('/public/v2/curriculums'),
+    );
+    return data?.response?.curriculums ?? [];
+  }
+
+  /**
    * Confirma que o token aponta para a organização declarada em TODDLE_ORG_ID e
    * ABORTA se divergir. Chamar UMA vez, antes de qualquer escrita.
    *
