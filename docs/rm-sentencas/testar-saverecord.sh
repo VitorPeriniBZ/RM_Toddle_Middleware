@@ -122,15 +122,34 @@ import sys, re, html
 bruto = open(sys.argv[1], encoding='utf-8', errors='replace').read()
 texto = html.unescape(bruto)
 
+# ATENCAO: o RM sinaliza falha de DUAS formas. SOAP Fault e o caminho obvio, mas
+# ele tambem devolve HTTP 200 com a mensagem de erro DENTRO de SaveRecordResult
+# (as vezes com stack trace .NET). Foi assim que o wsConsultaSQL nos enganou, e
+# a primeira versao deste script repetiu o erro: viu "sem faultstring" e concluiu
+# que o RM havia ACEITADO um dataset vazio. Nao havia aceitado.
 m = re.search(r'<faultstring[^>]*>(.*?)</faultstring>', texto, re.S)
 if not m:
-    ok = re.search(r'<SaveRecordResult[^>]*>(.*?)</SaveRecordResult>', texto, re.S)
-    print('SEM FAULT — o RM ACEITOU um dataset vazio.')
-    print('  retorno:', (ok.group(1)[:200] if ok else texto[:300]))
-    print()
-    print('>>> INESPERADO. Pare e investigue ANTES de qualquer escrita real:')
-    print('    um dataset sem chave nao deveria ser aceito. Pode ter criado')
-    print('    registro incompleto — confira no RM.')
+    res = re.search(r'<SaveRecordResult[^>]*>(.*?)</SaveRecordResult>', texto, re.S)
+    corpo = ' '.join((res.group(1) if res else texto).split())
+    marcas_erro = ('nao foi encontrada', 'não foi encontrada', 'erro', 'exception',
+                   '   at ', 'invalid', 'inválid', 'obrigat', 'null')
+    if any(x in corpo.lower() for x in marcas_erro):
+        print('HTTP 200, mas o corpo carrega ERRO (padrao do RM):')
+        print('  ' + corpo[:400])
+        print()
+        print('>>> SaveRecord EXISTE e EXECUTOU. A recusa e sobre o CONTEUDO do')
+        print('    payload, nao sobre a operacao. O canal de escrita esta ABERTO.')
+        print('    Nada foi persistido: ele nem encontrou dados para gravar.')
+        print()
+        print('    Isso prova o CANAL, nao a seguranca de gravar frequencia.')
+        print('    Cada dominio precisa de homologacao propria, e escrever no')
+        print('    sistema de registro legal da escola e decisao de governanca.')
+    else:
+        print('SEM FAULT e SEM marca de erro — o RM parece ter ACEITADO:')
+        print('  ' + corpo[:300])
+        print()
+        print('>>> INESPERADO. Pare e investigue ANTES de qualquer escrita real:')
+        print('    um dataset sem chave nao deveria ser aceito.')
     sys.exit(0)
 
 msg = ' '.join(m.group(1).split())

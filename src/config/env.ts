@@ -85,6 +85,21 @@ const envSchema = z.object({
   SYNC_BATCH_SIZE: z.coerce.number().int().positive().max(200).default(50),
   STUDENTS_SYNC_CRON: z.string().default('0 3 * * *'),
 
+  // --- Multi-tenant ---
+  /**
+   * Escola (tenant) que este processo atende. OBRIGATÓRIA.
+   *
+   * O middleware é white label: a mesma base atende N escolas, e cada linha da
+   * id_mapping pertence a uma. Sem tenant declarado uma consulta poderia
+   * devolver mapeamento de outra escola — por isso não há default. Enquanto o
+   * worker roda por deploy, isto vem do .env; quando a API existir, o tenant
+   * será resolvido por requisição/job e esta variável passa a ser só o padrão
+   * dos comandos de linha.
+   */
+  TENANT_SLUG: z
+    .string()
+    .min(1, 'TENANT_SLUG é obrigatória: informe o slug da escola (ex.: "eav")'),
+
   // --- Infra do middleware ---
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().default('redis://localhost:6379'),

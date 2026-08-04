@@ -71,6 +71,29 @@ const mapRow = (r: IdMappingRow): IdMapping => ({
 });
 
 /**
+ * Resolve o UUID do tenant a partir do slug do .env, uma vez por processo.
+ *
+ * Falha ALTO se o slug não existir: um tenant inexistente não pode degradar para
+ * "nenhum filtro", porque isso exporia mapeamentos de outras escolas.
+ */
+let tenantIdCache: string | null = null;
+async function tenantId(): Promise<string> {
+  if (tenantIdCache) return tenantIdCache;
+  const { rows } = await pgPool.query<{ id: string }>(
+    "SELECT id FROM tenant WHERE slug = $1 AND status = 'active'",
+    [env.TENANT_SLUG],
+  );
+  if (!rows[0]) {
+    throw new Error(
+      `TENANT_SLUG="${env.TENANT_SLUG}" não existe (ou está suspenso) na tabela tenant. ` +
+        'Abortando: sem tenant resolvido, uma consulta devolveria dado de outra escola.',
+    );
+  }
+  tenantIdCache = rows[0].id;
+  return tenantIdCache;
+}
+
+/**
  * Repositório da tabela de mapeamento RM <-> Toddle.
  *
  * Convenções que não podem ser quebradas:
@@ -78,10 +101,11 @@ const mapRow = (r: IdMappingRow): IdMapping => ({
  * 1. `rm_code` guarda o CÓDIGO DE NEGÓCIO do RM (RA, CHAPA, CODTURMA...) — nunca
  *    o InternalId, que é chave técnica e fica só como referência.
  *
- * 2. TODA consulta é escopada por `target_instance_key` = env.TODDLE_ORG_ID. Uma
- *    linha significa "esta entidade do RM NESTA organização Toddle". Consultar
- *    sem esse filtro devolveria mapeamentos de outra organização, cujos ids não
- *    existem no destino atual.
+ * 2. TODA consulta é escopada por `tenant_id` E `target_instance_key`. Uma linha
+ *    significa "esta entidade do RM, DESTA escola, NESTA organização Toddle".
+ *    O middleware é white label: sem o filtro de tenant, uma escola veria o
+ *    mapeamento de outra. Sem o de organização, ids de um ambiente seriam usados
+ *    contra outro.
  *
  * 3. ARQUIVAR NUNCA APAGA. Não existe DELETE aqui de propósito: o GET /students
  *    do Toddle não devolve aluno arquivado (nem filtrando por sourceId) e a API
@@ -93,8 +117,9 @@ export const idMappingRepository = {
   async findByRmCode(entityType: EntityType, rmCode: string): Promise<IdMapping | null> {
     const { rows } = await pgPool.query<IdMappingRow>(
       `SELECT * FROM id_mapping
-        WHERE entity_type = $1 AND rm_code = $2 AND target_instance_key = $3`,
-      [entityType, rmCode, env.TODDLE_ORG_ID],
+        WHERE tenant_id = $4 AND entity_type = $1 AND rm_code = $2
+          AND target_instance_key = $3`,
+      [entityType, rmCode, env.TODDLE_ORG_ID, await tenantId()],
     );
     return rows[0] ? mapRow(rows[0]) : null;
   },
@@ -110,8 +135,9 @@ export const idMappingRepository = {
     if (rmCodes.length === 0) return result;
     const { rows } = await pgPool.query<IdMappingRow>(
       `SELECT * FROM id_mapping
-        WHERE entity_type = $1 AND rm_code = ANY($2) AND target_instance_key = $3`,
-      [entityType, rmCodes, env.TODDLE_ORG_ID],
+        WHERE tenant_id = $4 AND entity_type = $1 AND rm_code = ANY($2)
+          AND target_instance_key = $3`,
+      [entityType, rmCodes, env.TODDLE_ORG_ID, await tenantId()],
     );
     for (const row of rows) result.set(row.rm_code, mapRow(row));
     return result;
@@ -120,8 +146,9 @@ export const idMappingRepository = {
   async findByToddleId(entityType: EntityType, toddleId: string): Promise<IdMapping | null> {
     const { rows } = await pgPool.query<IdMappingRow>(
       `SELECT * FROM id_mapping
-        WHERE entity_type = $1 AND toddle_id = $2 AND target_instance_key = $3`,
-      [entityType, toddleId, env.TODDLE_ORG_ID],
+        WHERE tenant_id = $4 AND entity_type = $1 AND toddle_id = $2
+          AND target_instance_key = $3`,
+      [entityType, toddleId, env.TODDLE_ORG_ID, await tenantId()],
     );
     return rows[0] ? mapRow(rows[0]) : null;
   },
@@ -143,10 +170,10 @@ export const idMappingRepository = {
   }): Promise<IdMapping> {
     const { rows } = await pgPool.query<IdMappingRow>(
       `INSERT INTO id_mapping
-             (entity_type, rm_code, rm_internal_id, toddle_id, target_instance_key,
-              curriculum_id, state, last_seen_in_scope_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'active', now())
-       ON CONFLICT (entity_type, rm_code, target_instance_key) DO UPDATE
+             (tenant_id, entity_type, rm_code, rm_internal_id, toddle_id,
+              target_instance_key, curriculum_id, state, last_seen_in_scope_at)
+       VALUES ($7, $1, $2, $3, $4, $5, $6, 'active', now())
+       ON CONFLICT (tenant_id, entity_type, rm_code, target_instance_key) DO UPDATE
          SET toddle_id             = EXCLUDED.toddle_id,
              rm_internal_id        = COALESCE(EXCLUDED.rm_internal_id, id_mapping.rm_internal_id),
              curriculum_id         = COALESCE(EXCLUDED.curriculum_id, id_mapping.curriculum_id),
@@ -163,6 +190,7 @@ export const idMappingRepository = {
         input.toddleId,
         env.TODDLE_ORG_ID,
         input.curriculumId ?? null,
+        await tenantId(),
       ],
     );
     return mapRow(rows[0]);
@@ -183,9 +211,10 @@ export const idMappingRepository = {
               archived_at    = now(),
               archive_reason = $4,
               updated_at     = now()
-        WHERE entity_type = $1 AND rm_code = $2 AND target_instance_key = $3
+        WHERE tenant_id = $5 AND entity_type = $1 AND rm_code = $2
+          AND target_instance_key = $3
         RETURNING *`,
-      [entityType, rmCode, env.TODDLE_ORG_ID, reason],
+      [entityType, rmCode, env.TODDLE_ORG_ID, reason, await tenantId()],
     );
     return rows[0] ? mapRow(rows[0]) : null;
   },
@@ -199,12 +228,13 @@ export const idMappingRepository = {
   async findActiveNotIn(entityType: EntityType, rmCodesInScope: string[]): Promise<IdMapping[]> {
     const { rows } = await pgPool.query<IdMappingRow>(
       `SELECT * FROM id_mapping
-        WHERE entity_type = $1
+        WHERE tenant_id = $4
+          AND entity_type = $1
           AND target_instance_key = $2
           AND state = 'active'
           AND NOT (rm_code = ANY($3))
         ORDER BY rm_code`,
-      [entityType, env.TODDLE_ORG_ID, rmCodesInScope],
+      [entityType, env.TODDLE_ORG_ID, rmCodesInScope, await tenantId()],
     );
     return rows.map(mapRow);
   },
@@ -213,11 +243,12 @@ export const idMappingRepository = {
   async listByType(entityType: EntityType, state?: MappingState): Promise<IdMapping[]> {
     const { rows } = await pgPool.query<IdMappingRow>(
       `SELECT * FROM id_mapping
-        WHERE entity_type = $1
+        WHERE tenant_id = $4
+          AND entity_type = $1
           AND target_instance_key = $2
           AND ($3::text IS NULL OR state = $3)
         ORDER BY rm_code`,
-      [entityType, env.TODDLE_ORG_ID, state ?? null],
+      [entityType, env.TODDLE_ORG_ID, state ?? null, await tenantId()],
     );
     return rows.map(mapRow);
   },
