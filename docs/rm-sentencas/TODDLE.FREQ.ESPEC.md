@@ -7,8 +7,9 @@ em `TODDLE.FREQ.sql`.
 Fevereiro/2026 devolveu 2.449 linhas, **23 colunas**, PK única, sem fan-out.
 Nenhum ajuste pendente.
 
-`RM_SENTENCA_FREQUENCIA=TODDLE.FREQ` no `.env`. O código ainda não consome — a
-leitura no middleware é o próximo passo.
+`RM_SENTENCA_FREQUENCIA=TODDLE.FREQ` no `.env`. **A leitura está ligada** em
+`packages/domain/src/rmAttendanceSource.ts`, exercitada por
+`npm run ler:frequencia -- --de YYYY-MM-DD --ate YYYY-MM-DD`.
 
 ---
 
@@ -125,7 +126,7 @@ as linhas.
 Confirmar com a coordenação: ou a escola realmente não justifica falta, ou
 justifica por outro caminho que não grava nesses campos.
 
-### 3.7 As 4 colunas de autoria chegaram — e o que elas dizem
+### 3.6 As 4 colunas de autoria chegaram — e o que elas dizem
 
 Verificado em 05/08/2026, fevereiro/2026, 23 colunas, 2.449 linhas.
 
@@ -184,7 +185,7 @@ auditoria: não dá para saber qual professor lançou. São poucas linhas, mas s
 conta for usada de forma ampla no futuro, a política de autoria perde precisão.
 Vale a coordenação saber.
 
-### 3.6 O recorte fail-closed, sobre o ano inteiro
+### 3.7 O recorte fail-closed, sobre o ano inteiro
 
 ```
 total (CSV do ano)      21.300
@@ -198,7 +199,7 @@ PROJETÁVEIS             10.179   (47,8%)
 
 172 turma-disciplina, 239 alunos, 94 datas de 03/02 a 01/07/2026.
 
-## 4. Autoria — por que as 4 colunas que faltam importam
+## 4. Autoria — por que essas colunas importam
 
 O conselho técnico de 05/08/2026 foi explícito: sem saber **quem** criou a linha,
 
@@ -249,7 +250,74 @@ Se não for possível, o valor da Sentença não se perde: ela é o insumo da
 reconciliação — saber o que o RM tem antes de aceitar qualquer coisa do Toddle — e
 foi ela que provou o domínio de `PRESENCA`.
 
-## 8. Pendência de dado, não de código
+## 8. Os 880 recusados por aluno — investigado, NÃO é lacuna nossa
+
+Corrijo o que eu havia escrito. Ao ligar a leitura, 880 faltas (7%) foram
+recusadas por `ALUNO_NAO_MAPEADO` e eu chamei isso de *"lacuna nossa, não do
+RM"*. **Errado.** Investigado em 05/08/2026:
+
+Os 11 RAs são **ex-alunos**:
+
+| status | quantos |
+|---|---|
+| Transferido | 9 |
+| Cancelado - Rematrícula | 2 |
+
+Todos com `STATUS_ATIVO=N`. As faltas são de quando estavam matriculados — dado
+histórico legítimo. Não estarem mapeados é **correto**, e recusar as 880 é o
+comportamento certo, não um defeito.
+
+Mais amplo: dos **40** alunos que a Sentença de alunos devolve e não têm
+mapeamento, **zero estão ativos**:
+
+```
+N | Cancelado - Rematrícula   28
+N | Transferido               10
+N | Cancelado - Matrícula      1
+N | Reopção de Turma           1
+────────────────────────────────
+ATIVOS sem mapeamento:          0
+```
+
+O sync de alunos está **completo e correto**: os 253 mapeados são todos os alunos
+ativos do campus 2.
+
+**Limitação de produto que decorre disso:** a falta de um aluno que saiu não pode
+ser espelhada no Toddle, porque o aluno (corretamente) não está lá. Se algum dia a
+escola quiser histórico completo no LMS, isso exige decidir o que fazer com
+ex-alunos — e a API do Toddle não devolve arquivado em nenhum GET.
+
+### 8.1 O caso A+G existe: 6 alunos com linha ativa E inativa
+
+Era pergunta aberta no projeto — *"não implemente desempate de turma antes de
+confirmar se o caso existe de fato"*. **Existe.** A Sentença de alunos devolve 586
+linhas para 579 RAs, e **6 RAs têm simultaneamente uma linha ativa e uma
+inativa**:
+
+```
+202600085: EAVHS10IA/S + EAVHS11IA/N   (Cancelado - Matrícula)
+202600129: EAVMS06IB/S + EAVMS07IB/N   (Reopção de Turma)
+202600009: EAVES02IA/N + EAVES03IB/S
+202600122: EAVES05IB/N + EAVMS06IB/S
+202600039: EAVPS01MA/N + EAVPS01IA/S
+202400095: EAVPS03MA/S + EAVPS03IB/N
+```
+
+É troca de turma: a matrícula antiga fica cancelada e uma nova é criada. **O aluno
+está ativo.**
+
+Uma regra "tem linha inativa → arquiva" arquivaria 6 alunos ativos. O
+`studentSync.processor.ts` já faz o desempate certo (*"contexto ativo tem
+prioridade"*, linha 71) — mas agora sabemos que esse código é exercitado de fato,
+não é defensivo teórico.
+
+**Cuidado para quem escrever consulta nova:** um `new Map(rows.map(r => [r.RA, r]))`
+guarda a ÚLTIMA linha, que pode ser a inativa. Foi o que aconteceu num script meu
+de análise, e me fez concluir por um instante que 2 alunos ativos deveriam ser
+arquivados. O desempate tem de ser explícito: **se qualquer linha está ativa, o
+aluno está ativo.**
+
+## 9. Pendência de dado, não de código
 
 **Nada lançado depois de 01/07/2026.** O 2º trimestre vai até 04/09 e estamos em
 agosto: ou julho não foi lançado, ou o export foi cortado. Isso muda o que
