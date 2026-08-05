@@ -3,9 +3,9 @@
 Leitura da frequência lançada no RM, para alimentar a via RM → Toddle. O SQL está
 em `TODDLE.FREQ.sql`.
 
-**Estado: cadastrada e VERIFICADA pelo web service em 05/08/2026.** Fevereiro/2026
-devolveu 2.449 linhas, 19 colunas, PK única, sem fan-out. Falta apenas
-acrescentar 4 colunas (§5).
+**Estado: cadastrada, completa e VERIFICADA pelo web service em 05/08/2026.**
+Fevereiro/2026 devolveu 2.449 linhas, **23 colunas**, PK única, sem fan-out.
+Nenhum ajuste pendente.
 
 `RM_SENTENCA_FREQUENCIA=TODDLE.FREQ` no `.env`. O código ainda não consome — a
 leitura no middleware é o próximo passo.
