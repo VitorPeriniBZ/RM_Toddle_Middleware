@@ -708,6 +708,47 @@ export class ToddleClient {
   }
 
   /**
+   * Altera uma routine — na prática, o único jeito de dar `bellScheduleMap` a uma
+   * routine que não tem, e com isso fazer os timetable slots materializarem.
+   *
+   * A ROTA É `PUT`, não `POST`. A documentação diz `POST /routine/:id` e está
+   * errada: `POST` devolve "Route Not Found". Medido em 04/08/2026.
+   *
+   * É SUBSTITUIÇÃO, NÃO REMENDO: `label`, `gradeIds`, as datas e
+   * `countHolidayAsRotationDay` são obrigatórios junto do `bellScheduleMap`.
+   * Mandar só o mapa devolve "Route Not Found". Leia a routine antes e reenvie os
+   * campos como estão, senão você apaga configuração sem querer.
+   *
+   * `routineMode` NÃO pode ir no payload ("Routine mode cannot be updated").
+   *
+   * ─── É IRREVERSÍVEL ─────────────────────────────────────────────────────────
+   *
+   * `bellScheduleMap: []` é recusado ("Invalid or missing Bell Schedule"), e o
+   * campo é obrigatório também no create. Portanto uma routine COM mapeamento não
+   * volta a ficar SEM pela API — nem por update, nem apagando e recriando. Dá para
+   * trocar de grade; não para voltar a "nenhuma".
+   *
+   * `weekday` usa a convenção do TODDLE: 1 = segunda (o RM usa 2). E o mapa tem de
+   * cobrir TODOS os dias operacionais da organização — que são 1 a 5 aqui, e não
+   * há endpoint que os liste.
+   */
+  async updateRoutine(
+    routineId: string,
+    payload: {
+      label: string;
+      gradeIds: string[];
+      startDate: string;
+      endDate: string;
+      countHolidayAsRotationDay: boolean;
+      bellScheduleMap: Array<{ weekday: number; bellScheduleId: string }>;
+    },
+  ): Promise<void> {
+    await this.withRetry('PUT /routine/:id', () =>
+      this.http.put(`/public/v2/routine/${routineId}`, payload),
+    );
+  }
+
+  /**
    * Confirma que o token aponta para a organização declarada em TODDLE_ORG_ID e
    * ABORTA se divergir. Chamar UMA vez, antes de qualquer escrita.
    *

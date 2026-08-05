@@ -1,191 +1,161 @@
-import { env, logger } from '@rm-toddle/config';
+import { logger } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
 
 /**
- * Cria a routine do campus 2 — a peça que faltava para os timetable slots
- * materializarem.
+ * Liga a grade de horário do RM à routine do currículo — a peça que falta para os
+ * timetable slots materializarem.
  *
  * POR QUE PRECISA EXISTIR
  *
  * `POST /timetable-slots` devolve `{ isSuccess: true }` e NÃO cria nada quando a
- * routine do currículo não tem `bellSchedulesMapping`. Medido em 04/08/2026: a
- * única routine (`ENC`) tem o mapeamento VAZIO, e por isso nenhum slot existe no
- * currículo inteiro — e nenhuma frequência pode ser lançada no Toddle.
+ * routine do currículo está sem `bellSchedulesMapping`. Medido em 04/08/2026: a
+ * routine `ENC` tem o mapeamento VAZIO, e por isso não existe um único slot no
+ * currículo inteiro — e nenhuma frequência pode ser lançada no Toddle, nem por
+ * nós, nem por um professor pela interface.
  *
- * POR QUE UMA ROUTINE NOVA, E NÃO EDITAR A `ENC`
+ * POR QUE ALTERAR A ROUTINE EXISTENTE, E NÃO CRIAR UMA NOVA
  *
- * A `ENC` cobre as 15 séries do currículo, de Pre-K a Grade 12. As 185
- * turma-disciplina em escopo são só MS e HS (Grade 6 a 12). Mapear a grade do
- * campus 2 na `ENC` aplicaria esse horário ao infantil e ao Fund I, que estão
- * fora de escopo por decisão da escola.
+ * `POST /routine` restrito a Grade 6–12 é recusado com "Routine already exists for
+ * selected grades for specified validity period": a `ENC` já detém essas séries em
+ * toda a nossa janela, e uma série não pode estar em duas routines com vigências
+ * sobrepostas. Todo caminho passa por esta routine.
  *
- * O RISCO QUE ESTE SCRIPT NÃO SABE RESOLVER
+ * ─── ESTA OPERAÇÃO É IRREVERSÍVEL PELA API ──────────────────────────────────
  *
- * As 7 séries de Grade 6 a 12 HOJE pertencem à `ENC`. Não está documentado se o
- * Toddle permite uma série em duas routines com vigências sobrepostas. Se não
- * permitir, criar esta routine pode REMOVER essas séries da `ENC` — alterando
- * configuração que não é nossa, sem pedir.
+ * `bellScheduleMap: []` é recusado ("Invalid or missing Bell Schedule") e o campo
+ * é obrigatório também no create. Logo o estado atual — mapeamento vazio — NÃO é
+ * alcançável de volta: nem por update, nem apagando e recriando a routine. Dá
+ * para trocar por outra grade depois; não para voltar a "nenhuma".
  *
- * Por isso o script lê a `ENC` ANTES e DEPOIS e relata a diferença. Se ela
- * mudar, `DELETE /routine/:id` existe e o desfazer é real.
+ * ESCOPO, E O QUE ISSO ALCANÇA ALÉM DELE
+ *
+ * A `ENC` cobre as 15 séries do currículo. As 185 turma-disciplina em escopo são
+ * só MS (114) e HS (71) — Grade 6 a 12. As outras 8 séries (Pre-K a Grade 5)
+ * passarão a ter grade de horário na interface do Toddle. No DADO o efeito é
+ * inerte: elas não têm turma nem slot no sync. Decisão da escola registrada em
+ * 05/08/2026: infantil e Fund I não vão entrar, então esse alcance é aceitável.
  *
  * Uso:
  *   npm run seed:routine                 # plano, não escreve nada
- *   npm run seed:routine -- --executar   # cria
- *   npm run seed:routine -- --remover <routineId> --executar
+ *   npm run seed:routine -- --executar   # aplica
  */
 
-const ROUTINE_EXISTENTE = '404046160261573423'; // "ENC"
-const LABEL = 'EAV Campus 2 - Grade 6-12 (RM)';
+const ROUTINE_ID = '404046160261573423'; // "ENC", a única do currículo
 
-/** Segundas a sextas: os dias que a grade do RM usa (DIASEMANA 2..6). */
-const DIAS = [2, 3, 4, 5, 6];
-
-/** Grade 6 a 12 — o escopo real das 185 turma-disciplina (MS 114 + HS 71). */
-const SERIE_EM_ESCOPO = /^Grade (6|7|8|9|10|11|12)$/;
+/**
+ * Dias operacionais da organização, na convenção do TODDLE: 1 = segunda.
+ *
+ * O RM usa domingo=1 (segunda=2), então há um off-by-one entre os dois. Estes
+ * valores foram descobertos por eliminação — o mapa tem de cobrir TODOS os dias
+ * operacionais e só [1,2,3,4,5] passou; não há endpoint que os liste.
+ */
+const DIAS_OPERACIONAIS = [1, 2, 3, 4, 5];
 
 const soData = (v: unknown): string => String(v ?? '').slice(0, 10);
 
 async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
-  const executar = argv.includes('--executar');
-  const iRemover = argv.indexOf('--remover');
-  const removerId = iRemover >= 0 ? argv[iRemover + 1] : undefined;
-
+  const executar = process.argv.includes('--executar');
   await toddleClient.assertTargetOrganization();
 
-  if (removerId) {
-    if (!executar) {
-      console.log(`\nRemoveria a routine ${removerId}. Adicione --executar.\n`);
-      return;
-    }
-    await toddleClient.deleteRoutine(removerId);
-    logger.info({ routineId: removerId }, 'Routine removida');
-    return;
-  }
-
-  // ─── alvos ────────────────────────────────────────────────────────────────
-  const cursos = await idMappingRepository.listByType('COURSE', 'active');
-  const nossos = new Set(cursos.map((c) => c.toddleId));
-  const classes = (await toddleClient.listClasses()).filter((c) => nossos.has(String(c.id)));
-  const curriculos = [...new Set(classes.map((c) => String(c.curriculumId ?? '')))].filter(Boolean);
-  if (curriculos.length !== 1) {
-    throw new Error(`As turmas em escopo declaram ${curriculos.length} currículos.`);
-  }
-  const curriculumId = curriculos[0];
-
+  // ─── a grade que criamos ──────────────────────────────────────────────────
   const anos = await toddleClient.listAcademicYears();
   const atuais = anos.filter((a) => a.isCurrent === true);
-  if (atuais.length !== 1) throw new Error(`Esperava 1 ano com isCurrent=true, achei ${atuais.length}.`);
-  const ay = atuais[0] as Record<string, unknown>;
-  const academicYearId = String(ay.id);
-  const ayFim = soData(ay.end_date ?? ay.endDate);
+  if (atuais.length !== 1) {
+    throw new Error(`Esperava 1 ano acadêmico com isCurrent=true, achei ${atuais.length}.`);
+  }
+  const academicYearId = String((atuais[0] as Record<string, unknown>).id);
 
-  // ─── a grade que criamos ──────────────────────────────────────────────────
   const grades = await toddleClient.listBellSchedules([academicYearId]);
   const nossa = grades.filter((g) => String(g.label ?? '').includes('(RM)'));
   if (nossa.length !== 1) {
     throw new Error(
-      `Esperava 1 bell schedule com "(RM)" no rótulo, achei ${nossa.length} ` +
-        `(${nossa.map((g) => g.label).join(', ')}). Rode seed:periodos antes.`,
+      `Esperava 1 bell schedule com "(RM)" no rótulo, achei ${nossa.length}` +
+        `${nossa.length ? ` (${nossa.map((g) => g.label).join(', ')})` : ''}. ` +
+        'Rode `npm run seed:periodos -- --executar` antes.',
     );
   }
   const bellScheduleId = String(nossa[0].id);
+  const faixasDaGrade = (nossa[0].periodSet ?? []).length;
 
-  // ─── as séries, lidas da routine existente ────────────────────────────────
-  const antes = await toddleClient.getRoutine(ROUTINE_EXISTENTE);
-  const todasSeries = antes.grades ?? [];
-  const emEscopo = todasSeries.filter((g) => SERIE_EM_ESCOPO.test(String(g.name ?? '')));
-  if (emEscopo.length !== 7) {
-    throw new Error(
-      `Esperava 7 séries de Grade 6 a 12, achei ${emEscopo.length}: ` +
-        `${emEscopo.map((g) => g.name).join(', ')}`,
-    );
-  }
+  // ─── a routine, como está ─────────────────────────────────────────────────
+  const antes = await toddleClient.getRoutine(ROUTINE_ID);
+  const mapaAtual = antes.bellSchedulesMapping ?? [];
+  const series = antes.grades ?? [];
 
-  // Vigência: começo do ano letivo do RM, fim limitado ao ano acadêmico do Toddle.
-  const inicio = '2026-02-03';
-  const fim = ayFim;
-
-  const payload = {
-    label: LABEL,
-    gradeIds: emEscopo.map((g) => String(g.id)),
-    routineMode: 'OPERATIONAL_DAYS',
-    startDate: inicio,
-    endDate: fim,
-    curriculumId,
-    academicYearId,
-    countHolidayAsRotationDay: false,
-    bellScheduleMap: DIAS.map((weekday) => ({ weekday, bellScheduleId })),
-  };
+  const cursos = await idMappingRepository.listByType('COURSE', 'active');
 
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('  Routine nova — campus 2, Grade 6 a 12');
+  console.log('  Ligar a grade do RM à routine do currículo');
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`  currículo        ${curriculumId}`);
-  console.log(`  ano acadêmico    ${academicYearId}  (fim ${ayFim})`);
-  console.log(`  grade de horário ${bellScheduleId}  "${nossa[0].label}"`);
-  console.log(`  vigência         ${inicio} → ${fim}`);
-  console.log(`  dias             ${DIAS.join(', ')}  (segunda a sexta)`);
+  console.log(`  routine          ${ROUTINE_ID}  "${antes.label}"`);
+  console.log(`  modo             ${antes.routineMode}  (não vai no payload — não é alterável)`);
+  console.log(`  vigência         ${soData(antes.validity?.startDate)} → ${soData(antes.validity?.endDate)}`);
+  console.log(`  séries           ${series.length}  (preservadas como estão)`);
   console.log('');
-  console.log('  séries que ENTRAM:');
-  for (const g of emEscopo) console.log(`      ${String(g.id).padEnd(20)} ${g.name}`);
+  console.log(`  grade de horário ${bellScheduleId}  "${nossa[0].label}"  ${faixasDaGrade} faixas`);
+  console.log(`  dias             ${DIAS_OPERACIONAIS.join(', ')}  (1 = segunda, convenção do Toddle)`);
   console.log('');
-  console.log('  séries que FICAM DE FORA (infantil e Fund I, fora de escopo):');
-  for (const g of todasSeries.filter((x) => !SERIE_EM_ESCOPO.test(String(x.name ?? '')))) {
-    console.log(`      ${String(g.id).padEnd(20)} ${g.name}`);
+  console.log(`  bellSchedulesMapping AGORA:  ${mapaAtual.length} entrada(s)`);
+  console.log(`  bellSchedulesMapping DEPOIS: ${DIAS_OPERACIONAIS.length} entrada(s)`);
+  console.log('');
+  console.log(`  turma-disciplina que passam a poder ter grade: ${cursos.length}`);
+  console.log('');
+  console.log('  ⚠ IRREVERSÍVEL PELA API. bellScheduleMap vazio é recusado, e o campo é');
+  console.log('    obrigatório também no create — o estado atual não é alcançável de volta.');
+  console.log('    Dá para trocar de grade depois; não para voltar a "nenhuma".');
+  console.log('');
+  console.log('  ⚠ ALCANÇA AS 15 SÉRIES desta routine, não só Grade 6-12. As 8 de fora');
+  console.log('    (Pre-K a Grade 5) passam a mostrar grade na interface. No dado é inerte:');
+  console.log('    não têm turma nem slot no sync, e por decisão da escola não vão entrar.');
+
+  if (mapaAtual.length > 0) {
+    console.log('');
+    console.log(`  A routine JÁ TEM mapeamento: ${JSON.stringify(mapaAtual).slice(0, 300)}`);
+    console.log('  Aplicar sobrescreveria. Confira se é o que você quer.');
   }
-  console.log('');
-  console.log(`  routine "${antes.label}" HOJE: ${todasSeries.length} séries, ` +
-    `bellSchedulesMapping com ${(antes.bellSchedulesMapping ?? []).length} entrada(s)`);
-  console.log('');
-  console.log('  ⚠ As 7 séries de Grade 6-12 hoje pertencem à routine acima. Não está');
-  console.log('    documentado se o Toddle permite uma série em duas routines. Se não');
-  console.log('    permitir, esta criação pode removê-las de lá. O script confere depois.');
 
   if (!executar) {
-    console.log('\n  NADA FOI ESCRITO. --executar para criar.');
-    console.log('  DELETE /routine/:id existe — o desfazer é real.\n');
+    console.log('\n  NADA FOI ESCRITO. --executar para aplicar.\n');
     return;
   }
 
-  const routineId = await toddleClient.createRoutine(payload);
-  logger.info({ routineId, label: LABEL }, 'Routine criada');
+  // O payload reenvia os campos existentes SEM alterá-los: é substituição, não
+  // remendo, e omitir um campo apaga configuração. O `label` fica "ENC" de
+  // propósito — renomear seria uma segunda mudança não pedida.
+  await toddleClient.updateRoutine(ROUTINE_ID, {
+    label: String(antes.label ?? ''),
+    gradeIds: series.map((g) => String(g.id)),
+    startDate: soData(antes.validity?.startDate),
+    endDate: soData(antes.validity?.endDate),
+    countHolidayAsRotationDay: antes.countHolidayAsRotationDay ?? false,
+    bellScheduleMap: DIAS_OPERACIONAIS.map((weekday) => ({ weekday, bellScheduleId })),
+  });
 
-  // ─── a routine antiga mudou? ──────────────────────────────────────────────
-  const depois = await toddleClient.getRoutine(ROUTINE_EXISTENTE);
-  const seriesAntes = new Set((antes.grades ?? []).map((g) => String(g.id)));
-  const seriesDepois = new Set((depois.grades ?? []).map((g) => String(g.id)));
-  const perdidas = [...seriesAntes].filter((id) => !seriesDepois.has(id));
+  // ─── confere o que de fato mudou ──────────────────────────────────────────
+  const depois = await toddleClient.getRoutine(ROUTINE_ID);
+  const mapaNovo = depois.bellSchedulesMapping ?? [];
 
   console.log('');
-  console.log(`  routine "${antes.label}": ${seriesAntes.size} séries antes, ${seriesDepois.size} depois`);
-  if (perdidas.length > 0) {
-    const nomes = (antes.grades ?? [])
-      .filter((g) => perdidas.includes(String(g.id)))
-      .map((g) => g.name);
-    console.log(`  ⚠ ${perdidas.length} série(s) saíram da "${antes.label}": ${nomes.join(', ')}`);
-    console.log('    O Toddle move a série para a routine nova em vez de compartilhá-la.');
-    console.log(`    Se isso não era desejado: npm run seed:routine -- --remover ${routineId} --executar`);
-  } else {
-    console.log('  A routine existente não mudou — as séries podem estar em duas routines.');
+  console.log(`  bellSchedulesMapping: ${mapaAtual.length} → ${mapaNovo.length}`);
+  console.log(`  séries:               ${series.length} → ${(depois.grades ?? []).length}`);
+  console.log(`  vigência:             ${soData(depois.validity?.startDate)} → ${soData(depois.validity?.endDate)}`);
+
+  if ((depois.grades ?? []).length !== series.length) {
+    logger.error(
+      { antes: series.length, depois: (depois.grades ?? []).length },
+      'As séries da routine MUDARAM — não era o esperado',
+    );
+  }
+  if (mapaNovo.length === 0) {
+    logger.error('O mapeamento continua vazio — o update não pegou. Investigue antes de seguir.');
+    process.exitCode = 1;
+    return;
   }
 
-  // ─── a nova ficou com o mapeamento? ───────────────────────────────────────
-  const nova = await toddleClient.getRoutine(routineId);
-  const mapa = nova.bellSchedulesMapping ?? [];
-  console.log('');
-  console.log(`  routine nova: ${(nova.grades ?? []).length} séries, ` +
-    `bellSchedulesMapping com ${mapa.length} entrada(s)`);
-  if (mapa.length === 0) {
-    console.log('  ⚠ O mapeamento saiu VAZIO — era exatamente o problema da "ENC". Os slots');
-    console.log('    continuarão não materializando. Investigue antes de rodar seed:timetable.');
-  } else {
-    console.log(`  ✓ mapeamento: ${JSON.stringify(mapa).slice(0, 300)}`);
-    console.log('\n  Próximo passo — a sonda dos slots (cria 1, lê de volta, aborta se falhar):');
-    console.log('    npm run seed:timetable -- --executar --limite 3\n');
-  }
+  console.log(`\n  ✓ mapeamento: ${JSON.stringify(mapaNovo).slice(0, 400)}`);
+  console.log('\n  Próximo passo — a sonda dos slots (cria 1, lê de volta, aborta se falhar):');
+  console.log('    npm run seed:timetable -- --executar --limite 3\n');
 }
 
 main()
