@@ -400,6 +400,55 @@ currículo. As 185 turma-disciplina em escopo são só MS e HS. O efeito nas out
 8 séries (Pre-K a Grade 5) seria inerte no dado — elas não têm turma nem slot no
 nosso sync — mas a grade apareceria para elas na interface. É decisão da escola.
 
+### 5.9 O update da routine bate num bug do servidor — e para aqui
+
+Executado em 05/08/2026, com a decisão de escopo tomada (Pre-K a Grade 5 não
+entram, então o alcance da routine nas 8 séries de fora é aceitável).
+
+A sequência de erros do `PUT /public/v2/routine/:id`, cada um resolvendo o
+anterior:
+
+| payload | resposta |
+|---|---|
+| sem `rotationDays`/`dayPatterns` | `Cannot read properties of undefined (reading 'map')` |
+| **com** `rotationDays: []` e `dayPatterns: []`, `bellScheduleId` **falso** | `Invalid bellScheduleIds` — validação, payload aceito |
+| idem, `bellScheduleId` **real** | `Cannot read properties of undefined (reading 'id')` |
+
+**`rotationDays: []` e `dayPatterns: []` são obrigatórios**, ao contrário da doc,
+que os declara exclusivos de `ROTATION_CYCLE`. Omiti-los estoura o backend. Está
+corrigido no cliente, que os injeta.
+
+Mas o segundo erro **não tem contorno pela API**. Com um `bellScheduleId` inválido
+o payload passa a validação inteira (prova de que `label`, `gradeIds`, datas,
+`countHolidayAsRotationDay` e o formato `{weekday, bellScheduleId}` estão certos);
+com o `bellScheduleId` real, o servidor estoura lendo `.id` de `undefined`. Seis
+formas da entrada foram tentadas — `rotationDay` em vez de `weekday`, `id` em vez
+de `bellScheduleId`, objeto aninhado, `weekday` como string — e nenhuma passou;
+duas devolveram **HTTP 500**. Parei aí.
+
+**Causa provável, não confirmada:** os períodos do Toddle pertencem a um
+`periodSet` — o cursor de `GET /periods` carrega `periodSetId`. `POST /period`
+**não aceita esse campo**, então os 7 que criamos provavelmente não têm um, e a
+routine estouraria ao tentar ler o `.id` desse conjunto. Se for isso, **não há
+como corrigir pela API**: falta um campo que o endpoint de criação não expõe.
+
+Nada foi alterado. Conferido depois de cada tentativa:
+
+```
+routine ENC     15 séries, bellSchedulesMapping 0, vigência 30/01 → 20/11  (intacta)
+nossa grade     1, com 7 períodos                                          (intacta)
+de-para PERIOD  7 linhas                                                    (intacto)
+timetable slots 0                                                           (nenhum criado)
+```
+
+**Onde isso deixa a via de volta:** os dois primeiros níveis da grade estão
+corretos e verificados; o terceiro depende de ligar a grade à routine, e essa
+ligação não é alcançável pela API desta organização. O caminho que resta é o
+**portal do Toddle** — quem administra abre a routine `ENC` e associa a grade
+`EAV Campus 2 - Fund II e Medio (RM)` aos dias de segunda a sexta. Depois disso,
+`npm run seed:timetable -- --executar --limite 3` valida com um slot e
+`npm run seed:timetable -- --executar` cria os 518.
+
 ## 6. Armadilhas
 
 ### 6.1 `DATA` não tem fuso

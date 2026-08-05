@@ -721,6 +721,11 @@ export class ToddleClient {
    *
    * `routineMode` NÃO pode ir no payload ("Routine mode cannot be updated").
    *
+   * `rotationDays: []` e `dayPatterns: []` SÃO OBRIGATÓRIOS, ao contrário do que a
+   * doc diz (ela os declara exclusivos de `ROTATION_CYCLE`). Omiti-los faz o
+   * backend estourar com `Cannot read properties of undefined (reading 'map')` —
+   * erro de servidor disfarçado de HTTP 400. Por isso este método os injeta.
+   *
    * ─── É IRREVERSÍVEL ─────────────────────────────────────────────────────────
    *
    * `bellScheduleMap: []` é recusado ("Invalid or missing Bell Schedule"), e o
@@ -744,7 +749,13 @@ export class ToddleClient {
     },
   ): Promise<void> {
     await this.withRetry('PUT /routine/:id', () =>
-      this.http.put(`/public/v2/routine/${routineId}`, payload),
+      this.http.put(`/public/v2/routine/${routineId}`, {
+        ...payload,
+        // Ver a nota acima: o servidor percorre estes campos mesmo em
+        // OPERATIONAL_DAYS, então precisam existir.
+        rotationDays: [],
+        dayPatterns: [],
+      }),
     );
   }
 
