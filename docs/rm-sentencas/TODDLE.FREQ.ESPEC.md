@@ -125,6 +125,65 @@ as linhas.
 Confirmar com a coordenação: ou a escola realmente não justifica falta, ou
 justifica por outro caminho que não grava nesses campos.
 
+### 3.7 As 4 colunas de autoria chegaram — e o que elas dizem
+
+Verificado em 05/08/2026, fevereiro/2026, 23 colunas, 2.449 linhas.
+
+**Toda falta é humana. Nenhuma foi alterada depois de criada.**
+
+```
+criada e nunca alterada:  2.449 de 2.449   (CRIADO_EM == ALTERADO_EM)
+alterada depois:              0
+autores distintos:           45
+```
+
+Os 45 autores: **41 no formato CPF** (11 dígitos) e 4 com login nominal
+(`gean.taufner`, `jessica.silva`, `patricia.freitas`, `professor.eav`). O usuário
+de integração do `.env` **não aparece** entre eles — coerente, porque nunca
+escrevemos frequência.
+
+**A política de remoção é implementável, e o veredito dela hoje é "bloqueie
+tudo".** A regra do conselho é *"só remove automaticamente se a integração criou a
+ausência e nenhum ator do RM a tocou depois"*. Como 100% foi criada por pessoas,
+nenhuma das 10.179 ausências em escopo pode ser removida automaticamente. Isso não
+é limitação do desenho — é o desenho funcionando: o que existe hoje é registro
+humano e fica protegido.
+
+#### CPF é dado pessoal — não persistir
+
+`CRIADO_POR` traz **CPF de professor**. Sob a LGPD isso é dado pessoal, e o
+middleware não precisa dele: para a política, basta saber *se o autor é a nossa
+integração ou não* — um booleano.
+
+**Regra para a implementação:** ao ler, derivar
+`criado_pela_integracao = (CRIADO_POR == RM_WS_USER)` e **descartar o valor
+original**. Se for necessário rastrear disputa, guardar um hash com sal por
+tenant, nunca o CPF. E nunca logar `CRIADO_POR` — o logger é `pino` com saída em
+JSON, e log vaza para onde ninguém revisou.
+
+Isso vale em dobro para o white-label: cada escola nova traz os CPFs do seu corpo
+docente.
+
+#### O lançamento é retroativo, e isso decide a marca d'água
+
+As faltas de **fevereiro** foram criadas entre **03/03 e 29/05** — de um a três
+meses depois da aula.
+
+Consequência direta: **a marca d'água do sync incremental tem de ser
+`ALTERADO_EM`, nunca `DATA`.** Um sync que avança por data da aula perderia todo
+lançamento retroativo — e retroativo é a regra aqui, não a exceção.
+
+Também afeta o produto: se espelharmos no Toddle, as faltas vão aparecer semanas
+depois da aula. Isso é característica do processo da escola, não atraso da
+integração, e vale dizer a quem for usar.
+
+#### `professor.eav` é conta genérica
+
+4 linhas foram criadas por `professor.eav`. Um login compartilhado quebra a
+auditoria: não dá para saber qual professor lançou. São poucas linhas, mas se essa
+conta for usada de forma ampla no futuro, a política de autoria perde precisão.
+Vale a coordenação saber.
+
 ### 3.6 O recorte fail-closed, sobre o ano inteiro
 
 ```
@@ -154,18 +213,11 @@ passarmos a escrever com usuário técnico; todas as nossas linhas teriam o mesm
 autor. Serve para separar *humano* de *integração*, não para atribuir autoria
 dentro de cada grupo.
 
-## 5. O único ajuste que falta
+## 5. Ajustes — CONCLUÍDOS
 
-Acrescentar 4 colunas ao `SELECT` (marcadas com `(+)` no `.sql`):
-
-```sql
-F.CODCOLIGADA     AS CODCOLIGADA,   -- está na PK do SFREQUENCIA
-F.RECCREATEDBY    AS CRIADO_POR,
-F.RECCREATEDON    AS CRIADO_EM,
-F.RECMODIFIEDBY   AS ALTERADO_POR,
-```
-
-`ALTERADO_EM` (`RECMODIFIEDON`) já está lá e já vem com hora.
+As 4 colunas foram acrescentadas e verificadas em 05/08/2026: `CODCOLIGADA`,
+`CRIADO_POR`, `CRIADO_EM`, `ALTERADO_POR`. A Sentença devolve **23 colunas** e
+está completa para o middleware.
 
 Opcional, cosmético: `FAIXA_DE_CODHORARIOTURMA` pode sair — devolve `220`,
 extraído da string composta `1_3022005_1304_2__03/02/2026_11/12/2026`. Não serve
@@ -185,10 +237,9 @@ para nada e não faz mal.
 
 ## 7. Próximos passos
 
-1. Acrescentar as 4 colunas e recadastrar.
+1. ~~Acrescentar as 4 colunas e recadastrar.~~ **Feito e verificado.**
 2. Ligar a leitura no middleware, com o mesmo recorte fail-closed. **Zero
-   escrita.** Reportar os `CRIADO_POR` distintos — é o que diz se a política de
-   remoção é implementável.
+   escrita.** Derivar `criado_pela_integracao` e **descartar o CPF** (§3.7).
 3. Só então decidir o formato do espelho no Toddle. E aí bate na parede conhecida:
    `POST /public/v2/attendance` recusa com `"Attendance Record is not valid"`
    mesmo com timetable slot e `optionId` reais. **Publicar frequência no Toddle
