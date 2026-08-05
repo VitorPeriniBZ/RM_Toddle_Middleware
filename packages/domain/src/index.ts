@@ -8,3 +8,4 @@ export * from './rmAttendanceTargets';
 export * from './periodTimeIndex';
 export * from './attendanceProjection';
 export * from './frequenciaXml';
+export * from './rmAttendanceSource';
