@@ -317,6 +317,61 @@ de análise, e me fez concluir por um instante que 2 alunos ativos deveriam ser
 arquivados. O desempate tem de ser explícito: **se qualquer linha está ativa, o
 aluno está ativo.**
 
+### 8.2 Os 60 recusados por turma: `IDTURMADISC 1714` — lacuna REAL, e uma só
+
+Investigado em 05/08/2026. Diferente dos 880, este **é** um furo nosso.
+
+`1714` = `EAVHS10IA` / `MSHS26ELA` — **"ELA Higher Level"**, campus 2,
+`IDPERLET 15`, `ATIVA='S'`. Turma-disciplina legítima, de uma turma que está em
+escopo, com 60 faltas em 20 datas (14/04 a 10/07) e 10 alunos, **9 deles já
+mapeados**. Não há mapeamento `COURSE` para ela, nem ativo nem arquivado.
+
+Medindo a extensão:
+
+```
+turma-disciplina ativas do IDPERLET 15 no campus 2:  202
+mapeadas (COURSE ativo):                             185
+SEM mapeamento nenhum:                                17
+```
+
+Mas as 17 não são todas iguais:
+
+| | quantas | alunos | impacto |
+|---|---|---|---|
+| turmas com sufixo **`IG`** (`EAVHS10IG`, `EAVMS06IG`, `07IG`, `08IG`) | 16 | **0** | nenhum |
+| **`1714`** (`EAVHS10IA` / ELA Higher Level) | 1 | 10 | **60 faltas** |
+
+As turmas `IG` não têm um único aluno matriculado — são oferta criada no RM e
+nunca enturmada. Ficarem fora é irrelevante hoje, e o `id_mapping` não deve
+inventá-las.
+
+Também conferido, e limpo:
+
+```
+ativas no RM mas arquivadas no de-para:   0
+mapeadas e inativas no RM:                0
+```
+
+#### A causa estrutural: não existe sync de turma
+
+O `.env` tem `RM_SENTENCA_STUDENTS`, `RM_SENTENCA_FREQUENCIA` e
+`RM_SENTENCA_NOTAS`. **Não existe `RM_SENTENCA_TURMADISC`.**
+
+Os 185 `COURSE` vieram de uma carga manual (o CSV de 03/08/2026), e **nada os
+atualiza**. Então o de-para de turma é um retrato, não uma sincronização: toda
+turma-disciplina que a escola criar depois fica invisível para a integração, e só
+aparece por acidente — como esta apareceu, ao cruzar frequência.
+
+Não descobri por que `1714` especificamente ficou fora daquela carga: as faltas
+dela começam em 14/04 e o export é de 03/08, então ela existia. Ou o CSV foi
+filtrado, ou houve falha na criação daquela turma no Toddle. Sem o CSV original
+não dá para afirmar, e não vou chutar.
+
+**Recomendação:** cadastrar a Sentença de turma-disciplina (já especificada em
+`TODDLE.TURMADISC.ESPEC.md`) e ligar um relatório de reconciliação que compare o
+RM com o `id_mapping`. O objetivo não é criar turma automaticamente — é a **deriva
+ser detectada em vez de descoberta**.
+
 ## 9. Pendência de dado, não de código
 
 **Nada lançado depois de 01/07/2026.** O 2º trimestre vai até 04/09 e estamos em
