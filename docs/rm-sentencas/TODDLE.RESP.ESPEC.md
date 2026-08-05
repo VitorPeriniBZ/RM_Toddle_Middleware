@@ -1,132 +1,138 @@
-# Especificação — Sentença `TODDLE.RESP` (responsáveis)
+# Responsáveis — especificação, e por que a Sentença não é o caminho
 
-Para vincular responsáveis no Toddle. O SQL está em `TODDLE.RESP.sql`.
+**Conclusão de 05/08/2026: a Sentença `TODDLE.RESP` está cadastrada e correta, mas
+devolve ZERO linhas. Os dados de responsável existem, e vêm do DataServer
+`EduAlunoData` — não é preciso Sentença nenhuma.**
 
-**Estado: escrita, NÃO cadastrada, NÃO verificada.** Escrita em 05/08/2026 com os
-nomes de coluna conferidos no dicionário do RM. Tudo aqui que não estiver marcado
-como medido é dedução da estrutura, não observação.
+Isto **corrige** o que eu havia dito ("precisa de duas requisições novas"). Do
+lado do RM não precisa; do lado do Toddle sim.
 
 ---
 
-## 1. A resposta curta: sim, precisa de duas requisições novas
+## 1. O que aconteceu com a Sentença
 
-**No RM: uma Sentença.** A de alunos devolve 18 colunas e **nenhuma** de
-responsável (medido). E não existe DataServer para o vínculo acadêmico:
+`TODDLE.RESP` responde pelo web service com `<NewDataSet />` — zero linhas, **sem
+SOAP Fault e sem erro de permissão**. Ou seja: cadastrada com o código certo,
+permitida ao usuário, e o SQL simplesmente não casou nada.
 
-| nome tentado | resultado |
+Os joins estão corretos, conferidos um a um contra a `GLINKSREL`:
+
+```
+SALUNORESPONSAVEL → PPESSOA            CODPESSOA = CODIGO          ✓
+SALUNORESPONSAVEL → SALUNO             CODCOLIGADA + RA            ✓
+SALUNO            → SMATRICPL          CODCOLIGADA + RA            ✓
+SMATRICPL         → SPLETIVO           CODCOLIGADA + IDPERLET      ✓
+STIPORESPONSAVEL                       CODCOLIGADA + CODTIPORESP   ✓
+PCODPARENT                             CODCLIENTE = CODPARENTESCO  ✓
+```
+
+**A causa é `SALUNORESPONSAVEL` estar vazia** nesta instalação. Confirmado por
+outro caminho: em 30 alunos lidos via `EduAlunoData`, os atalhos
+`CODPESSOARACA`, `CODPARENTRACA`, `CODPARENTCFO` e `CODCFO` estão **nulos em
+30/30**. A escola não popula a tabela de vínculo nem os campos de atalho.
+
+O arquivo `TODDLE.RESP.sql` fica no repositório: se a escola passar a usar
+`SALUNORESPONSAVEL`, ele é o caminho certo — dá parentesco e ID estável, que o
+DataServer não dá.
+
+## 2. De onde os dados vêm de verdade
+
+O `ReadView` de **`EduAlunoData`** (elemento `SAluno`) resolve na própria view:
+
+```
+RESPACADEMICO         253/253   (100,0%)
+EMAILRESPACADEMICO    252/253   ( 99,6%)
+RESPFINANCEIRO        253/253   (100,0%)
+EMAILRESPFINANCEIRO   250/253   ( 98,8%)
+
+alunos sem NENHUM e-mail de responsável:  0
+```
+
+Medido sobre os 253 alunos em escopo, em lotes de 25.
+
+**O gargalo que eu temia não existe.** Eu havia escrito que o e-mail obrigatório do
+`POST /parents` era o risco, com o precedente dos 5 professores sem e-mail. Aqui a
+cobertura é 99,6% e **nenhum aluno fica sem responsável alcançável**.
+
+## 3. O que o Toddle receberia
+
+```
+parents distintos (chave = e-mail):  396
+
+filhos por parent:
+   1 filho    333
+   2 filhos    60
+   3 filhos     2
+   8 filhos     1   ← ver §4.2
+```
+
+Endpoint: `POST /public/v2/parents`. Exige `firstName`, `lastName`, `email` e
+`children[]`; aceita `relationships[{childId, relationship}]` e `gender`. Não há
+`DELETE` — só `POST`, `PUT` e `GET`.
+
+Como `children` é array, **um responsável é uma requisição**, não uma por filho.
+
+## 4. Três coisas para decidir antes de escrever
+
+### 4.1 Cinco e-mails pertencem a pessoas DIFERENTES
+
+De 396 e-mails, **5 aparecem com nomes diferentes**:
+
+```
+dr***@gmail.com        Alexsandro / Adriana
+ta***@gmail.com        Luiz / Tatiana
+le***@gmail.com        Alexandre / Richardeny
+al***@hotmail.com.br   Alexandra / Eduardo
+tk***@hotmail.com      Kesia / Raphael
+```
+
+Parecem casais compartilhando um endereço. No Toddle o e-mail é a identidade, então
+**só um dos dois pode existir**. As opções: escolher um por regra (o acadêmico,
+por exemplo), ou pedir e-mail separado à secretaria. Não é decisão minha.
+
+Os outros compartilhamentos são benignos e não precisam de nada:
+
+- **62 e-mails** aparecem com o **mesmo nome em mais de um aluno** — são irmãos, e
+  o `children[]` resolve;
+- **35 alunos** têm o mesmo e-mail como acadêmico **e** financeiro — é a mesma
+  pessoa nos dois papéis.
+
+### 4.2 Um responsável com 8 filhos
+
+Um e-mail está ligado a 8 alunos. Pode ser família grande, mas 8 é bastante — vale
+a secretaria conferir se não é um endereço institucional ou cadastro repetido. Se
+for institucional, criar esse parent dá a uma pessoa acesso ao dado de 8 crianças.
+
+### 4.3 O que o DataServer NÃO dá, e o custo disso
+
+| falta | consequência |
 |---|---|
-| `EduAlunoResponsavelData` | não existe |
-| `EduAlunoRespData` | não existe |
-| `SalunoResponsavelData` | não existe |
-| `EduResponsavelData` | **existe, mas é outra coisa** — ver abaixo |
+| `CODPESSOA` (ID estável) | a chave do de-para tem de ser o **e-mail**. Se a escola trocar o e-mail de um responsável, perdemos o vínculo e ele viraria um parent novo |
+| parentesco (Mãe, Pai, Avó) | `relationships[]` fica limitado a *"acadêmico"* / *"financeiro"* |
+| terceiro responsável | a view devolve só um acadêmico e um financeiro. Aluno com três responsáveis perde o terceiro, e não temos como saber que existe |
 
-`EduResponsavelData` expõe a tabela `SResponsavel` = *"Responsáveis pela **Parcela
-do Contrato**"*, com `IDPARCELA`, `CODCFO`, `PERCENTUAL`, `CODSERVICO`. É o
-responsável **financeiro do contrato**, não o responsável do aluno. Usá-lo por
-engano traria quem paga, não quem responde pela criança.
+O primeiro é o mais sério, e é o argumento para a escola passar a popular
+`SALUNORESPONSAVEL` algum dia. Mitigação possível: guardar o e-mail **e** um hash do
+nome normalizado, para detectar troca de e-mail em vez de criar duplicata em
+silêncio.
 
-**No Toddle: um endpoint separado.** `POST /public/v2/parents` — não é campo do
-aluno.
+## 5. A decisão que não é técnica
 
-## 2. O que o Toddle exige
+Responsável no Toddle **recebe acesso ao LMS** — vê nota, frequência e comunicado
+do filho. Criar 396 contas não é sincronizar dado, é **dar acesso a pessoas**.
 
-| campo | obrigatório | de onde vem |
-|---|---|---|
-| `firstName` | **sim** | `PPESSOA.NOME`, primeira palavra |
-| `lastName` | **sim** | `PPESSOA.NOME`, resto |
-| `email` | **sim** | `PPESSOA.EMAIL` / `EMAILPESSOAL` |
-| `children` | **sim** — array de `studentId` | `RA` → `id_mapping` `STUDENT` |
-| `relationships` | não — `[{childId, relationship}]` | `PCODPARENT.DESCRICAO` |
-| `gender` | não | `PPESSOA.SEXO` |
-| `middleName` | não | — |
+Diferente de aluno e turma, o efeito colateral de um `POST` errado aqui é alguém
+vendo dado de uma criança que não é dela — e os §4.1 e §4.2 são exatamente onde
+isso pode acontecer.
 
-Endpoints: `POST /parents`, `PUT /parents/:id`, `GET /parents`. **Não há `DELETE`**
-— coerente com aluno e turma.
+Isso precisa de decisão explícita da escola sobre quem entra, e provavelmente de
+comunicação antes. Não é coisa para executar por iniciativa própria.
 
-### 2.1 `children` é array: um responsável, uma requisição
+## 6. Ordem sugerida
 
-Um responsável com três filhos é **uma** chamada com três ids em `children`, não
-três chamadas. Isso define a chave do de-para: **`CODPESSOA`**, a pessoa — não o
-RA. O tipo `PARENT` já existe no `id_mapping`.
-
-Consequência prática: o sync de responsáveis é agrupado por pessoa, e mudança de
-matrícula de **um** filho exige `PUT` no responsável inteiro.
-
-## 3. O gargalo é o e-mail, e eu NÃO consegui medi-lo
-
-`email` é obrigatório no `POST /parents`. Sem ele, o responsável não existe no
-Toddle.
-
-**Não sei a cobertura de e-mail dos responsáveis desta escola.** Tentei medir sem
-depender de Sentença nova e não deu: não há DataServer para `SALUNORESPONSAVEL`.
-Então o volume e a cobertura só aparecem quando a Sentença rodar.
-
-Precedente que justifica a preocupação: **5 professores ficaram sem e-mail no RM** e
-por isso não puderam ser criados como staff no Toddle. O mesmo pode acontecer aqui,
-e com mais gente.
-
-Quando a Sentença responder, quero reportar:
-
-1. **cobertura de e-mail** — quantos responsáveis têm, quantos não;
-2. **e-mails compartilhados** — pai e mãe com o mesmo endereço. Se o Toddle exigir
-   e-mail único (provável), isso é conflito, não detalhe;
-3. **domínio de `STATUS`** do vínculo — só responsável ativo deve virar parent;
-4. **domínio de `CODTIPORESP`** — separar acadêmico de financeiro;
-5. **responsáveis por aluno** — mínimo, máximo, e quantos alunos ficam sem nenhum;
-6. **filhos por responsável** — dimensiona o agrupamento;
-7. **`CODPESSOA` duplicado com nomes diferentes**, que indicaria cadastro sujo.
-
-## 4. Onde o RM guarda (conferido no dicionário)
-
-| tabela | papel |
-|---|---|
-| `SALUNORESPONSAVEL` | **o vínculo** (11 colunas): `CODCOLIGADA + RA + CODPESSOA`, mais `CODTIPORESP`, `CODPARENTESCO`, `STATUS` |
-| `PPESSOA` | os dados: `NOME`, `EMAIL`, `EMAILPESSOAL`, `SEXO`, `TELEFONE1..3` |
-| `STIPORESPONSAVEL` | descrição do tipo (acadêmico, financeiro) |
-| `PCODPARENT` | descrição do parentesco — a chave é `CODCLIENTE`, não `CODPARENTESCO` |
-
-Há também atalhos desnormalizados em `SALUNO`: `CODPESSOARACA` + `CODPARENTRACA`
-(responsável acadêmico) e `CODPARENTCFO` (financeiro). **Não os usei**: guardam um
-só responsável, e a tabela de vínculo guarda todos. Se a Sentença vier vazia, esses
-campos são o plano B.
-
-## 5. Duas decisões de desenho embutidas no SQL
-
-**`LEFT JOIN` em `STIPORESPONSAVEL` e `PCODPARENT`.** Vínculo sem tipo ou sem
-parentesco cadastrado não deve desaparecer. Foi o que quase aconteceu com a
-justificativa de falta, onde um `INNER` teria zerado 21.300 linhas.
-
-**`GROUP BY` no fim.** `SMATRICPL` pode ter mais de uma linha por aluno — troca de
-turma gera matrícula nova, e isso está **medido**: 6 alunos têm simultaneamente
-matrícula ativa e inativa. Sem o `GROUP BY`, cada responsável sairia duplicado por
-matrícula.
-
-## 6. O que NÃO fazer
-
-- **Sem `TOP`/`LIMIT`.** A Sentença de alunos nasceu com `SELECT TOP 30` e truncou
-  o roster por dias.
-- **Sem filtrar `STATUS` ainda.** O domínio não foi medido; filtrar antes de saber
-  esconde o que precisamos ver.
-- **Não confundir com `EduResponsavelData`** (§1).
-- **Não usar o CPF** que `PPESSOA` traz. Mesma regra da frequência: dado pessoal
-  não persiste no middleware nem entra em log.
-
-## 7. Ordem sugerida
-
-1. Cadastrar `TODDLE.RESP` e preencher `RM_SENTENCA_RESPONSAVEIS` no `.env` (a
-   variável ainda **não existe** — entra junto).
-2. Rodar leitura e reportar os 7 itens de §3. **Zero escrita.**
-3. Só então decidir: quem tem e-mail vira `parent`; quem não tem vira pendência
-   para a secretaria, nunca e-mail inventado.
-4. `POST /parents` com `children` agrupado por `CODPESSOA`, de-para em
-   `id_mapping` tipo `PARENT`.
-
-## 8. Uma pergunta de produto, antes de escrever no Toddle
-
-Responsável no Toddle **recebe acesso ao LMS** — vê notas, frequência e
-comunicados do filho. Criar 400 contas de pai e mãe não é sincronizar dado, é
-**dar acesso a pessoas**.
-
-Isso merece decisão explícita da escola sobre quem entra, e provavelmente
-comunicação antes. Diferente de aluno e turma, aqui o efeito colateral de um
-`POST` errado é uma pessoa vendo dado de uma criança que não é dela.
+1. **Nada a cadastrar no RM.** A leitura sai do `EduAlunoData`, que já usamos.
+2. Implementar a leitura no middleware, com o mesmo padrão da frequência: sem
+   propagar dado pessoal além do necessário, de-para em `id_mapping` tipo `PARENT`
+   (que já existe), agrupado por e-mail.
+3. Levar §4.1, §4.2 e §5 para a escola decidir.
+4. Só então `POST /parents`, em ensaio primeiro.
