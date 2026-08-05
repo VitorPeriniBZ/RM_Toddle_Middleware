@@ -4,6 +4,7 @@ import { chunk } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 import {
   ToddleAttendance,
+  ToddleParent,
   ToddleRoutine,
   ToddleTimetableSlot,
   ToddleTimetableSlotsResponse,
@@ -757,6 +758,46 @@ export class ToddleClient {
         dayPatterns: [],
       }),
     );
+  }
+
+  /**
+   * Responsáveis. `children` é array de studentId, então um responsável com vários
+   * filhos é UMA chamada.
+   *
+   * `POST /parents` NÃO aceita `sourceId` (o campo aparece na resposta, sempre
+   * nulo). Mas ao contrário de período, o `GET /parents` devolve `email` e
+   * `children`, então a idempotência é recuperável pela API — o e-mail é a
+   * identidade.
+   *
+   * NÃO existe DELETE. Só POST, PUT e GET: criar parent é dar acesso ao LMS, e
+   * desfazer depende de PUT ou do portal.
+   */
+  async listParents(): Promise<ToddleParent[]> {
+    const { data } = await this.withRetry('GET /parents', () =>
+      this.http.get<{ response?: { parents?: ToddleParent[] } }>('/public/v2/parents'),
+    );
+    return data?.response?.parents ?? [];
+  }
+
+  async createParent(payload: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    children: string[];
+    relationships?: Array<{ childId: string; relationship: string }>;
+    gender?: string;
+  }): Promise<{ id: string; email?: string }> {
+    const { data } = await this.withRetry('POST /parents', () =>
+      this.http.post<{ response?: { parent?: { id?: string | number; email?: string } } }>(
+        '/public/v2/parents',
+        payload,
+      ),
+    );
+    const parent = data?.response?.parent;
+    if (!parent?.id) {
+      throw new ToddleApiError('Toddle não retornou o responsável criado', undefined, data);
+    }
+    return { id: String(parent.id), email: parent.email };
   }
 
   /**

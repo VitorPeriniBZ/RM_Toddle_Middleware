@@ -228,3 +228,26 @@ export interface ToddleRoutine {
   routineUpdateEvents?: Array<Record<string, unknown>>;
   [key: string]: unknown;
 }
+
+/**
+ * Responsável (parent). O `GET /parents` devolve `email` e `children`, o que torna
+ * a idempotência recuperável pela API — diferente de período, cujo de-para só vive
+ * no nosso banco.
+ *
+ * O `email` é a identidade: duas pessoas com o mesmo endereço não podem coexistir.
+ */
+export interface ToddleParent {
+  id: string | number;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phoneNumber?: string | null;
+  sourceId?: string | null;
+  children?: Array<{
+    id: string;
+    firstName?: string;
+    lastName?: string;
+    relationship?: string;
+  }>;
+  [key: string]: unknown;
+}
