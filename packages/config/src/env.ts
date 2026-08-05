@@ -31,6 +31,8 @@ const envSchema = z.object({
   /** Sentenças do Fluxo 2 (roadmap). */
   RM_SENTENCA_FREQUENCIA: z.string().optional(),
   RM_SENTENCA_NOTAS: z.string().optional(),
+  /** Responsáveis (ex.: TODDLE.RESP). Ver docs/rm-sentencas/TODDLE.RESP.ESPEC.md. */
+  RM_SENTENCA_RESPONSAVEIS: z.string().optional(),
   RM_CODCOLIGADA: z.coerce.number().int().default(1),
   /**
    * Campus (CODFILIAL) no escopo da integração, em CSV. OBRIGATÓRIA.

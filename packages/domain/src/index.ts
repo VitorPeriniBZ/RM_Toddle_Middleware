@@ -9,3 +9,4 @@ export * from './periodTimeIndex';
 export * from './attendanceProjection';
 export * from './frequenciaXml';
 export * from './rmAttendanceSource';
+export * from './rmGuardianSource';

@@ -22,7 +22,8 @@
     "seed:periodos": "tsx apps/worker/src/scripts/seedPeriodos.ts",
     "seed:timetable": "tsx apps/worker/src/scripts/seedTimetable.ts",
     "seed:routine": "tsx apps/worker/src/scripts/seedRoutine.ts",
-    "ler:frequencia": "tsx apps/worker/src/scripts/lerFrequenciaRm.ts"
+    "ler:frequencia": "tsx apps/worker/src/scripts/lerFrequenciaRm.ts",
+    "ler:responsaveis": "tsx apps/worker/src/scripts/lerResponsaveis.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
