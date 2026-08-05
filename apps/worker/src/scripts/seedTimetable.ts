@@ -120,6 +120,43 @@ const SEMANAS_SONDA = [
 const chaveSlot = (courseId: string, periodId: string, weekDay: number | string): string =>
   `${courseId}|${periodId}|${weekDay}`;
 
+const dorme = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Espaçamento entre criações, para não provocar o limite. */
+const INTERVALO_MS = 250;
+
+/**
+ * O `withRetry` do cliente faz backoff de no máximo 16s — insuficiente aqui: o
+ * limite do Toddle para este endpoint responde "please try again after 300
+ * seconds" e derruba o lote inteiro. Medido em 05/08/2026, depois de ~350
+ * criações seguidas.
+ *
+ * A espera longa fica NESTE script, e não no cliente: um cliente que dorme 5
+ * minutos em silêncio é pior que um erro, porque outros fluxos (sync de aluno,
+ * shadow mode) herdariam esse comportamento sem pedir.
+ */
+async function comPacienciaNoRateLimit<T>(operacao: () => Promise<T>): Promise<T> {
+  for (let tentativa = 1; ; tentativa += 1) {
+    try {
+      return await operacao();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const corpo = JSON.stringify((error as { body?: unknown })?.body ?? '');
+      const eRateLimit = /rate limit/i.test(msg) || /rate limit/i.test(corpo);
+      if (!eRateLimit || tentativa > 3) throw error;
+
+      // Respeita o número que a própria mensagem informa, com uma folga.
+      const segundos = Number(/after (\d+) seconds/i.exec(corpo)?.[1] ?? 300);
+      const esperaMs = (segundos + 5) * 1_000;
+      logger.warn(
+        { tentativa, segundos, esperaMs },
+        'Rate limit do Toddle — aguardando a janela liberar antes de continuar',
+      );
+      await dorme(esperaMs);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const executar = argv.includes('--executar');
@@ -188,8 +225,14 @@ async function main(): Promise<void> {
       ...semana,
     });
     for (const s of slots) {
-      if (s.courseId && s.periodId && s.weekday !== undefined) {
-        existentes.add(chaveSlot(String(s.courseId), String(s.periodId), s.weekday));
+      // ATENÇÃO: o GET NÃO devolve `weekday` (vem undefined) — só `date`, a
+      // ocorrência concreta. Derivar o dia da data é obrigatório: usar `s.weekday`
+      // faria a chave nunca casar, nenhum slot ser reconhecido como existente, e
+      // as 518 criações rodarem por cima do que já existe. Sem DELETE.
+      const data = String(s.date ?? '').slice(0, 10);
+      const diaRm = /^\d{4}-\d{2}-\d{2}$/.test(data) ? diaSemanaRm(data) : null;
+      if (s.courseId && s.periodId && diaRm) {
+        existentes.add(chaveSlot(String(s.courseId), String(s.periodId), Number(diaRm) - 1));
       }
     }
   }
@@ -281,9 +324,9 @@ async function main(): Promise<void> {
     endDate: '2026-08-07',
     courseIds: [sonda.courseId],
   });
-  const daSonda = lidos.filter(
-    (s) => String(s.periodId) === sonda.periodId && Number(s.weekday) === sonda.weekDay,
-  );
+  // Filtra só por periodId: `weekday` NÃO vem no GET (undefined), e comparar com
+  // ele deixaria `daSonda` sempre vazio — a sonda acusaria falha sempre.
+  const daSonda = lidos.filter((s) => String(s.periodId) === sonda.periodId);
 
   if (daSonda.length === 0) {
     throw new Error(
@@ -292,24 +335,27 @@ async function main(): Promise<void> {
     );
   }
 
-  // A data devolvida é conferida contra o dia do RM, convertendo de volta: se o
-  // Toddle materializou a ocorrência noutro dia, a convenção divergiu.
-  const datasErradas = daSonda
+  // A conferência é POSITIVA: tem de existir ao menos uma ocorrência NO DIA
+  // PEDIDO. Não dá para exigir que TODAS estejam nele — a mesma turma e faixa
+  // costuma ter aula em vários dias (a turma 1231 tem 08:00 de segunda a sexta),
+  // e o GET devolve todas as ocorrências daquele curso e período na janela.
+  const datas = daSonda
     .map((s) => String(s.date ?? '').slice(0, 10))
-    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-    .filter((d) => diaSemanaRm(d) !== String(sonda.weekDay + 1));
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+  const diaEsperadoRm = String(sonda.weekDay + 1);
+  const noDiaCerto = datas.filter((d) => diaSemanaRm(d) === diaEsperadoRm);
 
-  if (datasErradas.length > 0) {
+  if (noDiaCerto.length === 0) {
     throw new Error(
-      `CONVENÇÃO DE weekDay ERRADA: pedi weekDay=${sonda.weekDay} e o Toddle devolveu ` +
-        `ocorrência(s) em ${datasErradas.join(', ')}, que não é esse dia. ABORTANDO antes dos ` +
-        'outros slots. O slot da sonda ficou criado no dia errado e não há DELETE — ' +
-        'corrija pelo portal.',
+      `CONVENÇÃO DE weekDay ERRADA: pedi weekDay=${sonda.weekDay} (dia ${diaEsperadoRm} no RM) ` +
+        `e nenhuma ocorrência caiu nesse dia — vieram ${datas.join(', ') || '(nenhuma data)'}. ` +
+        'ABORTANDO antes dos outros slots. O slot da sonda ficou no dia errado e não há ' +
+        'DELETE — corrija pelo portal.',
     );
   }
 
   logger.info(
-    { ocorrencias: daSonda.length, datas: daSonda.map((s) => s.date).slice(0, 5) },
+    { ocorrencias: datas.length, noDiaCerto, outrosDias: datas.filter((d) => !noDiaCerto.includes(d)) },
     'Sonda conferida: a convenção de weekDay está correta',
   );
 
@@ -319,23 +365,28 @@ async function main(): Promise<void> {
   let falhas = 0;
 
   for (const p of restantes) {
+    const payload = {
+      curriculumId: alvo.curriculumId,
+      academicYearId: alvo.academicYearId,
+      courseId: p.courseId,
+      weekDay: p.weekDay,
+      periodId: p.periodId,
+      startTime: `${p.horario.horaInicial}:00`,
+      endTime: `${p.horario.horaFinal}:00`,
+      ...(p.applicableFrom ? { applicableFrom: p.applicableFrom } : {}),
+      ...(p.applicableTill ? { applicableTill: p.applicableTill } : {}),
+      isEnabled: true,
+    };
+
     try {
-      await toddleClient.createTimetableSlot({
-        curriculumId: alvo.curriculumId,
-        academicYearId: alvo.academicYearId,
-        courseId: p.courseId,
-        weekDay: p.weekDay,
-        periodId: p.periodId,
-        startTime: `${p.horario.horaInicial}:00`,
-        endTime: `${p.horario.horaFinal}:00`,
-        ...(p.applicableFrom ? { applicableFrom: p.applicableFrom } : {}),
-        ...(p.applicableTill ? { applicableTill: p.applicableTill } : {}),
-        isEnabled: true,
-      });
+      await comPacienciaNoRateLimit(() => toddleClient.createTimetableSlot(payload));
       criados += 1;
       if (criados % 50 === 0) {
         logger.info({ criados, de: Math.min(aCriar.length, limite) }, 'progresso');
       }
+      // Espaçamento: o limite do Toddle é por usuário e a punição é longa (300s),
+      // então é mais rápido ir devagar que ser bloqueado.
+      await dorme(INTERVALO_MS);
     } catch (error) {
       falhas += 1;
       logger.error(

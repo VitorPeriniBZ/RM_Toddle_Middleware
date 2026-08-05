@@ -41,16 +41,25 @@ import { toddleClient } from '@rm-toddle/integrations';
  *   npm run seed:routine -- --executar   # aplica
  */
 
-const ROUTINE_ID = '404046160261573423'; // "ENC", a única do currículo
+const ROUTINE_ID = '404046160261573423'; // "ENC", a única do currículo UBD
 
 /**
  * Dias operacionais da organização, na convenção do TODDLE: 1 = segunda.
  *
  * O RM usa domingo=1 (segunda=2), então há um off-by-one entre os dois. Estes
  * valores foram descobertos por eliminação — o mapa tem de cobrir TODOS os dias
- * operacionais e só [1,2,3,4,5] passou; não há endpoint que os liste.
+ * operacionais e só [1,2,3,4,5] passou; não há endpoint que os liste. A routine
+ * `MYP`, que funciona, confirma: mapeamentos em weekday 1 a 5.
  */
 const DIAS_OPERACIONAIS = [1, 2, 3, 4, 5];
+
+/** Séries em escopo: MS (114 turma-disciplina) + HS (71). Pre-K a Grade 5 não entram. */
+const SERIE_EM_ESCOPO = /^Grade (6|7|8|9|10|11|12)$/;
+
+const LABEL_NOVO = 'EAV Campus 2 - Grade 6-12 (RM)';
+
+/** Começo do ano letivo do RM (o ano acadêmico do Toddle começa em nov/2025). */
+const INICIO_LETIVO = '2026-02-03';
 
 const soData = (v: unknown): string => String(v ?? '').slice(0, 10);
 
@@ -84,76 +93,96 @@ async function main(): Promise<void> {
   const series = antes.grades ?? [];
 
   const cursos = await idMappingRepository.listByType('COURSE', 'active');
+  const emEscopo = series.filter((g) => SERIE_EM_ESCOPO.test(String(g.name ?? '')));
+  const foraDeEscopo = series.filter((g) => !SERIE_EM_ESCOPO.test(String(g.name ?? '')));
+
+  if (emEscopo.length !== 7) {
+    throw new Error(
+      `Esperava 7 séries de Grade 6 a 12 na routine, achei ${emEscopo.length}: ` +
+        `${emEscopo.map((g) => g.name).join(', ')}`,
+    );
+  }
+
+  const slots = await toddleClient.listTimetableSlots({
+    curriculumId: String(antes.curriculumProgramId ?? ''),
+    academicYearId,
+    startDate: '2026-08-03',
+    endDate: '2026-08-31',
+  });
 
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('  Ligar a grade do RM à routine do currículo');
+  console.log('  Recriar a routine do currículo, agora com a grade ligada');
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`  routine          ${ROUTINE_ID}  "${antes.label}"`);
-  console.log(`  modo             ${antes.routineMode}  (não vai no payload — não é alterável)`);
-  console.log(`  vigência         ${soData(antes.validity?.startDate)} → ${soData(antes.validity?.endDate)}`);
-  console.log(`  séries           ${series.length}  (preservadas como estão)`);
+  console.log('  APAGA:');
+  console.log(`      ${ROUTINE_ID}  "${antes.label}"  ${series.length} séries`);
+  console.log(`      vigência ${soData(antes.validity?.startDate)} → ${soData(antes.validity?.endDate)}`);
+  console.log(`      bellSchedulesMapping: ${mapaAtual.length}  ← é isto que a torna inerte`);
+  console.log(`      timetable slots que ela sustenta: ${slots.length}`);
   console.log('');
-  console.log(`  grade de horário ${bellScheduleId}  "${nossa[0].label}"  ${faixasDaGrade} faixas`);
-  console.log(`  dias             ${DIAS_OPERACIONAIS.join(', ')}  (1 = segunda, convenção do Toddle)`);
+  console.log('  CRIA:');
+  console.log(`      "${LABEL_NOVO}"`);
+  console.log(`      ${emEscopo.length} séries: ${emEscopo.map((g) => g.name).join(', ')}`);
+  console.log(`      vigência ${INICIO_LETIVO} → ${soData(antes.validity?.endDate)}`);
+  console.log(`      grade ${bellScheduleId} "${nossa[0].label}" (${faixasDaGrade} faixas)`);
+  console.log(`      dias ${DIAS_OPERACIONAIS.join(', ')} (1 = segunda, convenção do Toddle)`);
   console.log('');
-  console.log(`  bellSchedulesMapping AGORA:  ${mapaAtual.length} entrada(s)`);
-  console.log(`  bellSchedulesMapping DEPOIS: ${DIAS_OPERACIONAIS.length} entrada(s)`);
+  console.log(`  SAEM DE ESCOPO (${foraDeEscopo.length}): ${foraDeEscopo.map((g) => g.name).join(', ')}`);
+  console.log('      Ficam sem routine no currículo — como já estão hoje na prática, porque');
+  console.log('      a "ENC" tem mapeamento vazio e não produz grade para ninguém.');
   console.log('');
   console.log(`  turma-disciplina que passam a poder ter grade: ${cursos.length}`);
   console.log('');
-  console.log('  ⚠ IRREVERSÍVEL PELA API. bellScheduleMap vazio é recusado, e o campo é');
-  console.log('    obrigatório também no create — o estado atual não é alcançável de volta.');
-  console.log('    Dá para trocar de grade depois; não para voltar a "nenhuma".');
+  console.log('  Por que apagar e não editar: o PUT percorre os mapeamentos existentes lendo');
+  console.log('  `.id`, e com zero mapeamentos estoura ("reading \'id\'"). bellScheduleMap é');
+  console.log('  obrigatório no CREATE, então a routine nova nasce consistente.');
   console.log('');
-  console.log('  ⚠ ALCANÇA AS 15 SÉRIES desta routine, não só Grade 6-12. As 8 de fora');
-  console.log('    (Pre-K a Grade 5) passam a mostrar grade na interface. No dado é inerte:');
-  console.log('    não têm turma nem slot no sync, e por decisão da escola não vão entrar.');
-
-  if (mapaAtual.length > 0) {
-    console.log('');
-    console.log(`  A routine JÁ TEM mapeamento: ${JSON.stringify(mapaAtual).slice(0, 300)}`);
-    console.log('  Aplicar sobrescreveria. Confira se é o que você quer.');
-  }
+  console.log('  ⚠ O DELETE não é reversível ao estado atual: recriar a "ENC" como está');
+  console.log('    exigiria bellScheduleMap vazio, que a API recusa.');
 
   if (!executar) {
     console.log('\n  NADA FOI ESCRITO. --executar para aplicar.\n');
     return;
   }
 
-  // O payload reenvia os campos existentes SEM alterá-los: é substituição, não
-  // remendo, e omitir um campo apaga configuração. O `label` fica "ENC" de
-  // propósito — renomear seria uma segunda mudança não pedida.
-  await toddleClient.updateRoutine(ROUTINE_ID, {
-    label: String(antes.label ?? ''),
-    gradeIds: series.map((g) => String(g.id)),
-    startDate: soData(antes.validity?.startDate),
+  // Apaga a routine quebrada e cria uma nova JÁ com o mapeamento. É o único
+  // caminho que funciona — ver §5.9 e §5.10 do doc.
+  await toddleClient.deleteRoutine(ROUTINE_ID);
+  logger.warn({ routineId: ROUTINE_ID, label: antes.label }, 'Routine apagada');
+
+  const routineNova = await toddleClient.createRoutine({
+    label: LABEL_NOVO,
+    gradeIds: emEscopo.map((g) => String(g.id)),
+    routineMode: 'OPERATIONAL_DAYS',
+    startDate: INICIO_LETIVO,
     endDate: soData(antes.validity?.endDate),
+    curriculumId: String(antes.curriculumProgramId ?? ''),
+    academicYearId,
     countHolidayAsRotationDay: antes.countHolidayAsRotationDay ?? false,
     bellScheduleMap: DIAS_OPERACIONAIS.map((weekday) => ({ weekday, bellScheduleId })),
   });
+  logger.info({ routineId: routineNova, label: LABEL_NOVO }, 'Routine criada');
 
-  // ─── confere o que de fato mudou ──────────────────────────────────────────
-  const depois = await toddleClient.getRoutine(ROUTINE_ID);
+  // ─── confere o que de fato ficou ──────────────────────────────────────────
+  const depois = await toddleClient.getRoutine(routineNova);
   const mapaNovo = depois.bellSchedulesMapping ?? [];
 
   console.log('');
-  console.log(`  bellSchedulesMapping: ${mapaAtual.length} → ${mapaNovo.length}`);
-  console.log(`  séries:               ${series.length} → ${(depois.grades ?? []).length}`);
-  console.log(`  vigência:             ${soData(depois.validity?.startDate)} → ${soData(depois.validity?.endDate)}`);
+  console.log(`  routine              ${routineNova}  "${depois.label}"`);
+  console.log(`  bellSchedulesMapping ${mapaAtual.length} → ${mapaNovo.length}`);
+  console.log(`  séries               ${(depois.grades ?? []).length}: ` +
+    `${(depois.grades ?? []).map((g) => g.name).join(', ')}`);
+  console.log(`  vigência             ${soData(depois.validity?.startDate)} → ${soData(depois.validity?.endDate)}`);
 
-  if ((depois.grades ?? []).length !== series.length) {
-    logger.error(
-      { antes: series.length, depois: (depois.grades ?? []).length },
-      'As séries da routine MUDARAM — não era o esperado',
-    );
-  }
   if (mapaNovo.length === 0) {
-    logger.error('O mapeamento continua vazio — o update não pegou. Investigue antes de seguir.');
+    logger.error(
+      'O mapeamento saiu VAZIO — a routine nova nasceu com o mesmo defeito da "ENC". ' +
+        'NÃO rode seed:timetable; investigue.',
+    );
     process.exitCode = 1;
     return;
   }
 
-  console.log(`\n  ✓ mapeamento: ${JSON.stringify(mapaNovo).slice(0, 400)}`);
+  console.log(`\n  ✓ mapeamento: ${JSON.stringify(mapaNovo).slice(0, 300)}`);
   console.log('\n  Próximo passo — a sonda dos slots (cria 1, lê de volta, aborta se falhar):');
   console.log('    npm run seed:timetable -- --executar --limite 3\n');
 }
