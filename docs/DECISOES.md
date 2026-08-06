@@ -136,10 +136,47 @@ estrutura fundacional — só pelo portal.
 Confirmado pela escola em 06/08/2026: o ano **26/27** foi editado com sucesso
 (passou a `2026-11-21 → 2027-12-11`).
 
-**Aberto:** o ano **corrente** (`404045942505890665`, `2025-11-21 → 2026-11-20`)
-ainda **não foi testado**. Pode ser que o Toddle só libere anos futuros ou sem
-lançamento — restrição que faria sentido, porque mover datas de ano em uso desloca
+**RESOLVIDO em 06/08/2026: o ano CORRENTE não é editável.** A escola tentou e o
+portal não permitiu. Só anos futuros (o 26/27 foi editado com sucesso).
+
+Faz sentido como restrição do produto — mover datas de ano em uso deslocaria
 boletim e frequência já registrados.
+
+### Consequência para PRODUÇÃO — requisito de onboarding
+
+Se o ano corrente não pode ser editado, **a organização de produção tem de nascer
+com o calendário certo**. Não se corrige depois de matricular aluno e lançar nota.
+
+Para o white-label isso é item obrigatório de checklist em cada escola nova:
+
+> **Antes de criar qualquer aluno, turma ou nota, conferir no portal do Toddle:
+> a vigência do ano acadêmico e as datas dos grading periods, contra o ano letivo
+> do RM.** Errar ali é permanente; só o suporte do Toddle desfaz.
+
+Aqui é sandbox, então o custo é baixo — mas o de-para de etapa fica torto até
+novembro/2026, e isso tem janelas exatas (abaixo).
+
+### Onde o ordinal acerta e onde erra — janelas exatas
+
+O ordinal não está errado o ano inteiro. Comparando etapa do RM com o grading
+period que a contém:
+
+```
+03/02 → 15/05    etapa 1 do RM  ⊂  T1        ✓ seguro
+18/05 → 22/06    etapa 2 do RM  ⊂  T1        ✗ mapearia para etapa 1
+23/06 → 04/09    etapa 2 do RM  ⊂  T2        ✓ seguro
+09/09 → 22/09    etapa 3 do RM  ⊂  T2        ✗ mapearia para etapa 2
+23/09 → 20/11    etapa 3 do RM  ⊂  T3        ✓ seguro
+21/11 → 11/12    etapa 3 do RM      sem T    ✗ sem cobertura no Toddle
+```
+
+**Três janelas problemáticas**, não o ano todo. Consequência para a implementação da
+via de nota: em vez de bloquear tudo, ela pode **recusar por janela** — nota cujo
+`gradingPeriodId` e data caiam numa faixa incompatível vira pendência, não
+lançamento. Isso é implementável e preciso.
+
+**A frequência não é afetada.** Ela resolve por data da aula e `IDHORARIOTURMA`, não
+por período — o único problema dela é 21/11 → 11/12, que não tem timetable slot.
 
 ### O que o RM espera
 
@@ -180,7 +217,7 @@ pode começar antes, porque ela é resolvida por data da aula e não por períod
 | Data de corte da D1 | escola |
 | `ETAPA_LIBERADA='N'` em 100% — a flag é gerenciada ou morta? 3.630 notas presas | escola |
 | Datas dos grading periods no portal (requisito da D2) | admin do Toddle |
-| Ano corrente é editável? | admin do Toddle |
+| ~~Ano corrente é editável?~~ **NÃO** — resolvido 06/08; ver acima. Em produção, calendário certo na criação | — |
 | Política de atraso / falta justificada | escola |
 | Política de homeroom (49% sem `courseId`) | escola |
 | `JUSTIFICADA` vazio em 21.300 linhas — ninguém justifica? | secretaria |
