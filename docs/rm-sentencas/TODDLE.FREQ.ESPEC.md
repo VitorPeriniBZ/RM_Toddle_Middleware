@@ -241,14 +241,17 @@ para nada e não faz mal.
 1. ~~Acrescentar as 4 colunas e recadastrar.~~ **Feito e verificado.**
 2. Ligar a leitura no middleware, com o mesmo recorte fail-closed. **Zero
    escrita.** Derivar `criado_pela_integracao` e **descartar o CPF** (§3.7).
-3. Só então decidir o formato do espelho no Toddle. E aí bate na parede conhecida:
-   `POST /public/v2/attendance` recusa com `"Attendance Record is not valid"`
-   mesmo com timetable slot e `optionId` reais. **Publicar frequência no Toddle
-   pode não ser possível pela API.**
+3. ~~Decidir o formato do espelho no Toddle.~~ **SUPERADO pela decisão D1 de
+   06/08/2026** (ver `docs/DECISOES.md`): a direção é Toddle → RM, não o contrário.
+   Os professores passam a lançar no Toddle, e o RM é o destino.
 
-Se não for possível, o valor da Sentença não se perde: ela é o insumo da
-reconciliação — saber o que o RM tem antes de aceitar qualquer coisa do Toddle — e
-foi ela que provou o domínio de `PRESENCA`.
+   Consequência para esta Sentença: ela **não** alimenta mais um espelho. O papel
+   dela agora é **reconciliação** — saber o que o RM já tem antes de aceitar
+   qualquer coisa do Toddle, e não sobrescrever as 21.300 ausências humanas. Isso
+   ficou mais importante, não menos.
+
+   E foi ela que provou o domínio de `PRESENCA` — o insumo que torna a escrita
+   possível.
 
 ## 8. Os 880 recusados por aluno — investigado, NÃO é lacuna nossa
 

@@ -1,5 +1,20 @@
 # Middleware de Integração TOTVS RM Educacional ↔ Toddle
 
+> **Leia [`docs/DECISOES.md`](docs/DECISOES.md) antes de mudar qualquer coisa.** Ele
+> registra as decisões da escola com data e razão, e **algumas contradizem
+> documentos mais antigos deste repositório**. Em caso de conflito, o DECISOES.md
+> vence.
+>
+> A mais importante (D1, 06/08/2026): a direção de nota e frequência é
+> **Toddle → RM**. Os professores lançam no Toddle e o TOTVS é o destino — o
+> inverso do que o diagrama abaixo e vários docs sugerem.
+>
+> E o fluxo acadêmico escreve por **`wsDataServer`/`SaveRecord`, não por SQL
+> direto** como o diagrama diz: o RM tem regra de negócio na aplicação, e
+> `PRESENCA='P'` *remove* a ausência em vez de marcar presença. Ver
+> [`docs/rm-dataservers/`](docs/rm-dataservers/). Nenhuma escrita acadêmica foi
+> feita ainda — o cliente do `wsDataServer` não tem método de escrita, de propósito.
+
 Middleware assíncrono (Node.js + TypeScript + BullMQ) que mantém o ERP TOTVS RM Educacional e a plataforma Toddle (Open API V2) sincronizados, com separação clara de responsabilidades:
 
 ```

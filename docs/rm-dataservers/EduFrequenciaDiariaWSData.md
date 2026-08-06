@@ -267,6 +267,12 @@ timetable slot  →  qual turma tem aula 2 na segunda    0 de 518  BLOQUEADO
 routine         →  qual grade de horário vale em qual dia       VAZIA
 ```
 
+> **ATUALIZAÇÃO 06/08/2026 — isto deixou de ser bloqueio.** Pela decisão D1
+> (`docs/DECISOES.md`), os professores lançam frequência **pela interface** do
+> Toddle. O `POST` abaixo só servia para eu fabricar dado de teste; a chamada real
+> nasce na tela e é lida pelo `GET /attendance`, que funciona. O parágrafo fica
+> como registro do que foi medido, não como impedimento.
+
 O `POST /public/v2/attendance` recusa com `"Attendance Record is not valid"`
 enquanto não houver timetable slot. **Isso não é peculiaridade da nossa
 integração: sem os slots, professor nenhum consegue lançar chamada por
