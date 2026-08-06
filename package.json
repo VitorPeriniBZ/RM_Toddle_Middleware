@@ -26,7 +26,8 @@
     "ler:responsaveis": "tsx apps/worker/src/scripts/lerResponsaveis.ts",
     "sync:responsaveis": "tsx apps/worker/src/scripts/syncResponsaveis.ts",
     "seed:gradingperiods": "tsx apps/worker/src/scripts/seedGradingPeriods.ts",
-    "ler:notas": "tsx apps/worker/src/scripts/lerNotas.ts"
+    "ler:notas": "tsx apps/worker/src/scripts/lerNotas.ts",
+    "reconciliar:turmas": "tsx apps/worker/src/scripts/reconciliarTurmas.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
