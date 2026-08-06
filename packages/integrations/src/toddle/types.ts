@@ -251,3 +251,25 @@ export interface ToddleParent {
   }>;
   [key: string]: unknown;
 }
+
+/**
+ * Grading period — o "trimestre" do boletim no Toddle.
+ *
+ * ATENÇÃO: as janelas NÃO correspondem às etapas do RM. O ano acadêmico do Toddle
+ * é de hemisfério norte (nov→nov) e o ano letivo brasileiro é fev→dez, então o T1
+ * engloba o 1º trimestre do RM inteiro e parte do 2º. O de-para é por ORDINAL —
+ * ver a migração 008.
+ */
+export interface ToddleGradingPeriod {
+  id: string | number;
+  name?: string;
+  label?: string;
+  /** 'REPORTING' nos que servem para boletim. */
+  type?: string;
+  startDate?: string;
+  endDate?: string;
+  academicYearId?: string;
+  curriculumProgramId?: string;
+  isCurrentAcademicYear?: boolean;
+  [key: string]: unknown;
+}

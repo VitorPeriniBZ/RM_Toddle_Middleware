@@ -21,6 +21,12 @@ export const ENTITY_TYPES = [
    * pela API, ao contrário de aluno e turma. Ver migração 007.
    */
   'PERIOD',
+  /**
+   * Etapa de nota: rm_code = CODETAPA ('1','2','3'), toddle_id = gradingPeriodId.
+   * A correspondência é por ORDINAL, não por data — as janelas do Toddle e do RM
+   * divergem porque o ano acadêmico de lá é nov→nov. Ver migração 008.
+   */
+  'GRADING_PERIOD',
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 

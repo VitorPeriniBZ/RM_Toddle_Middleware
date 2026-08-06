@@ -4,6 +4,7 @@ import { chunk } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 import {
   ToddleAttendance,
+  ToddleGradingPeriod,
   ToddleParent,
   ToddleRoutine,
   ToddleTimetableSlot,
@@ -798,6 +799,23 @@ export class ToddleClient {
       throw new ToddleApiError('Toddle não retornou o responsável criado', undefined, data);
     }
     return { id: String(parent.id), email: parent.email };
+  }
+
+  /**
+   * Grading periods (T1, T2, T3) — o `gradingPeriodId` que o POST /term-grades
+   * exige.
+   *
+   * A resposta é um ARRAY DIRETO em `response`, não um objeto com chave nomeada
+   * como nos outros endpoints. E `curriculumProgramId` vai SOLTO na querystring,
+   * não como array JSON.
+   */
+  async listGradingPeriods(curriculumProgramId: string): Promise<ToddleGradingPeriod[]> {
+    const { data } = await this.withRetry('GET /grading-periods', () =>
+      this.http.get<{ response?: ToddleGradingPeriod[] }>('/public/v2/grading-periods', {
+        params: { curriculumProgramId },
+      }),
+    );
+    return data?.response ?? [];
   }
 
   /**
