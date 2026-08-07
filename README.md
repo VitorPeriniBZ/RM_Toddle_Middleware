@@ -95,6 +95,12 @@ O separador é `-`, **não `:`**, e o `runId` é normalizado: o BullMQ recusa cu
 
 **Resiliência.** `attempts: 3` com backoff exponencial (5s → 10s → 20s). O BullMQ não tem DLQ nativa: um listener de `failed` copia o payload completo (fila de origem, job, dados, motivo, stacktrace) para a fila `dead-letter`, e `npm run dlq` lista/reprocessa manualmente.
 
+**O agendamento se auto-cura.** O registro do scheduler vive **só no Redis**. Se o Redis reiniciar sem persistência, o `students-sync-nightly` desaparece e **nada dá erro** — o worker fica de pé, saudável, consumindo uma fila que nunca mais recebe nada; você descobre dias depois, ao notar que o Toddle parou de atualizar.
+
+Por isso o worker re-registra o agendamento no boot **e em cada reconexão ao Redis** (`manterAgendamentoDeAlunos`, em `packages/queues/src/schedulers.ts`). O evento de reconexão é o que importa: quando o Redis reinicia, o worker não reinicia — ele reconecta, então registrar só no boot não cobriria justamente esse caso. A definição do agendamento é única e compartilhada com `npm run schedule`, para o cron não divergir entre os dois lugares e criar dois schedulers.
+
+Verificado em 07/08/2026: com o worker de pé, apagadas todas as chaves `repeat*` e o job atrasado, uma reconexão forçada (`redis-cli client kill type normal`) restaurou o scheduler e o próximo disparo sozinho.
+
 **Rate limiting conservador.** Os limites do Toddle **não são documentados**: o worker usa `concurrency: 1` + `limiter 2 req/s` — medido em 31/07, quando `concurrency 3` + `5 req/s` tomou HTTP 429 em massa e mandou 3 lotes para a DLQ. O cliente ainda retenta 429/5xx por conta própria (`ToddleClient.withRetry`, 5 tentativas, honrando `Retry-After` quando ele vem).
 
 Mesmo assim é possível tomar 429: em 07/08, três syncs completos em ~30 min durante testes esgotaram a cota do sandbox. Dois sinais úteis: o Toddle **não** manda `Retry-After`, então o fallback exponencial cobre só ~15s; e syncs em sequência próxima somam contra a mesma janela. Se isso aparecer em produção, o ajuste é alargar o backoff do cliente, não subir o limiter.
@@ -126,7 +132,7 @@ npm run seed:yeargroups -- map <CourseCodeRM> <yearGroupIdToddle>
 # ou defina TODDLE_DEFAULT_YEAR_GROUP_ID no .env como fallback
 
 # 6. Agendamento noturno (cron em STUDENTS_SYNC_CRON, tz America/Sao_Paulo)
-npm run schedule            # idempotente — upsert por id do scheduler
+npm run schedule            # idempotente; opcional — o worker também registra
 
 # 7. Worker + disparo manual
 npm run worker:students     # terminal 1 — fica escutando a fila

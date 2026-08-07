@@ -3,6 +3,7 @@ import { redisConnection } from '@rm-toddle/queues';
 import { QUEUE, STUDENT_JOB } from '@rm-toddle/queues';
 import { wireDeadLetterQueue } from '@rm-toddle/queues';
 import { closeAllQueues } from '@rm-toddle/queues';
+import { manterAgendamentoDeAlunos } from '@rm-toddle/queues';
 import { pgPool } from '@rm-toddle/db';
 import { closeRmSqlPool } from '@rm-toddle/integrations';
 import {
@@ -43,6 +44,12 @@ const worker = new Worker(
 
 // Jobs que esgotarem as 3 tentativas vão para a fila 'dead-letter'.
 wireDeadLetterQueue(worker, QUEUE.RM_TO_TODDLE_STUDENTS);
+
+// O agendamento noturno vive só no Redis. Se o Redis reiniciar sem persistir, o
+// scheduler desaparece e NADA dá erro — o worker fica de pé consumindo uma fila
+// que nunca mais recebe nada. Isto o re-registra no boot e em cada reconexão ao
+// Redis, então ele não pode estar ausente enquanto o worker estiver vivo.
+manterAgendamentoDeAlunos();
 
 worker.on('completed', (job, result) => {
   logger.info({ jobId: job.id, jobName: job.name, result }, 'Job concluído');

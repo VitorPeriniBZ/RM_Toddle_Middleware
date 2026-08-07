@@ -1,25 +1,28 @@
-import { getQueue, closeAllQueues } from '@rm-toddle/queues';
-import { QUEUE, STUDENT_JOB } from '@rm-toddle/queues';
-import { redisConnection } from '@rm-toddle/queues';
+import { closeAllQueues, redisConnection } from '@rm-toddle/queues';
+import { upsertStudentsNightly, SCHEDULER } from '@rm-toddle/queues';
 import { env } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 
 /**
  * Registra o agendamento recorrente (Job Scheduler nativo do BullMQ).
- * Rodar UMA vez por ambiente (idempotente — upsert por id do scheduler).
  * Uso: npm run schedule
+ *
+ * Idempotente (upsert por id do scheduler), então rodar de novo é seguro — é por
+ * isso que o serviço `init` do docker-compose.coolify.yml o chama a cada deploy.
+ *
+ * A definição do agendamento NÃO mora aqui: está em packages/queues/schedulers.ts,
+ * compartilhada com o startup do worker, que também a registra. Duplicar a
+ * definição deixaria dois schedulers vivos com horários diferentes se alguém
+ * mudasse o cron num lado só.
+ *
+ * Este script continua útil para registrar SEM subir o worker (bootstrap de
+ * ambiente, ou conferir a configuração antes do primeiro deploy).
  */
 async function main(): Promise<void> {
-  const queue = getQueue(QUEUE.RM_TO_TODDLE_STUDENTS);
-
-  await queue.upsertJobScheduler(
-    'students-sync-nightly',
-    { pattern: env.STUDENTS_SYNC_CRON, tz: 'America/Sao_Paulo' },
-    { name: STUDENT_JOB.EXTRACT, data: { trigger: 'cron' } },
-  );
+  await upsertStudentsNightly();
 
   logger.info(
-    { cron: env.STUDENTS_SYNC_CRON, tz: 'America/Sao_Paulo' },
+    { scheduler: SCHEDULER.STUDENTS_NIGHTLY, cron: env.STUDENTS_SYNC_CRON, tz: 'America/Sao_Paulo' },
     'Agendamento de sincronização de alunos registrado',
   );
 

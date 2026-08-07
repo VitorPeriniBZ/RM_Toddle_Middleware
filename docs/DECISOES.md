@@ -266,6 +266,14 @@ os dados dele.
 no BullMQ é o worker, não o Redis. Sem worker às 3h o job não se perde — ele
 dispara atrasado, quando o worker voltar.
 
+**E o agendamento vive só no Redis.** Se o Redis reiniciar sem persistência, o
+scheduler desaparece e nada dá erro. Por isso o worker o re-registra no boot e em
+cada reconexão (`manterAgendamentoDeAlunos`). Registrar só no boot NÃO resolveria:
+quando o Redis reinicia o worker não reinicia, ele reconecta. Em produção,
+ligar AOF no Redis do Coolify é a outra metade da proteção — e conferir que
+`maxmemory-policy` é `noeviction`, senão o Redis descarta job em silêncio sob
+pressão de memória (o próprio BullMQ avisa: `redis-connection.js:485`).
+
 **Ressalva grande: isto está num laptop.** Eu previ que às 3h a máquina estaria
 dormindo e o job atrasaria; **o log desmentiu** — disparou às 03:00:48 de 07/08,
 no horário. Mas isso foi sorte de a máquina estar acordada, não garantia: numa
