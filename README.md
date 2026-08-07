@@ -199,6 +199,18 @@ Passos:
 4. Ligar o domínio **só no serviço `web`**.
 5. Deploy. O `init` roda as migrations e registra o cron antes de o worker subir.
 
+**Marque as variáveis como "Runtime only" no Coolify** — desmarque "Available at
+Buildtime" em todas. Nenhuma é necessária no build, e há duas razões:
+
+1. `NODE_ENV=production` chegando ao build faz o `npm ci` **omitir as
+   devDependencies**, onde vivem `typescript`, `tsx` e `vite`. Foi o que derrubou
+   o primeiro deploy (07/08 13:55, `npm run typecheck` com exit 127). O
+   `npm ci --include=dev` no Dockerfile já protege contra isso, mas não há por
+   que injetar a variável no build de qualquer forma.
+2. `RM_WS_PASS` e `TODDLE_TOKEN` estavam sendo passados como `--build-arg`.
+   Segredo em build arg é exposição desnecessária — eles só fazem sentido em
+   runtime.
+
 Quatro coisas que quebram silenciosamente se você mudar:
 
 - **Réplicas do worker têm de ser 1.** O limiter do BullMQ é por worker (2 req/s); duas réplicas viram 4 req/s e o Toddle devolve 429 em massa. Escalar não acelera nada.

@@ -25,7 +25,19 @@ WORKDIR /app
 # correto com 9 workspaces — e deploy aqui é evento raro, não loop de dev.
 COPY . .
 
-RUN npm ci
+# `--include=dev` é OBRIGATÓRIO aqui, não estilo.
+#
+# O Coolify injeta as variáveis do projeto como build args e declara os ARG no
+# Dockerfile automaticamente ("Added 69 ARG declarations"), então NODE_ENV=production
+# chega ao ambiente de build sem eu poder impedir. E `npm ci` com
+# NODE_ENV=production OMITE as devDependencies — onde vivem typescript, tsx e
+# vite. O resultado foi o deploy de 07/08/2026 13:55 morrendo em
+# `npm run typecheck` com exit 127 (comando não encontrado), porque o tsc não
+# tinha sido instalado.
+#
+# A flag torna o build imune ao NODE_ENV de quem chama. E as devDependencies não
+# são opcionais nesta imagem: o tsx é o RUNTIME, não ferramenta de build.
+RUN npm ci --include=dev
 
 # Erro de tipo tem de derrubar o deploy, não aparecer no log às 3h da manhã.
 RUN npm run typecheck

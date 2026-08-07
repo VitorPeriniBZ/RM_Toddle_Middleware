@@ -4,19 +4,40 @@
 # Coolify (criados pela UI, com backup do Postgres), e este arquivo só declara
 # os serviços da aplicação, que os alcançam por DATABASE_URL e REDIS_URL.
 #
-# Variáveis obrigatórias na UI do Coolify (nenhuma tem default seguro):
-#   DATABASE_URL          da UI do recurso PostgreSQL
-#   REDIS_URL             da UI do recurso Redis
+# -----------------------------------------------------------------------------
+# VARIÁVEIS. O .env NÃO vai para a imagem (ver .dockerignore) — tudo vem da UI.
+#
+# (A) O Zod ABORTA o processo se faltar. Falha ruidosa, fácil de achar:
+#   DATABASE_URL     da UI do recurso PostgreSQL
+#   TODDLE_TOKEN     TODDLE_ORG_ID
+#   TENANT_SLUG=eav
+#   RM_CODFILIAL=2   (escopo de campus; "ALL" para todos — declaração explícita)
+#   API_AUTH_MODE=google-oidc  -> exige também GOOGLE_CLIENT_ID e GOOGLE_ALLOWED_HD
+#
+# (B) TÊM DEFAULT, e é aí que está o perigo: esquecer NÃO dá erro.
+#
+#   SOURCE_ID_PREFIX=RM-   <<<< O MAIS PERIGOSO DE TODOS.
+#     Default é STRING VAZIA. Os 253 alunos já existem no Toddle com sourceId
+#     "RM-<RA>". Com o prefixo vazio, a busca por sourceId não acha ninguém e —
+#     num Postgres NOVO, em que a id_mapping está vazia e não há a camada 1 de
+#     idempotência para salvar — o middleware CRIA 253 ALUNOS DUPLICADOS.
+#     Confira este valor antes do primeiro sync. Não há erro que o denuncie.
+#
+#   REDIS_URL           default aponta para localhost: sem isto, não acha o Redis
+#   RM_CODPERLET=2026   ano letivo; sem ele o extract falha em runtime
+#   RM_CODCOLIGADA=1
+#   STUDENTS_SYNC_CRON=0 3 * * *
+#   WEB_ORIGINS         default é localhost:5173; ponha o domínio do Coolify
+#
+# (C) Opcionais no Zod, mas o sync não funciona sem elas:
 #   RM_WS_BASEURL         https://escolaamericana143994.rm.cloudtotvs.com.br:1951
 #   RM_WS_USER            RM_WS_PASS
-#   RM_CODCOLIGADA=1      RM_CODFILIAL=2      RM_CODPERLET=2026
-#   RM_SENTENCA_STUDENTS  RM_SENTENCA_RESP  RM_SENTENCA_FREQUENCIA  RM_SENTENCA_NOTAS
-#   TODDLE_TOKEN          TODDLE_BASE_URL     TODDLE_ORG_ID
-#   SOURCE_ID_PREFIX=RM-  TENANT_SLUG=eav     STUDENTS_SYNC_CRON=0 3 * * *
-#   GOOGLE_CLIENT_ID      GOOGLE_ALLOWED_HD   API_CORS_ORIGINS
+#   RM_SENTENCA_STUDENTS  RM_SENTENCA_RESPONSAVEIS
+#   RM_SENTENCA_FREQUENCIA  RM_SENTENCA_NOTAS
 #
-# O .env NÃO vai para a imagem (ver .dockerignore) — se algum desses faltar, o
-# Zod aborta o processo no start em vez de rodar com metade da configuração.
+# TODDLE_BASE_URL é derivada de TODDLE_REGION (default us-east-1) — só declare se
+# a região for outra.
+# -----------------------------------------------------------------------------
 # =============================================================================
 
 services:
