@@ -90,7 +90,24 @@ export async function processStudentExtract(job: Job): Promise<{
 
   // 5. FAN-OUT: lotes pequenos processados em paralelo, com jobId
   //    determinístico — repetir o extract no MESMO run não duplica lotes.
-  const runId = `run-${job.id ?? Date.now()}`;
+  //
+  // O `:` é PROIBIDO no jobId do lote. O BullMQ só o aceita quando o id quebra
+  // em exatamente 3 partes (compatibilidade com repeatable job antigo, que a
+  // própria lib marcou para remover — job.js: "TODO: replace this check in next
+  // breaking check with include(':')"). Duas consequências que custaram um
+  // incidente em 07/08/2026:
+  //
+  //   1. o job do scheduler tem id `repeat:<nome>:<millis>`, então o lote saía
+  //      `run-repeat:...:<millis>:students:0` — 5 partes, recusado com
+  //      "Custom Id cannot contain :". O caminho do CRON falhava 100% das vezes,
+  //      nas 3 tentativas, e ia para a DLQ. O manual passava só porque `run-36:
+  //      students:0` dá exatamente 3 partes;
+  //   2. quando o BullMQ apertar a checagem para `includes(':')`, o caminho
+  //      manual quebra também.
+  //
+  // Por isso: runId sem caractere especial e `-` como separador do lote.
+  const runIdBruto = job.id ?? String(Date.now());
+  const runId = `run-${runIdBruto.replace(/[^A-Za-z0-9_-]+/g, '-')}`;
   const batches = chunk(items, env.SYNC_BATCH_SIZE);
   const queue = getQueue(QUEUE.RM_TO_TODDLE_STUDENTS);
 
@@ -102,7 +119,7 @@ export async function processStudentExtract(job: Job): Promise<{
   for (const [batchIndex, students] of batches.entries()) {
     const payload: StudentUpsertBatchJob = { runId, batchIndex, configVersion: versao, students };
     await queue.add(STUDENT_JOB.UPSERT_BATCH, payload, {
-      jobId: `${runId}:students:${batchIndex}`,
+      jobId: `${runId}-students-${batchIndex}`,
     });
   }
 

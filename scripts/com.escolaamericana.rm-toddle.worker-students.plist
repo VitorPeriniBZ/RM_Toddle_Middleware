@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.escolaamericana.rm-toddle.worker-students</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware/scripts/worker-students.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware</string>
+
+    <!-- Sobe no login e mantém de pé: se o processo morrer, o launchd o recria. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- 30s entre reinícios: se o worker estiver em crashloop (credencial
+         expirada, RM fora do ar), isto evita marretar o RM e o Toddle. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Tempo para o encerramento gracioso terminar o lote em andamento antes
+         do SIGKILL. Um lote de 50 alunos levou ~27s na medição de 06/08. -->
+    <key>ExitTimeOut</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware/logs/worker-students.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware/logs/worker-students.error.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

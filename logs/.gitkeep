@@ -1,0 +1,5 @@
+Diretório de logs do worker supervisionado (ver README, "Worker supervisionado").
+
+Precisa EXISTIR antes do `launchctl bootstrap`: o launchd abre o StandardOutPath
+na hora de subir o processo e não cria o diretório. Os .log em si são ignorados
+pelo git (`*.log` no .gitignore); este arquivo existe só para versionar a pasta.

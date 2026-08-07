@@ -89,11 +89,15 @@ rm-toddle-middleware/
 
 **Idempotência em 3 camadas.** (1) tabela `id_mapping` local (chave de negócio `entity_type + rm_code`, com `UNIQUE` também em `toddle_id`); (2) se o RA não está mapeado, `GET /students?sourceIds=...` no Toddle recupera o vínculo (cobre primeira carga, restore do banco local e cadastros manuais); (3) todo sucesso grava o mapeamento imediatamente — a retentativa de um lote parcialmente processado vira `update` em vez de `create` duplicado.
 
-**Extract → fan-out.** Um job `students.extract` varre o RM inteiro e fatia o resultado em lotes de `SYNC_BATCH_SIZE` (padrão 50) com `jobId` determinístico (`{runId}:students:{índice}`). Lotes pequenos falham/retentam isoladamente e paralelizam sem estourar rate limit.
+**Extract → fan-out.** Um job `students.extract` varre o RM inteiro e fatia o resultado em lotes de `SYNC_BATCH_SIZE` (padrão 50) com `jobId` determinístico (`{runId}-students-{índice}`). Lotes pequenos falham/retentam isoladamente e paralelizam sem estourar rate limit.
+
+O separador é `-`, **não `:`**, e o `runId` é normalizado: o BullMQ recusa custom jobId com `:` a menos que ele quebre em exatamente 3 partes. O job do scheduler tem id `repeat:<nome>:<millis>`, então o formato antigo derrubava 100% dos disparos por cron — ver o incidente de 07/08 em [`docs/DECISOES.md`](docs/DECISOES.md).
 
 **Resiliência.** `attempts: 3` com backoff exponencial (5s → 10s → 20s). O BullMQ não tem DLQ nativa: um listener de `failed` copia o payload completo (fila de origem, job, dados, motivo, stacktrace) para a fila `dead-letter`, e `npm run dlq` lista/reprocessa manualmente.
 
-**Rate limiting conservador.** Os limites do Toddle **não são documentados**: o worker usa `concurrency: 3` + `limiter 5 req/s`. Ajuste com dados reais de produção.
+**Rate limiting conservador.** Os limites do Toddle **não são documentados**: o worker usa `concurrency: 1` + `limiter 2 req/s` — medido em 31/07, quando `concurrency 3` + `5 req/s` tomou HTTP 429 em massa e mandou 3 lotes para a DLQ. O cliente ainda retenta 429/5xx por conta própria (`ToddleClient.withRetry`, 5 tentativas, honrando `Retry-After` quando ele vem).
+
+Mesmo assim é possível tomar 429: em 07/08, três syncs completos em ~30 min durante testes esgotaram a cota do sandbox. Dois sinais úteis: o Toddle **não** manda `Retry-After`, então o fallback exponencial cobre só ~15s; e syncs em sequência próxima somam contra a mesma janela. Se isso aparecer em produção, o ajuste é alargar o backoff do cliente, não subir o limiter.
 
 **`sourceId` imutável.** `SOURCE_ID_PREFIX` + código de negócio do RM (RA). Escolha o formato uma única vez (ex.: `1-` para a coligada 1) e nunca mude — ele é o contrato de identidade entre os sistemas.
 
@@ -121,15 +125,51 @@ npm run seed:yeargroups -- list
 npm run seed:yeargroups -- map <CourseCodeRM> <yearGroupIdToddle>
 # ou defina TODDLE_DEFAULT_YEAR_GROUP_ID no .env como fallback
 
-# 6. Agendamento noturno (opcional, cron em STUDENTS_SYNC_CRON)
-npm run schedule
+# 6. Agendamento noturno (cron em STUDENTS_SYNC_CRON, tz America/Sao_Paulo)
+npm run schedule            # idempotente — upsert por id do scheduler
 
 # 7. Worker + disparo manual
 npm run worker:students     # terminal 1 — fica escutando a fila
 npm run enqueue:students    # terminal 2 — dispara a sincronização
 ```
 
-Utilitários: `npm run typecheck`, `npm run dlq -- list`, `npm run dlq -- reprocess <id|--all>`.
+Utilitários: `npm run typecheck`, `npm run dlq -- list`, `npm run dlq -- reprocess <id|--all>`, `npm run dlq -- remove <id>`.
+
+`dlq -- remove` descarta uma entrada **sem** reprocessar, para o caso "a causa já foi corrigida e reprocessar seria redundante". Ele loga o payload inteiro antes de apagar, e não tem `--all` de propósito: descarte em massa é como se perde uma falha real no meio.
+
+### Worker supervisionado (macOS)
+
+O passo 7 acima é para desenvolvimento. Para o worker sobreviver a crash e a
+reboot — **e o cron do passo 6 disparar de fato, porque é o worker que promove o
+job atrasado no BullMQ** — use o LaunchAgent:
+
+```bash
+mkdir -p logs   # o launchd abre o StandardOutPath ao subir e NÃO cria o diretório
+cp scripts/com.escolaamericana.rm-toddle.worker-students.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.escolaamericana.rm-toddle.worker-students.plist
+
+launchctl print gui/$(id -u)/com.escolaamericana.rm-toddle.worker-students  # state, pid, runs
+tail -f logs/worker-students.log                                            # log do worker
+launchctl kickstart -k gui/$(id -u)/com.escolaamericana.rm-toddle.worker-students  # reiniciar
+launchctl bootout gui/$(id -u)/com.escolaamericana.rm-toddle.worker-students       # desligar
+```
+
+O plist tem caminhos absolutos (inclusive a versão do Node do nvm) — ajuste se o
+repo ou o Node mudarem de lugar. `KeepAlive` recria o processo; `ThrottleInterval
+30` evita crashloop marretando o RM; `ExitTimeOut 60` dá tempo ao encerramento
+gracioso terminar o lote em andamento (um lote de 50 alunos levou ~27s).
+
+**Não rode o passo 7 com o LaunchAgent ativo.** Seriam dois consumidores na mesma
+fila, e o `limiter` é por worker: 2 req/s cada = 4 req/s contra o Toddle, perto do
+ponto em que a medição de 31/07 tomou HTTP 429 em massa. Antes de depurar no
+terminal, `launchctl bootout` primeiro.
+
+**O log não tem rotação.** `logs/worker-students.log` cresce sem limite — o
+`newsyslog` do macOS não olha para ele. Truncar de vez em quando, ou configurar
+rotação, antes que vire um arquivo de GB.
+
+**Isto não substitui um host de verdade.** Num laptop que dorme, o job das 3h roda
+quando a máquina acorda, não às 3h.
 
 ## Fluxo 1 — passo a passo (alunos)
 

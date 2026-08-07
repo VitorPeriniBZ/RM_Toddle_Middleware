@@ -236,11 +236,53 @@ horários, e a faixa `009` de lá tem a mesma hora da `001` daqui. Inofensivo ho
 silenciosamente errado no primeiro cliente com dois campi. A chave tem de ser a
 hora por campus, ou o `CODHOR` inteiro.
 
-**Nada é automatizado.** Nenhum job repetível registrado no Redis, worker sem
-supervisão, 22 comandos manuais. É a maior lacuna para virar produto.
+**Só o fluxo de alunos é automatizado.** Corrigido em 06/08/2026 — antes disso não
+havia nenhum job repetível no Redis nem supervisão.
 
-**Sem sync de professor.** Os 109 `TEACHER_COURSE` e 31 `STAFF` vieram de carga
-manual, mesma deriva que deixou a `1714` de fora. `reconciliar:turmas` cobre turma;
+Hoje: o scheduler `students-sync-nightly` está registrado (`0 3 * * *`,
+America/Sao_Paulo) e o worker roda sob launchd
+(`~/Library/LaunchAgents/com.escolaamericana.rm-toddle.worker-students.plist`,
+`KeepAlive` + `RunAtLoad`, log em `logs/worker-students.log`). Verificado:
+`SIGKILL` no processo → recriado em 30s (`ThrottleInterval`); `SIGTERM` fecha o
+lote em andamento antes de sair; e o extract roda com o jobId no formato do
+scheduler (`repeat:<nome>:<millis>`), não só com id numérico.
+
+### O primeiro disparo real falhou — e a lição
+
+07/08/2026, 03:00. As 3 tentativas morreram em `"Custom Id cannot contain :"` e o
+job foi para a DLQ. O `runId` do fan-out vinha de `job.id`, e o id do scheduler
+tem `:`; o BullMQ só aceita `:` em custom jobId quando o id quebra em exatamente
+3 partes. O caminho manual passava **por sorte** (`run-36:students:0` = 3 partes),
+o do cron gerava 5. Corrigido: `runId` normalizado e `-` como separador do lote —
+o que também protege contra o aperto da checagem que o próprio BullMQ já marcou
+como TODO.
+
+**A lição vale mais que o bug:** o teste que eu fiz antes de ligar usou o *payload*
+do cron (`trigger: 'cron'`) mas o *id* do disparo manual, e por isso passou.
+Automatizar um caminho exige exercitá-lo com a forma real do gatilho, não só com
+os dados dele.
+
+**O worker precisa estar de pé para o cron valer.** Quem promove o job atrasado
+no BullMQ é o worker, não o Redis. Sem worker às 3h o job não se perde — ele
+dispara atrasado, quando o worker voltar.
+
+**Ressalva grande: isto está num laptop.** Eu previ que às 3h a máquina estaria
+dormindo e o job atrasaria; **o log desmentiu** — disparou às 03:00:48 de 07/08,
+no horário. Mas isso foi sorte de a máquina estar acordada, não garantia: numa
+noite em que ela dormir, o sync roda quando acordar. Para ser agendamento de
+verdade o worker tem de ir para um host que não dorme — é a lacuna que sobra para
+virar produto.
+
+**Os outros 21 comandos seguem manuais**, e a maioria por bom motivo: são cargas
+one-shot ou diagnóstico, várias irreversíveis (o `PUT` da routine, os 522
+timetable slots que não têm `DELETE`). Agendar esses seria errado. O que falta de
+verdade é sync de professor (ver abaixo) e a via Toddle → RM, travada por
+governança.
+
+**Sem sync de professor.** Os `TEACHER_COURSE` e `STAFF` vieram de carga manual,
+mesma deriva que deixou a `1714` de fora. Contagem medida na `id_mapping` em
+07/08/2026: **116** `TEACHER_COURSE` (não 109, como este arquivo dizia antes — a
+criação da `1714` e outras entraram depois) e **31** `STAFF`. `reconciliar:turmas` cobre turma;
 professor não tem equivalente, e é aí que a Sentença `TODDLE.TURMADISC` passa a
 fazer sentido, porque é ela que traz professor.
 
