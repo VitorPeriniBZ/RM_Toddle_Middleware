@@ -1,0 +1,23 @@
+# O .env NUNCA entra na imagem — as credenciais do RM e o token do Toddle vêm
+# das variáveis de ambiente do Coolify em runtime. Uma imagem com .env dentro
+# carrega segredo para qualquer lugar onde ela for puxada.
+.env
+.env.*
+!.env.example
+
+node_modules
+**/node_modules
+dist
+**/dist
+logs
+*.log
+backups
+
+.git
+.gitignore
+.idea
+.DS_Store
+
+# O plist/runner do launchd são do setup de macOS, não do container.
+scripts/com.escolaamericana.rm-toddle.worker-students.plist
+scripts/worker-students.sh

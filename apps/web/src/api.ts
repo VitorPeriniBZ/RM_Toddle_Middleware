@@ -6,7 +6,20 @@
  * validação de "o que pode ser escrito" viraria decoração, porque bastaria um
  * `curl` para contorná-la. A regra vive no servidor.
  */
-const BASE = 'http://127.0.0.1:3333';
+/**
+ * Em DEV o Vite serve na 5173 e a API na 3333 — origens diferentes, daí o CORS
+ * por allowlist do lado da API.
+ *
+ * Em PRODUÇÃO o nginx serve esta UI e faz proxy de `/api` para a API no mesmo
+ * domínio. Duas razões para caminho relativo em vez de URL absoluta: a origem
+ * passa a ser a mesma (CORS deixa de existir no caminho UI -> API), e o domínio
+ * não fica gravado no bundle — o mesmo build serve homologação e produção.
+ *
+ * `import.meta.env.DEV` é embutido do Vite, não variável de ambiente: não exige
+ * afrouxar o `envPrefix`, que é justamente o que o vite.config.ts evita para não
+ * varrer TODDLE_TOKEN e RM_WS_PASS para dentro do bundle.
+ */
+const BASE = import.meta.env.DEV ? 'http://127.0.0.1:3333' : '/api';
 
 export interface AuthConfig {
   authMode: 'google-oidc' | 'localhost';

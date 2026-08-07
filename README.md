@@ -169,7 +169,40 @@ terminal, `launchctl bootout` primeiro.
 rotação, antes que vire um arquivo de GB.
 
 **Isto não substitui um host de verdade.** Num laptop que dorme, o job das 3h roda
-quando a máquina acorda, não às 3h.
+quando a máquina acorda, não às 3h. Para produção, ver a seção do Coolify abaixo.
+
+### Deploy no Coolify
+
+`Dockerfile` + `docker-compose.coolify.yml` (não confundir com o `docker-compose.yml`
+da raiz, que é a infra de desenvolvimento). Redis e Postgres são **recursos
+gerenciados do Coolify**, criados pela UI — o Postgres ganha backup agendado, que
+não existe em nenhum outro lugar hoje.
+
+```
+init     migrations + npm run schedule, roda a cada deploy e sai (ambos idempotentes)
+worker   sem porta, sem domínio, 1 réplica  <- o que fecha a lacuna do agendamento
+api      expõe 3333 só na rede interna, alcançada apenas pelo nginx do web
+web      nginx com o estático do Vite + proxy /api -> api:3333; ÚNICO com domínio
+```
+
+Passos:
+
+1. Criar o projeto e adicionar os recursos **PostgreSQL** e **Redis**; ativar backup no Postgres.
+2. Adicionar a aplicação apontando para este repo, tipo **Docker Compose**, arquivo `docker-compose.coolify.yml`.
+3. Preencher as variáveis (a lista completa está no cabeçalho do compose). `DATABASE_URL` e `REDIS_URL` saem da UI dos recursos.
+4. Ligar o domínio **só no serviço `web`**.
+5. Deploy. O `init` roda as migrations e registra o cron antes de o worker subir.
+
+Quatro coisas que quebram silenciosamente se você mudar:
+
+- **Réplicas do worker têm de ser 1.** O limiter do BullMQ é por worker (2 req/s); duas réplicas viram 4 req/s e o Toddle devolve 429 em massa. Escalar não acelera nada.
+- **Healthcheck do worker não pode ser de porta** — ele não responde HTTP, e um check default reiniciaria o container em loop.
+- **O worker precisa de TODAS as variáveis**, inclusive `GOOGLE_CLIENT_ID` e `GOOGLE_ALLOWED_HD`, porque o Zod valida o schema inteiro no start. Faltando uma, ele aborta em vez de subir pela metade.
+- **`API_HOST=0.0.0.0` no serviço `api`.** O default `127.0.0.1` só aceitaria conexão do próprio container e o nginx não alcançaria. É seguro porque o serviço não publica porta no host.
+
+`NODE_ENV=production` **proíbe** `API_AUTH_MODE=localhost` no Zod — o modo sem login não sobe em produção nem por engano.
+
+Verificado localmente: as imagens `runtime` e `web` constroem, o typecheck roda dentro do build (erro de tipo derruba o deploy) e o worker sobe no container conectando em Redis e Postgres. **Não testado** contra o Coolify real — falta confirmar que a CloudTOTVS aceita o IP do servidor novo.
 
 ## Fluxo 1 — passo a passo (alunos)
 

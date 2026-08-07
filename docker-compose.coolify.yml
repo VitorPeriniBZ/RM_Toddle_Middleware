@@ -1,0 +1,151 @@
+# =============================================================================
+# Deploy no Coolify. NÃO é o docker-compose.yml da raiz — aquele sobe Redis e
+# Postgres para desenvolvimento local. Aqui os dois são RECURSOS GERENCIADOS do
+# Coolify (criados pela UI, com backup do Postgres), e este arquivo só declara
+# os serviços da aplicação, que os alcançam por DATABASE_URL e REDIS_URL.
+#
+# Variáveis obrigatórias na UI do Coolify (nenhuma tem default seguro):
+#   DATABASE_URL          da UI do recurso PostgreSQL
+#   REDIS_URL             da UI do recurso Redis
+#   RM_WS_BASEURL         https://escolaamericana143994.rm.cloudtotvs.com.br:1951
+#   RM_WS_USER            RM_WS_PASS
+#   RM_CODCOLIGADA=1      RM_CODFILIAL=2      RM_CODPERLET=2026
+#   RM_SENTENCA_STUDENTS  RM_SENTENCA_RESP  RM_SENTENCA_FREQUENCIA  RM_SENTENCA_NOTAS
+#   TODDLE_TOKEN          TODDLE_BASE_URL     TODDLE_ORG_ID
+#   SOURCE_ID_PREFIX=RM-  TENANT_SLUG=eav     STUDENTS_SYNC_CRON=0 3 * * *
+#   GOOGLE_CLIENT_ID      GOOGLE_ALLOWED_HD   API_CORS_ORIGINS
+#
+# O .env NÃO vai para a imagem (ver .dockerignore) — se algum desses faltar, o
+# Zod aborta o processo no start em vez de rodar com metade da configuração.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # init: migrations + registro do agendamento. Roda a CADA deploy e sai.
+  #
+  # Por que o `schedule` mora aqui: ele precisa rodar uma vez por ambiente, e
+  # "uma vez, à mão, alguém lembra" é exatamente como um cron deixa de existir
+  # sem dar erro nenhum. Ambos são idempotentes (a migration tem controle de
+  # versão, o scheduler é upsert por id), então repetir a cada deploy é seguro.
+  # ---------------------------------------------------------------------------
+  init:
+    build:
+      context: .
+      target: runtime
+    command: sh -c "npm run db:migrate && npm run schedule"
+    restart: "no"
+    environment:
+      NODE_ENV: production
+
+  # ---------------------------------------------------------------------------
+  # worker: consumidor das filas. Sem porta, sem domínio — ninguém chega até
+  # ele, ele só faz conexões de saída (Redis, RM, Toddle).
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      target: runtime
+
+    # `node` direto no tsx, NÃO `npm run worker:students`. O npm se interpõe
+    # entre o Docker e o node, e o SIGTERM do `docker stop` morre nele — o
+    # encerramento gracioso (fechar o lote em andamento, fechar os pools) não
+    # roda. Mesma lição do runner do launchd em scripts/worker-students.sh.
+    command:
+      - node
+      - node_modules/tsx/dist/cli.mjs
+      - apps/worker/src/workers/rm-to-toddle/studentSync.worker.ts
+
+    # Docker init como PID 1: reapa zumbi e repassa sinal corretamente.
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s  # um lote de 50 alunos levou ~27s
+
+    # CRÍTICO: UMA réplica. O limiter do BullMQ é POR WORKER (2 req/s), então
+    # duas réplicas viram 4 req/s contra o Toddle — foi o que tomou HTTP 429 em
+    # massa em 31/07/2026 e mandou 3 lotes para a DLQ. Escalar aqui não acelera
+    # nada, só quebra o sync.
+    deploy:
+      replicas: 1
+
+    # Sem healthcheck de porta: o worker não responde HTTP. Um check default
+    # esperando porta consideraria o container morto e reiniciaria em loop.
+    # Este confirma que o processo existe, que é o que importa.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f studentSync.worker > /dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    environment:
+      NODE_ENV: production
+
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # api: plano de controle, só leitura. NÃO publica porta no host — quem fala
+  # com ela é o nginx do `web`, pela rede interna do compose.
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      target: runtime
+    command:
+      - node
+      - node_modules/tsx/dist/cli.mjs
+      - apps/api/src/server.ts
+
+    init: true
+    restart: unless-stopped
+    expose:
+      - "3333"
+
+    environment:
+      NODE_ENV: production
+      # O default é 127.0.0.1, que dentro do container só aceitaria conexão do
+      # próprio container — o nginx não alcançaria. 0.0.0.0 aqui é seguro porque
+      # o serviço não publica porta no host.
+      API_HOST: 0.0.0.0
+      API_PORT: "3333"
+      # NODE_ENV=production já PROÍBE API_AUTH_MODE=localhost no Zod
+      # (packages/config/src/env.ts:171) — o modo sem login não sobe aqui nem
+      # por engano. Exige GOOGLE_CLIENT_ID e GOOGLE_ALLOWED_HD na UI.
+      API_AUTH_MODE: google-oidc
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3333/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # web: estático do Vite servido por nginx, com proxy de /api para a api.
+  # É o ÚNICO serviço que recebe domínio no Coolify.
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      target: web
+    init: true
+    restart: unless-stopped
+
+    # O Coolify lê esta porta para ligar o domínio e emitir o SSL.
+    expose:
+      - "80"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+    depends_on:
+      api:
+        condition: service_started
