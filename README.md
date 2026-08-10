@@ -105,6 +105,8 @@ Verificado em 07/08/2026: com o worker de pé, apagadas todas as chaves `repeat*
 
 Mesmo assim é possível tomar 429: em 07/08, três syncs completos em ~30 min durante testes esgotaram a cota do sandbox. Dois sinais úteis: o Toddle **não** manda `Retry-After`, então o fallback exponencial cobre só ~15s; e syncs em sequência próxima somam contra a mesma janela. Se isso aparecer em produção, o ajuste é alargar o backoff do cliente, não subir o limiter.
 
+**Falha de rede também é retentada** (corrigido em 10/08/2026). O cliente retentava 429/5xx mas desistia na primeira tentativa quando não havia resposta HTTP — e erro de rede é justamente isso. Nas noites de 08 a 10/08 o sync acumulou **52 falhas de transporte contra 15 de rate limit**: cada reset de TCP ou blip de DNS matava um aluno definitivamente e derrubava lotes inteiros para a DLQ. O discriminador é seguro porque erro de negócio sempre vem com status; sem status, é transporte. `4xx` que não 429 continua subindo na hora.
+
 **`sourceId` imutável.** `SOURCE_ID_PREFIX` + código de negócio do RM (RA). Escolha o formato uma única vez (ex.: `1-` para a coligada 1) e nunca mude — ele é o contrato de identidade entre os sistemas.
 
 **`XxxCode` vs `XxxInternalId`.** O mapeamento usa sempre o **Code** (RA, chapa, código de turma). O `InternalId` é chave técnica do RM: guardamos apenas como referência (`rm_internal_id`) e jamais o montamos manualmente.

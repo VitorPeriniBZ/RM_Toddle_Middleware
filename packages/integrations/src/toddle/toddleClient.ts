@@ -29,6 +29,13 @@ export class ToddleApiError extends Error {
     public readonly body?: unknown,
     /** Valor do header Retry-After, em segundos, quando a API o envia. */
     public readonly retryAfterSeconds?: number,
+    /**
+     * Código de transporte do axios (`ECONNRESET`, `EAI_AGAIN`, `ETIMEDOUT`…),
+     * presente quando a requisição falhou SEM resposta HTTP. Era descartado
+     * até 10/08/2026, e sem ele o log dizia apenas "falhou" — sem pista de que
+     * a causa era rede.
+     */
+    public readonly code?: string,
   ) {
     super(message);
     this.name = 'ToddleApiError';
@@ -50,6 +57,13 @@ const ATTENDANCE_PAGE_SIZE = 400;
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
 const MAX_ATTEMPTS = 5;
 const MAX_BACKOFF_MS = 16_000;
+
+/**
+ * Códigos de transporte que NÃO devem ser retentados, apesar de virem sem
+ * resposta HTTP. Cancelamento é intencional — retentar desfaria a decisão de
+ * quem cancelou.
+ */
+const CODIGOS_NAO_RETENTAVEIS = new Set(['ERR_CANCELED', 'ECONNABORTED_BY_USER']);
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -77,40 +91,79 @@ export class ToddleClient {
       const body = error.response?.data;
       const rawRetryAfter = error.response?.headers?.['retry-after'];
       const retryAfter = Number(rawRetryAfter);
+      // A mensagem carrega o status OU o código de transporte. Sem isto ela
+      // dizia apenas "falhou", e foi o que tornou o diagnóstico de 10/08 lento:
+      // 52 falhas de rede eram indistinguíveis de erro de negócio no log e na DLQ.
+      const causa = status ? ` (HTTP ${status})` : error.code ? ` (${error.code})` : '';
       throw new ToddleApiError(
-        `Toddle API ${error.config?.method?.toUpperCase()} ${error.config?.url} falhou` +
-          (status ? ` (HTTP ${status})` : ''),
+        `Toddle API ${error.config?.method?.toUpperCase()} ${error.config?.url} falhou${causa}`,
         status,
         body,
         Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+        error.code,
       );
     });
   }
 
   /**
-   * Executa a chamada retentando rate limit (429) e indisponibilidade (5xx),
-   * respeitando Retry-After quando a API o envia e caindo em backoff
-   * exponencial quando não. Erros de negócio (4xx que não 429) sobem na hora —
-   * retentar um payload inválido só atrasaria a ida para a DLQ.
+   * Executa a chamada retentando o que é transitório: rate limit (429),
+   * indisponibilidade (5xx) e **falha de transporte** (sem resposta HTTP).
+   * Respeita Retry-After quando a API o envia, senão backoff exponencial.
+   *
+   * Erros de negócio (4xx que não 429) sobem na hora — retentar um payload
+   * inválido só atrasaria a ida para a DLQ.
+   *
+   * ## Por que falha sem resposta HTTP é retentável (corrigido em 10/08/2026)
+   *
+   * A condição antiga era `if (status === undefined || !RETRYABLE_STATUS...)`,
+   * ou seja: **sem status, desiste na primeira tentativa.** A intenção era não
+   * retentar erro de negócio, mas jogou os erros de REDE na mesma vala — e eles
+   * são a classe mais retentável que existe.
+   *
+   * O custo real: nas noites de 08 a 10/08 o sync produziu **52 falhas
+   * `PUT falhou` sem código HTTP** contra 15 de rate limit. Cada reset de TCP ou
+   * blip de DNS matou um aluno definitivamente, sem usar nenhuma das 5
+   * tentativas. Lotes inteiros foram para a DLQ por isso.
+   *
+   * O discriminador é seguro: o interceptor só produz `ToddleApiError` com
+   * `status` indefinido quando o axios **não recebeu resposta alguma** — o que é
+   * transporte por definição (DNS, TCP, timeout), nunca regra de negócio, porque
+   * erro de negócio sempre vem com status. Erro que NÃO é `ToddleApiError` (bug
+   * nosso, falha de parse) continua subindo na hora, como antes.
    */
   private async withRetry<T>(label: string, operation: () => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt += 1) {
       try {
         return await operation();
       } catch (error) {
-        const status = error instanceof ToddleApiError ? error.status : undefined;
-        if (status === undefined || !RETRYABLE_STATUS.has(status) || attempt >= MAX_ATTEMPTS) {
+        const apiError = error instanceof ToddleApiError ? error : undefined;
+        const status = apiError?.status;
+        const code = apiError?.code;
+
+        // Sem resposta HTTP = falha de transporte. Só vale para erro que passou
+        // pelo nosso interceptor; qualquer outro sobe imediatamente.
+        const falhaDeTransporte =
+          apiError !== undefined &&
+          status === undefined &&
+          !CODIGOS_NAO_RETENTAVEIS.has(code ?? '');
+
+        const retentavel =
+          falhaDeTransporte || (status !== undefined && RETRYABLE_STATUS.has(status));
+
+        if (!retentavel || attempt >= MAX_ATTEMPTS) {
           throw error;
         }
 
-        const retryAfter = error instanceof ToddleApiError ? error.retryAfterSeconds : undefined;
+        const retryAfter = apiError?.retryAfterSeconds;
         const waitMs = retryAfter !== undefined
           ? retryAfter * 1_000
           : Math.min(2 ** (attempt - 1) * 1_000, MAX_BACKOFF_MS);
 
         logger.warn(
-          { label, status, attempt, maxAttempts: MAX_ATTEMPTS, waitMs, retryAfter },
-          'Toddle indisponível/rate limit — aguardando para tentar de novo',
+          { label, status, code, motivo: falhaDeTransporte ? 'transporte' : 'http', attempt, maxAttempts: MAX_ATTEMPTS, waitMs, retryAfter },
+          falhaDeTransporte
+            ? 'Falha de rede ao falar com o Toddle — aguardando para tentar de novo'
+            : 'Toddle indisponível/rate limit — aguardando para tentar de novo',
         );
         await sleep(waitMs);
       }
