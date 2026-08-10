@@ -23,8 +23,27 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESTINO="$REPO/backups/coolify"
-RETER=14                     # quantos dumps manter
-MINIMO_BYTES=20000           # abaixo disto o dump é suspeito (o real tem ~570KB)
+RETER="${BACKUP_RETER:-14}"  # quantos dumps manter
+
+# Piso de bytes DO ARQUIVO JÁ COMPRIMIDO. Serve só para pegar dump vazio ou
+# truncado — NÃO para julgar se há dado "suficiente".
+#
+# Calibrado em 10/08/2026 contra o servidor real, depois de um falso positivo
+# instrutivo: eu tinha posto 20000 olhando o dump LOCAL (1884 linhas, 108KB
+# comprimido) e o de produção veio com 18,5KB, porque lá só existem os 253
+# STUDENT que o sync criou. O piso passou a valer mais que o conteúdo, e um
+# backup bom foi recusado. Cinco testes sintéticos não pegaram isso; o dado real
+# pegou na primeira.
+#
+# Referências medidas (comprimido): schema puro ~2,6KB · produção hoje ~18,5KB ·
+# local com 1884 linhas ~108KB. 5000 fica acima do schema puro e abaixo de
+# qualquer dump com dado de verdade.
+MINIMO_BYTES="${BACKUP_MINIMO_BYTES:-5000}"
+
+# Queda brusca de linhas em relação ao último dump bom não derruba o backup (o
+# banco pode legitimamente encolher), mas grita no log — é o sinal de que alguém
+# apagou dado.
+ALERTA_QUEDA_PCT="${BACKUP_ALERTA_QUEDA_PCT:-50}"
 
 # --- configuração: ambiente primeiro, .env como fallback -----------------------
 if [[ -z "${COOLIFY_SSH_HOST:-}" || -z "${COOLIFY_PG_CONTAINER:-}" ]] && [[ -f "$REPO/.env" ]]; then
@@ -72,6 +91,18 @@ gzip -t "$PARCIAL" 2>/dev/null || falhar "gzip corrompido"
 # nada: um dump só de schema também passaria do mínimo.
 LINHAS=$(gzip -dc "$PARCIAL" | awk '/^COPY public\.id_mapping/{f=1;next} f&&/^\\\.$/{exit} f{c++} END{print c+0}')
 [[ "$LINHAS" -gt 0 ]] || falhar "nenhuma linha de id_mapping no dump — schema sem dado?"
+
+# Comparação com o último dump BOM: detecta perda de dado, que nenhum piso
+# absoluto pega. Não falha de propósito — o banco pode encolher por motivo
+# legítimo, e recusar o backup nesse caso deixaria você SEM cópia justamente no
+# dia em que algo estranho aconteceu.
+ANTERIOR=$(find "$DESTINO" -name 'coolify-*.sql.gz' -type f -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1 || true)
+if [[ -n "$ANTERIOR" ]]; then
+  LINHAS_ANT=$(gzip -dc "$ANTERIOR" | awk '/^COPY public\.id_mapping/{f=1;next} f&&/^\\\.$/{exit} f{c++} END{print c+0}')
+  if [[ "$LINHAS_ANT" -gt 0 ]] && [[ $((LINHAS * 100 / LINHAS_ANT)) -lt "$ALERTA_QUEDA_PCT" ]]; then
+    log "ATENCAO: id_mapping caiu de $LINHAS_ANT para $LINHAS linhas ($(basename "$ANTERIOR")) — alguem apagou dado?"
+  fi
+fi
 
 mv "$PARCIAL" "$ALVO"
 chmod 600 "$ALVO"   # contém e-mails de responsáveis
