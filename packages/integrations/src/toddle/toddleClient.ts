@@ -346,9 +346,113 @@ export class ToddleClient {
     );
   }
 
-  async addStaffToClass(classId: string, staffIds: string[]): Promise<void> {
+  /**
+   * Papéis da organização (`GET /public/v2/org-roles`).
+   *
+   * O parâmetro `roleLevels` está documentado, mas a API devolve **HTTP 400**
+   * com ele (testado em 10/08/2026, `COURSE` e `CLASS`). Sem parâmetro devolve
+   * os 16 papéis e filtramos aqui — por isso não há argumento de nível.
+   *
+   * O `roleId` do nível CLASS é OBRIGATÓRIO para vincular staff a turma, e
+   * varia por organização: resolver pelo NOME mantém o middleware white label.
+   */
+  async listOrgRoles(): Promise<Array<{ roleId: string; roleName: string; roleLevel: string }>> {
+    const { data } = await this.withRetry('GET /org-roles', () =>
+      this.http.get<{ response?: { roles?: Array<{ roleId: string; roleName: string; roleLevel: string }> } }>(
+        '/public/v2/org-roles',
+      ),
+    );
+    return data?.response?.roles ?? [];
+  }
+
+  /**
+   * TODOS os vínculos usuário↔turma, em páginas por CURSOR (400 por página).
+   *
+   * Use isto, não `getClassStaff()` em laço: 186 GETs por turma estouraram o
+   * rate limit do Toddle em 10/08/2026, e a resposta 429 revelou o que a
+   * documentação não diz — **a janela é de 300 segundos**:
+   *
+   *   "User requests rate limit is reached, please try again after 300 seconds"
+   *
+   * O backoff do cliente cobre ~15s no máximo, então não há retry que salve:
+   * a correção é pedir menos, não esperar mais. E o Toddle põe os 300s só na
+   * MENSAGEM, não em header `Retry-After` — o `withRetry` não tem como honrá-lo.
+   *
+   * `type` distingue 'student' de 'staff'; `isClassArchived`/`isUserArchived`
+   * permitem descartar o que já foi arquivado sem uma segunda chamada.
+   */
+  async listEnrollments(filtros: Record<string, string | number | boolean> = {}): Promise<
+    Array<Record<string, unknown>>
+  > {
+    const todos: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+
+    for (let pagina = 1; pagina <= 200; pagina += 1) {
+      const { data } = await this.withRetry('GET /enrollments', () =>
+        this.http.get<{
+          response?: {
+            enrollments?: Array<Record<string, unknown>>;
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+          };
+        }>('/public/v2/enrollments', {
+          params: { count: 400, ...filtros, ...(cursor ? { cursor } : {}) },
+        }),
+      );
+      const lote = data?.response?.enrollments ?? [];
+      todos.push(...lote);
+
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info.endCursor) break;
+      cursor = info.endCursor;
+    }
+
+    return todos;
+  }
+
+  /**
+   * Staff vinculado a UMA turma. Devolve `courseRole` além da identidade.
+   *
+   * Para conferir muitas turmas, prefira `listEnrollments()` — este endpoint em
+   * laço estoura o rate limit (ver nota lá).
+   *
+   * Existe de propósito no lugar de deduzir do `GET /courses`, que NÃO traz
+   * staff — suas chaves são id, title, curriculumId, isArchived, sourceId,
+   * sisId e teacherCourseId.
+   */
+  async getClassStaff(classId: string): Promise<Array<Record<string, unknown>>> {
+    const { data } = await this.withRetry('GET /courses/:id/staffs', () =>
+      this.http.get<{ response?: { staff?: Array<Record<string, unknown>> } }>(
+        `/public/v2/courses/${classId}/staffs`,
+      ),
+    );
+    return data?.response?.staff ?? [];
+  }
+
+  /**
+   * Vincula staff a turma.
+   *
+   * O corpo é `{ staffs: [{ id, roleId }] }` — NÃO `{ staffIds }`, que era o que
+   * este método mandava até 10/08/2026 (nunca exercitado: nenhum chamador
+   * existia). `roleId` é obrigatório; obtenha-o por `listOrgRoles()` filtrando
+   * `roleLevel === 'CLASS'`.
+   */
+  async addStaffToClass(classId: string, staffs: Array<{ id: string; roleId: string }>): Promise<void> {
     await this.withRetry('PUT /courses/:id/staffs/add', () =>
-      this.http.put(`/public/v2/courses/${classId}/staffs/add`, { staffIds }),
+      this.http.put(`/public/v2/courses/${classId}/staffs/add`, { staffs }),
+    );
+  }
+
+  /**
+   * Desvincula staff de turma. Corpo é `{ staffIds: [...] }` — assimetria real
+   * com o `add`, que usa `{ staffs: [{id, roleId}] }`.
+   *
+   * A existência deste endpoint importa: o vínculo professor↔turma é
+   * REVERSÍVEL, ao contrário de quase tudo nesta API (aluno e staff só
+   * arquivam; timetable slot e teacher course não têm nem isso).
+   */
+  async removeStaffFromClass(classId: string, staffIds: string[]): Promise<void> {
+    await this.withRetry('PUT /courses/:id/staffs/remove', () =>
+      this.http.put(`/public/v2/courses/${classId}/staffs/remove`, { staffIds }),
     );
   }
 

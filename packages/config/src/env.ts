@@ -31,6 +31,15 @@ const envSchema = z.object({
   /** Sentenças do Fluxo 2 (roadmap). */
   RM_SENTENCA_FREQUENCIA: z.string().optional(),
   RM_SENTENCA_NOTAS: z.string().optional(),
+  /**
+   * Turma-disciplina-PROFESSOR. É a única fonte que traz o docente: o
+   * `EduTurmaDiscData` (usado por `reconciliar:turmas`) devolve a turma-disciplina
+   * mas NÃO o professor alocado. Publicada no RM em 10/08/2026 — a especificação
+   * em docs/rm-sentencas/TODDLE.TURMADISC.ESPEC.md foi escrita quando ela ainda
+   * dava SOAP Fault, e diz que sem ela "não há sincronização automática
+   * possível". Passou a haver.
+   */
+  RM_SENTENCA_TURMADISC: z.string().optional(),
   /** Responsáveis (ex.: TODDLE.RESP). Ver docs/rm-sentencas/TODDLE.RESP.ESPEC.md. */
   RM_SENTENCA_RESPONSAVEIS: z.string().optional(),
   RM_CODCOLIGADA: z.coerce.number().int().default(1),
