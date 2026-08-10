@@ -1,7 +1,7 @@
 import { env, logger } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { fetchResponsaveisFromRm, type Responsavel } from '@rm-toddle/domain';
-import { toddleClient } from '@rm-toddle/integrations';
+import { comPaciencia, toddleClient } from '@rm-toddle/integrations';
 
 /**
  * Cria os responsáveis ACADÊMICOS no Toddle, com os filhos vinculados.
@@ -30,26 +30,6 @@ import { toddleClient } from '@rm-toddle/integrations';
 
 const INTERVALO_MS = 250;
 const dorme = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-/**
- * O limite do Toddle pune com 300s (medido nos timetable slots). A espera longa
- * fica aqui, não no cliente: um cliente que dorme 5 minutos em silêncio
- * contaminaria o sync de aluno e o shadow mode.
- */
-async function comPaciencia<T>(operacao: () => Promise<T>): Promise<T> {
-  for (let tentativa = 1; ; tentativa += 1) {
-    try {
-      return await operacao();
-    } catch (error) {
-      const corpo = JSON.stringify((error as { body?: unknown })?.body ?? '');
-      const msg = error instanceof Error ? error.message : String(error);
-      if (!/rate limit/i.test(corpo + msg) || tentativa > 3) throw error;
-      const segundos = Number(/after (\d+) seconds/i.exec(corpo)?.[1] ?? 300);
-      logger.warn({ tentativa, segundos }, 'Rate limit do Toddle — aguardando a janela liberar');
-      await dorme((segundos + 5) * 1_000);
-    }
-  }
-}
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);

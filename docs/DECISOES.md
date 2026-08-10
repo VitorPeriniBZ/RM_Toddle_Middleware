@@ -210,30 +210,36 @@ pode começar antes, porque ela é resolvida por data da aula e não por períod
 
 ---
 
-## Rate limit do Toddle — medido em 10/08/2026
+## Rate limit do Toddle — janela de 300s
 
-A coleção oficial não documenta os limites. Uma resposta 429 documentou:
+A coleção oficial não documenta os limites. A resposta 429 documenta:
 
 ```
 "User requests rate limit is reached, please try again after 300 seconds"
 ```
 
-**A janela é de 300 segundos**, e o limite é por usuário. Estourou com ~190 GETs
-sequenciais sem vazão controlada (`GET /courses/:id/staffs` por turma, na
-primeira versão de `reconciliar:professores`).
+**Isto já era conhecido** — foi medido no trabalho dos timetable slots, e
+`syncResponsaveis.ts` já trazia o `comPaciencia()`, que detecta o rate limit,
+**extrai os segundos da própria mensagem** e dorme esse tempo (até 3 tentativas).
+Promovido em 10/08 para `packages/integrations` como `comPaciencia`, porque cada
+script estava a um passo de reinventá-lo — e a primeira versão de
+`reconciliar:professores` estourou o limite justamente por não tê-lo.
 
-Duas consequências de desenho:
+Três coisas que decorrem, e valem para qualquer script novo:
 
-1. **Não há retry que salve.** O backoff do cliente cobre ~15s no máximo, contra
-   uma janela de 300s. A correção é **pedir menos**, não esperar mais — foi por
-   isso que a reconciliação passou a usar `GET /enrollments` (cursor, 400 por
-   página, ~14 chamadas para 5.555 vínculos) em vez de uma chamada por turma.
-2. **O Toddle põe os 300s só na MENSAGEM, não em header `Retry-After`.** O
-   `withRetry` honra o header quando ele vem; aqui não vem. Então o número não é
-   aproveitável programaticamente sem parsear texto de erro.
+1. **O `withRetry` do cliente NÃO cobre isto**, de propósito. Ele faz backoff de
+   ~15s no máximo, contra uma janela de 300s. A espera longa fica no `comPaciencia`
+   e é **opt-in**: um cliente que dormisse 5 minutos em silêncio contaminaria o
+   sync de aluno e o shadow mode.
+2. **Os 300s vêm só na MENSAGEM, não em header `Retry-After`.** Daí a regex —
+   é feio e é o único caminho.
+3. **Pedir menos vence esperar mais.** A reconciliação de professor fazia um
+   `GET /courses/:id/staffs` por turma (186 chamadas, estourou) e passou a usar
+   `GET /enrollments` (cursor, 400/página): ~14 chamadas para 5.555 vínculos.
+   Os dois métodos deram resultado idêntico.
 
-Isto vale para qualquer script que rode fora do worker: o limiter de 2 req/s vive
-na configuração do BullMQ, e script solto não passa por ele.
+Script solto **não** passa pelo limiter de 2 req/s: aquele vive na configuração do
+worker BullMQ.
 
 ## Pendências que não são de código
 
@@ -327,20 +333,25 @@ Duas correções factuais que este arquivo trazia erradas:
   linhas, 18 colunas) e é a única fonte que traz o PROFESSOR — o
   `EduTurmaDiscData` não traz.
 
-Deriva medida no campus 2 (35 professores, 202 turma-disciplina):
+**A escrita existe e rodou** (`npm run sync:professores`, 10/08/2026). Campus 2,
+35 professores, 202 turma-disciplina:
 
-| situação | qtd | quem resolve |
-|---|---|---|
-| OK | 31 | — |
-| sem e-mail no RM | 3 | **secretaria** — `POST /staff` exige e-mail |
-| não mapeado, mas já existe no Toddle | 1 | vincular de-para, **não criar** |
-| turma-disciplina sem `COURSE` | 16 | sync de turma |
-| vínculo impossível (dependem dos 3 acima) | 19 | consequência |
-| **vínculo ausente no Toddle** | **2** | `1714` e `1705` |
+| situação | antes | depois | quem resolve |
+|---|---|---|---|
+| OK | 31 | **32** | — |
+| não mapeado, já existia no Toddle | 1 | **0** | resolvido: de-para gravado, **sem criar** |
+| **vínculo ausente no Toddle** | **2** | **0** | resolvido: `1714` e `1705` vinculados |
+| sem e-mail no RM | 3 | 3 | **secretaria** — `POST /staff` exige e-mail |
+| turma-disciplina sem `COURSE` | 16 | 16 | sync de turma (outra feature) |
+| vínculo impossível | 19 | 18 | consequência dos 3 sem e-mail |
 
-Os 2 últimos só aparecem porque a reconciliação consulta o vínculo REAL. A
-`1714` é a mesma turma do incidente das 60 faltas: foi criada e **o professor
-nunca foi vinculado**. Contagem de mapeamento diria "OK". `reconciliar:turmas` cobre turma;
+Os vínculos ausentes só aparecem porque a reconciliação consulta o vínculo REAL,
+via `GET /enrollments`. A `1714` é a mesma turma do incidente das 60 faltas: foi
+criada e **o professor nunca foi vinculado** — contagem de mapeamento diria "OK".
+
+O que o sync NÃO faz, de propósito: não cria turma, não remove vínculo (staff a
+mais na turma pode ser alocação da coordenação) e não arquiva professor que saiu.
+As três são decisão humana; o relatório aponta. `reconciliar:turmas` cobre turma;
 professor não tem equivalente, e é aí que a Sentença `TODDLE.TURMADISC` passa a
 fazer sentido, porque é ela que traz professor.
 
