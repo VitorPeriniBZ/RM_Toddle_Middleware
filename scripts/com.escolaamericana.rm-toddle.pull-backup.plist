@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.escolaamericana.rm-toddle.pull-backup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware/scripts/pull-backup-coolify.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware</string>
+
+    <!-- 09:00: o backup do Coolify roda às 04:00, então às 9h já existe o estado
+         do dia consolidado. E é horário em que a máquina costuma estar ligada —
+         diferente das 3h, que foi o que estragou o worker no laptop. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Se a máquina estiver dormindo às 9h, o launchd roda ao acordar. Para um
+         backup diário isso é aceitável: perder o horário não perde o dado, ao
+         contrário do worker, onde atrasar o job tinha consequência. -->
+
+    <key>StandardOutPath</key>
+    <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware/logs/pull-backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vitor.biazutti/WebstormProjects/RM_Toddle_Middleware/logs/pull-backup.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- O script precisa achar o `ssh` e o `gzip`; o launchd não carrega o shell
+         do usuário, então o PATH vem explícito. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

@@ -179,6 +179,28 @@ rotação, antes que vire um arquivo de GB.
 **Isto não substitui um host de verdade.** Num laptop que dorme, o job das 3h roda
 quando a máquina acorda, não às 3h. Para produção, ver a seção do Coolify abaixo.
 
+### Backup do Postgres de produção
+
+Duas camadas, porque cada uma cobre um risco diferente:
+
+**1. Backup agendado do Coolify** (`0 4 * * *`, configurado na UI do recurso PostgreSQL). Grava no disco do **próprio servidor** — protege contra `DELETE` errado, migration ruim e restore malfeito. Não protege contra perder a máquina.
+
+**2. `scripts/pull-backup-coolify.sh`** — puxa o dump para esta máquina por SSH, tirando a cópia de fora do servidor. Existe porque não há S3 configurado (`No validated S3 Storages found`), e configurá-lo exige decidir provedor e onde o dado de responsáveis pode morar.
+
+```bash
+# .env (gitignored) — ou variáveis de ambiente
+COOLIFY_SSH_HOST=usuario@servidor
+COOLIFY_PG_CONTAINER=<nome>   # ssh HOST 'docker ps --format "{{.Names}}"' | grep -i postgres
+
+./scripts/pull-backup-coolify.sh          # manual
+cp scripts/com.escolaamericana.rm-toddle.pull-backup.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.escolaamericana.rm-toddle.pull-backup.plist
+```
+
+O dump é **streamed** pelo SSH, não gerado em arquivo no servidor e copiado depois: o `rm_code` dos 219 `PARENT` são e-mails de responsáveis, e arquivo temporário em disco alheio é dado pessoal esquecido. Saída em `backups/coolify/` com `chmod 600`, retendo 14 dumps.
+
+**Um backup não verificado não é backup.** O script recusa o resultado em quatro situações, todas testadas: `ssh`/`pg_dump` com erro, arquivo abaixo de 20KB, gzip corrompido, e — a que pega o caso traiçoeiro — **dump grande mas sem nenhuma linha de `id_mapping`**, que um cheque de tamanho sozinho deixaria passar. Note que o mínimo é medido no arquivo **já comprimido**.
+
 ### Deploy no Coolify
 
 `Dockerfile` + `docker-compose.coolify.yml` (não confundir com o `docker-compose.yml`
