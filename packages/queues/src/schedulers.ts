@@ -1,6 +1,6 @@
 import { env, logger } from '@rm-toddle/config';
 import { getQueue } from './queues';
-import { QUEUE, STUDENT_JOB } from './names';
+import { QUEUE, STAFF_JOB, STUDENT_JOB } from './names';
 import { redisConnection } from './connection';
 
 /**
@@ -13,7 +13,30 @@ import { redisConnection } from './connection';
  */
 export const SCHEDULER = {
   STUDENTS_NIGHTLY: 'students-sync-nightly',
+  STAFF_NIGHTLY: 'staff-sync-nightly',
 } as const;
+
+/**
+ * Cron do sync de professor. Derivado do de aluno somando 30 minutos, para os
+ * dois NÃO caírem no mesmo instante.
+ *
+ * A razão é medida, não estética: a janela de rate limit do Toddle é de 300s
+ * (ver DECISOES.md), e os dois syncs falam com a mesma organização. O de aluno
+ * leva ~4 min e faz ~260 chamadas; sobrepor os dois é a receita para os dois
+ * falharem. 30 min de folga cobre o pior caso do de aluno com margem larga.
+ *
+ * Só entende `m h * * *`, que é o formato de `STUDENTS_SYNC_CRON`. Qualquer
+ * outra coisa cai no default — melhor um horário previsível que um cron
+ * calculado errado em silêncio.
+ */
+function cronDoProfessor(cronDoAluno: string): string {
+  const m = /^(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/.exec(cronDoAluno.trim());
+  if (!m) return '30 3 * * *';
+  const minuto = Number(m[1]);
+  const hora = Number(m[2]);
+  const total = (hora * 60 + minuto + 30) % (24 * 60);
+  return `${total % 60} ${Math.floor(total / 60)} * * *`;
+}
 
 /**
  * Registra (upsert) o agendamento noturno de alunos.
@@ -28,6 +51,21 @@ export async function upsertStudentsNightly(): Promise<void> {
     { pattern: env.STUDENTS_SYNC_CRON, tz: 'America/Sao_Paulo' },
     { name: STUDENT_JOB.EXTRACT, data: { trigger: 'cron' } },
   );
+}
+
+/** Registra (upsert) o agendamento noturno de professores. Ver `cronDoProfessor`. */
+export async function upsertStaffNightly(): Promise<void> {
+  const queue = getQueue(QUEUE.RM_TO_TODDLE_STAFF);
+  await queue.upsertJobScheduler(
+    SCHEDULER.STAFF_NIGHTLY,
+    { pattern: cronDoProfessor(env.STUDENTS_SYNC_CRON), tz: 'America/Sao_Paulo' },
+    { name: STAFF_JOB.SYNC, data: { trigger: 'cron' } },
+  );
+}
+
+/** O cron efetivo do professor, para log e diagnóstico. */
+export function cronDoProfessorEfetivo(): string {
+  return cronDoProfessor(env.STUDENTS_SYNC_CRON);
 }
 
 /**
@@ -57,16 +95,28 @@ export function manterAgendamentoDeAlunos(): void {
     if (emAndamento) return;
     emAndamento = true;
     try {
+      // Os DOIS agendamentos, na mesma função: professor vive na mesma janela de
+      // perda que aluno (existe só no Redis) e teria o mesmo modo de falha
+      // silenciosa se ficasse de fora daqui.
       await upsertStudentsNightly();
+      await upsertStaffNightly();
       logger.info(
-        { scheduler: SCHEDULER.STUDENTS_NIGHTLY, cron: env.STUDENTS_SYNC_CRON, tz: 'America/Sao_Paulo', motivo },
-        'Agendamento noturno garantido',
+        {
+          scheduler: [SCHEDULER.STUDENTS_NIGHTLY, SCHEDULER.STAFF_NIGHTLY],
+          cronAlunos: env.STUDENTS_SYNC_CRON,
+          cronProfessores: cronDoProfessorEfetivo(),
+          tz: 'America/Sao_Paulo',
+          motivo,
+        },
+        'Agendamentos noturnos garantidos',
       );
     } catch (error) {
       logger.error(
-        { error, scheduler: SCHEDULER.STUDENTS_NIGHTLY, motivo },
-        'FALHA ao garantir o agendamento noturno — o sync das 3h pode não disparar. ' +
-          'Rode `npm run schedule` e confira com `redis-cli zrange bull:rm-to-toddle.students:repeat 0 -1`.',
+        { error, motivo },
+        'FALHA ao garantir os agendamentos noturnos — o sync pode não disparar. ' +
+          'Rode `npm run schedule` e confira com ' +
+          '`redis-cli zrange bull:rm-to-toddle.students:repeat 0 -1` e ' +
+          '`redis-cli zrange bull:rm-to-toddle.staff:repeat 0 -1`.',
       );
     } finally {
       emAndamento = false;

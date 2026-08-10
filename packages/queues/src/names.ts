@@ -28,3 +28,12 @@ export const STUDENT_JOB = {
   EXTRACT: 'students.extract',
   UPSERT_BATCH: 'students.upsert-batch',
 } as const;
+
+/**
+ * Job de professor. NÃO tem fan-out em lotes, ao contrário do de aluno: são 35
+ * professores e ~200 turma-disciplina, e a escrita real é de poucos registros
+ * por noite. Fatiar traria só a complexidade, sem o ganho.
+ */
+export const STAFF_JOB = {
+  SYNC: 'staff.sync',
+} as const;

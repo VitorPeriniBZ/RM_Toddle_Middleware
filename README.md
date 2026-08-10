@@ -95,6 +95,10 @@ O separador é `-`, **não `:`**, e o `runId` é normalizado: o BullMQ recusa cu
 
 **Resiliência.** `attempts: 3` com backoff exponencial (5s → 10s → 20s). O BullMQ não tem DLQ nativa: um listener de `failed` copia o payload completo (fila de origem, job, dados, motivo, stacktrace) para a fila `dead-letter`, e `npm run dlq` lista/reprocessa manualmente.
 
+**Dois agendamentos, escalonados.** `STUDENTS_SYNC_CRON` define o de alunos; o de professores é derivado dele **somando 30 minutos** (`0 3` → `30 3`). Não é estética: a janela de rate limit do Toddle é de 300s e os dois falam com a mesma organização, então sobrepor é a receita para os dois falharem. Se `STUDENTS_SYNC_CRON` não for `m h * * *`, o de professores cai no default `30 3 * * *` — melhor um horário previsível que um cron calculado errado em silêncio.
+
+Um `Worker` do BullMQ é por fila, então há dois — **no mesmo processo e container**: `rm-to-toddle.students` (com fan-out em lotes) e `rm-to-toddle.staff` (sem fan-out; são 35 professores e ~200 turma-disciplina, fatiar traria só complexidade). O encerramento gracioso fecha os dois.
+
 **O agendamento se auto-cura.** O registro do scheduler vive **só no Redis**. Se o Redis reiniciar sem persistência, o `students-sync-nightly` desaparece e **nada dá erro** — o worker fica de pé, saudável, consumindo uma fila que nunca mais recebe nada; você descobre dias depois, ao notar que o Toddle parou de atualizar.
 
 Por isso o worker re-registra o agendamento no boot **e em cada reconexão ao Redis** (`manterAgendamentoDeAlunos`, em `packages/queues/src/schedulers.ts`). O evento de reconexão é o que importa: quando o Redis reinicia, o worker não reinicia — ele reconecta, então registrar só no boot não cobriria justamente esse caso. A definição do agendamento é única e compartilhada com `npm run schedule`, para o cron não divergir entre os dois lugares e criar dois schedulers.
@@ -133,7 +137,7 @@ npm run seed:yeargroups -- list
 npm run seed:yeargroups -- map <CourseCodeRM> <yearGroupIdToddle>
 # ou defina TODDLE_DEFAULT_YEAR_GROUP_ID no .env como fallback
 
-# 6. Agendamento noturno (cron em STUDENTS_SYNC_CRON, tz America/Sao_Paulo)
+# 6. Agendamentos noturnos (alunos e professores), tz America/Sao_Paulo
 npm run schedule            # idempotente; opcional — o worker também registra
 
 # 7. Worker + disparo manual

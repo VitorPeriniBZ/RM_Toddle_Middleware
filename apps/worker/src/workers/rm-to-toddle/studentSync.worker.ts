@@ -10,6 +10,8 @@ import {
   processStudentExtract,
   processStudentUpsertBatch,
 } from './studentSync.processor';
+import { processStaffSync } from './staffSync.processor';
+import { STAFF_JOB } from '@rm-toddle/queues';
 import { logger } from '@rm-toddle/config';
 
 /**
@@ -42,8 +44,48 @@ const worker = new Worker(
   },
 );
 
+/**
+ * Worker da fila `rm-to-toddle.staff` — MESMO PROCESSO, fila separada.
+ *
+ * Um `Worker` do BullMQ é por fila, então professor precisa do seu. Fica aqui em
+ * vez de num container próprio porque o volume é ínfimo (35 professores, ~200
+ * turma-disciplina) e um segundo serviço traria supervisão, deploy e log
+ * duplicados para nada.
+ *
+ * `concurrency: 1` e sem limiter: o job já serializa suas chamadas internamente
+ * (`comPaciencia` + intervalo de 250ms), e os dois syncs são escalonados com 30
+ * min de folga justamente para não competirem pela janela de rate limit do
+ * Toddle — ver `cronDoProfessor` em packages/queues/src/schedulers.ts.
+ */
+const staffWorker = new Worker(
+  QUEUE.RM_TO_TODDLE_STAFF,
+  async (job: Job) => {
+    switch (job.name) {
+      case STAFF_JOB.SYNC:
+        return processStaffSync(job);
+      default:
+        throw new Error(`Job desconhecido na fila de professores: ${job.name}`);
+    }
+  },
+  { connection: redisConnection, concurrency: 1 },
+);
+
 // Jobs que esgotarem as 3 tentativas vão para a fila 'dead-letter'.
 wireDeadLetterQueue(worker, QUEUE.RM_TO_TODDLE_STUDENTS);
+wireDeadLetterQueue(staffWorker, QUEUE.RM_TO_TODDLE_STAFF);
+
+staffWorker.on('completed', (job, result) => {
+  logger.info({ jobId: job.id, jobName: job.name, result }, 'Job de professor concluído');
+});
+staffWorker.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, jobName: job?.name, attemptsMade: job?.attemptsMade, err: err.message },
+    'Job de professor falhou',
+  );
+});
+staffWorker.on('error', (err) => {
+  logger.error({ err }, 'Erro no worker de professores');
+});
 
 // O agendamento noturno vive só no Redis. Se o Redis reiniciar sem persistir, o
 // scheduler desaparece e NADA dá erro — o worker fica de pé consumindo uma fila
@@ -72,7 +114,9 @@ logger.info({ queue: QUEUE.RM_TO_TODDLE_STUDENTS }, 'Worker de alunos iniciado')
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Encerrando worker...');
   try {
-    await worker.close();
+    // Os DOIS workers: sem fechar o de professor, o SIGTERM mataria um job em
+    // andamento no meio de uma escrita no Toddle.
+    await Promise.all([worker.close(), staffWorker.close()]);
     await closeAllQueues();
     await closeRmSqlPool();
     await pgPool.end();
