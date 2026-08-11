@@ -210,6 +210,86 @@ pode começar antes, porque ela é resolvida por data da aula e não por períod
 
 ---
 
+## D5 — Turma "Gerenciada" (`IG`) não existe no Toddle
+
+**11/08/2026.** Explicação da escola, textual:
+
+> "IG é de turma Gerenciada. No portal atual do professor ela é usada pq o mesmo
+> professor dá uma disciplina para alunos que são da turma A e da Turma B, dessa
+> forma, ele lança os dados de duas turmas em uma única. Dito isso, não tem
+> necessidade de existir no toddle."
+
+É **agregação de interface do RM**, não aula. O Toddle já modela isso: as turmas
+reais A e B existem lá, e o professor está vinculado às duas.
+
+### O que isso corrige
+
+Havia 16 turma-disciplina reportadas como `TURMA_NAO_MAPEADA` — "lacuna de turma",
+o item que eu recomendei como prioridade. **Era falso positivo inteiro.** Medido
+antes de escrever qualquer código:
+
+| verificação | resultado |
+|---|---|
+| alunos matriculados nas 16 | **0** |
+| notas | **0** |
+| frequência | **0** (contra 174 turma-disciplina que têm) |
+| `TeacherCourse` disponível (dava para criar) | 16 de 16 |
+| professor alocado **só** na gerenciada | **0 de 16** |
+
+A última linha é a que importava: se algum professor existisse apenas na
+gerenciada, ele ficaria invisível nas turmas reais do Toddle. Não é o caso — a
+alocação é duplicada no RM.
+
+**Criar as 16 teria sido erro irreversível:** turma no Toddle não tem `DELETE`, só
+`archive`, e seriam 16 turmas vazias permanentes na interface dos professores.
+
+### Como está implementado
+
+`RM_TURMAS_IGNORADAS` (regex sobre `COD_TURMA`, na EAV `IG$`). **Sem default de
+propósito**: vazio = nada ignorado, e as turmas voltam a aparecer como deriva —
+correto para quem não tem essa convenção. Cravar `IG` no código seria enfiar regra
+de uma escola no núcleo white label.
+
+A turma é **marcada**, não descartada: descartar faria a contagem mentir e
+eliminaria a checagem `PROF_SO_NA_GERENCIADA`, que é a única defesa contra
+professor invisível.
+
+## Quanto o dado do RM muda de fato — medido em 10/08/2026
+
+Antes de considerar near-real-time, medi os `RECMODIFIEDON` do próprio RM.
+Alterações por dia útil, fev–jun/2026 (período letivo, amostra justa — medir o
+presente daria resposta enviesada, porque nada mudou desde 22/07):
+
+| entidade | por dia útil | última alteração |
+|---|---|---|
+| aluno | **1,0** | 21/07 |
+| turma-disciplina | **0,6** | 28/05 |
+| professor | **0,4** | 01/06 |
+| matrícula | 56,1 | 22/07 |
+
+**São 2 alterações por dia útil** nas três entidades que sincronizamos. A matrícula
+não conta: nada alimenta vínculo aluno↔turma hoje (o único `addStudentsToClass` do
+código está num script one-shot), o sync de aluno não reenvia `yearGroupId` de
+propósito, e o perfil horário delata lote do próprio RM — 3.141 alterações à
+meia-noite, picos de 6.237 às 9h.
+
+**Conclusão: near-real-time é solução para um problema que não existe.** Trocaria
+24h de latência por minutos, para 2 registros/dia, ao custo de ~2.300 chamadas
+diárias contra o ERP de produção, cursor, hash de payload, ordenação de
+dependência — e propagação de erro em minutos em vez de horas. Hoje um lançamento
+errado tem até as 3h da manhã para ser corrigido antes de sair do RM.
+
+**Recomendação:** se quiser menos latência, subir o batch para 2–4× por dia
+(03:00 / 12:00 / 18:00). Pega o ganho percebido com uma linha de configuração.
+
+O caminho incremental fica **provado e não implementado**: `wsDataServer.readView`
+aceita filtro `RECMODIFIEDON >` server-side, testado com controle (217 / 75 / 12 / 0
+registros para cortes de 2025-01-01 / 2026-01-01 / 2026-05-01 / 2026-08-01). As
+Sentenças do `wsConsultaSQL` NÃO trazem coluna de auditoria — só o DataServer.
+
+Quando os professores começarem a lançar no Toddle pela D1, o volume muda e isto
+deve ser reavaliado.
+
 ## Rate limit do Toddle — janela de 300s
 
 A coleção oficial não documenta os limites. A resposta 429 documenta:

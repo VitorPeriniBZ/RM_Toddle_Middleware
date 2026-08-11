@@ -40,6 +40,22 @@ const envSchema = z.object({
    * possível". Passou a haver.
    */
   RM_SENTENCA_TURMADISC: z.string().optional(),
+  /**
+   * Turmas que existem no RM por conveniência de LANÇAMENTO e não devem virar
+   * turma no Toddle. Regex aplicada ao `COD_TURMA`.
+   *
+   * Na EAV é a "turma Gerenciada" (`IG`): quando o mesmo professor dá a mesma
+   * disciplina para alunos da turma A e da B, o portal atual do RM deixa ele
+   * lançar tudo numa turma única. É agregação de interface, não aula — não tem
+   * aluno matriculado, nota nem frequência (verificado em 11/08/2026: 0 nas três,
+   * contra 174 turma-disciplina com frequência).
+   *
+   * NÃO tem default de propósito. Vazio = nada é ignorado, e as turmas aparecem
+   * como deriva — que é o comportamento correto para quem não tem essa
+   * convenção. Cravar `IG` aqui no código seria enfiar regra de uma escola no
+   * núcleo white label.
+   */
+  RM_TURMAS_IGNORADAS: z.string().optional(),
   /** Responsáveis (ex.: TODDLE.RESP). Ver docs/rm-sentencas/TODDLE.RESP.ESPEC.md. */
   RM_SENTENCA_RESPONSAVEIS: z.string().optional(),
   RM_CODCOLIGADA: z.coerce.number().int().default(1),

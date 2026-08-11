@@ -48,7 +48,9 @@ type Situacao =
   | 'TURMA_NAO_MAPEADA'
   | 'VINCULO_FALTANDO'
   | 'VINCULO_AUSENTE_NO_TODDLE'
-  | 'VINCULO_SOBRANDO_NO_TODDLE';
+  | 'VINCULO_SOBRANDO_NO_TODDLE'
+  | 'TURMA_GERENCIADA'
+  | 'PROF_SO_NA_GERENCIADA';
 
 interface Achado {
   situacao: Situacao;
@@ -152,6 +154,30 @@ async function main(): Promise<void> {
 
   // --- vínculos professor <-> turma-disciplina ---
   for (const td of turmaDiscs.values()) {
+    // Turma que existe no RM só para lançamento (RM_TURMAS_IGNORADAS). Não é
+    // deriva: não deve existir no Toddle. Mas o professor alocado nela PRECISA
+    // estar nas turmas reais — se estiver só aqui, fica invisível no LMS, e é
+    // justamente o que esta checagem protege.
+    if (td.gerenciada) {
+      const prefixo = td.codTurma.slice(0, -1);
+      const reais = [...turmaDiscs.values()].filter(
+        (t) => !t.gerenciada && t.codDisc === td.codDisc && t.codTurma.startsWith(prefixo),
+      );
+      const nasReais = new Set(reais.flatMap((r) => r.codProfs));
+      const soAqui = td.codProfs.filter((p) => !nasReais.has(p));
+
+      achados.push({
+        situacao: soAqui.length ? 'PROF_SO_NA_GERENCIADA' : 'TURMA_GERENCIADA',
+        idTurmaDisc: td.idTurmaDisc,
+        detalhe: soAqui.length
+          ? `${td.codTurma}/${td.nomeDisciplina}: professor(es) ${soAqui.join(', ')} alocado(s) SÓ na gerenciada — ` +
+            `ficariam invisíveis nas turmas reais (${reais.map((r) => r.codTurma).join(', ') || 'nenhuma encontrada'})`
+          : `${td.codTurma}/${td.nomeDisciplina} — gerenciada, fora de escopo por RM_TURMAS_IGNORADAS ` +
+            `(professores já presentes em ${reais.map((r) => r.codTurma).join(', ')})`,
+      });
+      continue;
+    }
+
     const classId = cursoPorId.get(td.idTurmaDisc);
     if (!classId) {
       achados.push({
@@ -224,20 +250,23 @@ async function main(): Promise<void> {
     'Reconciliação de professores — panorama',
   );
 
-  const ordem: Situacao[] = ['PROF_SEM_EMAIL', 'PROF_NOVO', 'PROF_SUMIU_DO_RM', 'TURMA_NAO_MAPEADA', 'VINCULO_FALTANDO', 'VINCULO_AUSENTE_NO_TODDLE', 'VINCULO_SOBRANDO_NO_TODDLE', 'OK'];
+  // TURMA_GERENCIADA é informativo, não pendência: é configuração declarada.
+  const informativas = new Set<Situacao>(['OK', 'TURMA_GERENCIADA']);
+
+  const ordem: Situacao[] = ['PROF_SO_NA_GERENCIADA', 'PROF_SEM_EMAIL', 'PROF_NOVO', 'PROF_SUMIU_DO_RM', 'TURMA_NAO_MAPEADA', 'VINCULO_FALTANDO', 'VINCULO_AUSENTE_NO_TODDLE', 'VINCULO_SOBRANDO_NO_TODDLE', 'TURMA_GERENCIADA', 'OK'];
   for (const s of ordem) {
     const lista = porSituacao.get(s) ?? [];
     if (lista.length === 0) continue;
     logger.info({ situacao: s, total: lista.length }, `--- ${s} ---`);
-    // OK é ruído: só a contagem interessa.
-    if (s === 'OK') continue;
+    // OK e gerenciada sao ruído: só a contagem interessa.
+    if (informativas.has(s)) continue;
     for (const a of lista.slice(0, 40)) {
       logger.info({ codProf: a.codProf, idTurmaDisc: a.idTurmaDisc, nome: a.nome }, `  ${a.detalhe}`);
     }
     if (lista.length > 40) logger.info(`  ... e mais ${lista.length - 40}`);
   }
 
-  const acionaveis = achados.filter((a) => a.situacao !== 'OK').length;
+  const acionaveis = achados.filter((a) => !informativas.has(a.situacao)).length;
   logger.info({ acionaveis, total: achados.length }, acionaveis === 0 ? 'Sem deriva 🎉' : 'Deriva encontrada');
 
   await pgPool.end();

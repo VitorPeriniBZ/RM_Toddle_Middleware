@@ -47,6 +47,17 @@ export interface RmTurmaDisc {
   ativa: boolean;
   /** CODPROF dos docentes alocados. Pode ter mais de um. */
   codProfs: string[];
+  /**
+   * Turma que existe no RM só por conveniência de lançamento e NÃO deve virar
+   * turma no Toddle (`RM_TURMAS_IGNORADAS`). Na EAV, a "turma Gerenciada" (`IG`).
+   *
+   * Marcada em vez de descartada: descartar faria a contagem mentir e esconderia
+   * o caso em que um professor estivesse alocado SÓ na gerenciada — aí ele
+   * ficaria invisível nas turmas reais, e ninguém saberia. Verificado em
+   * 11/08/2026 que isso não ocorre (0 de 16), mas o dado continua disponível
+   * para a checagem seguir existindo.
+   */
+  gerenciada: boolean;
 }
 
 export interface RmTeacherData {
@@ -88,6 +99,19 @@ export async function fetchTeachersFromRm(): Promise<RmTeacherData> {
     throw new Error(`RM_CODFILIAL="${env.RM_CODFILIAL}" não produziu campus válido.`);
   }
 
+  // Regex de turma ignorada. Inválida NÃO degrada para "nada ignorado": isso
+  // faria 16 falsos positivos voltarem em silêncio no relatório.
+  let ignorar: RegExp | undefined;
+  if (env.RM_TURMAS_IGNORADAS?.trim()) {
+    try {
+      ignorar = new RegExp(env.RM_TURMAS_IGNORADAS.trim());
+    } catch (e) {
+      throw new Error(
+        `RM_TURMAS_IGNORADAS="${env.RM_TURMAS_IGNORADAS}" não é regex válida: ${(e as Error).message}`,
+      );
+    }
+  }
+
   const professores = new Map<string, RmTeacher>();
   const turmaDiscs = new Map<string, RmTurmaDisc>();
   let foraDoEscopo = 0;
@@ -117,6 +141,7 @@ export async function fetchTeachersFromRm(): Promise<RmTeacherData> {
         // na dúvida, NÃO tratar como ativa.
         ativa: (pick(row, 'TURMADISC_ATIVA') ?? '').toUpperCase() === 'S',
         codProfs: [],
+        gerenciada: ignorar ? ignorar.test(pick(row, 'COD_TURMA') ?? '') : false,
       });
     }
 
@@ -150,6 +175,7 @@ export async function fetchTeachersFromRm(): Promise<RmTeacherData> {
     {
       linhas: rows.length,
       turmaDiscs: turmaDiscs.size,
+      gerenciadas: [...turmaDiscs.values()].filter((t) => t.gerenciada).length,
       professores: professores.size,
       semEmail: [...professores.values()].filter((p) => !p.email).length,
       foraDoEscopo,
