@@ -227,6 +227,18 @@ Passos:
 4. Ligar o domínio **só no serviço `web`**.
 5. Deploy. O `init` roda as migrations e registra o cron antes de o worker subir.
 
+**Depois de mexer em variável, rode `./scripts/comparar-env.sh`.** Ele compara o `.env` local com o `printenv` do container em produção — o ambiente que o processo **realmente vê**, não o que a UI do Coolify mostra. Se você salvou a variável e não redeployou, é este script que conta a verdade.
+
+Existe porque em 10/08 eu adicionei `RM_SENTENCA_TURMADISC` no `.env` local e esqueci em produção: o `staff.sync` rodou às 03:30, morreu nas 3 tentativas e foi para a DLQ. O erro era ruidoso e nomeava a variável — mas ninguém estava olhando às 3h.
+
+Ele classifica por **consequência**, não por diferença, senão viraria ruído (produção difere de local em `DATABASE_URL`, `REDIS_URL`, `NODE_ENV` por desenho):
+
+- **alerta** — falta em produção e não há default, ou é chave **crítica**. `SOURCE_ID_PREFIX` está na lista de críticas mesmo tendo `.default('')`: prefixo vazio faz o middleware criar **253 alunos duplicados**, e ter default não significa que o default serve.
+- **aviso** — só em local, mas o schema tem default: produção roda com o default.
+- **por design** — infra/ambiente e derivadas (`TODDLE_BASE_URL` sai de `TODDLE_REGION`).
+
+Valor de chave sensível é comparado por hash; o script nunca imprime segredo. Sai com código 1 quando há alerta, então serve em pipeline.
+
 **Marque as variáveis como "Runtime only" no Coolify** — desmarque "Available at
 Buildtime" em todas. Nenhuma é necessária no build, e há duas razões:
 
