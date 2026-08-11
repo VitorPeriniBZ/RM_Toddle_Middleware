@@ -115,6 +115,28 @@ Mesmo assim é possível tomar 429: em 07/08, três syncs completos em ~30 min d
 
 **`XxxCode` vs `XxxInternalId`.** O mapeamento usa sempre o **Code** (RA, chapa, código de turma). O `InternalId` é chave técnica do RM: guardamos apenas como referência (`rm_internal_id`) e jamais o montamos manualmente.
 
+## Ambiente — leia antes de avaliar risco
+
+**As duas pontas são SANDBOX.** O `escolaamericana143994.rm.cloudtotvs.com.br` e a
+organização Toddle `404045532130986859` não são o RM nem o LMS de produção da EAV.
+
+Isso muda como se lê o que está aqui:
+
+- **Dado velho ou vazio é dado de teste, não incidente.** Nada foi lançado no RM
+  depois de 22/07/2026; num sandbox isso não é alarme.
+- **"Não sobrecarregar o ERP de produção" não é argumento válido** neste ambiente.
+  Onde ele apareceu em decisão de arquitetura, foi corrigido — a decisão precisa se
+  sustentar por outro motivo ou cai.
+- **A irreversibilidade das APIs do Toddle continua valendo**, porque é propriedade
+  da API e não do ambiente: aluno, staff e turma só arquivam; timetable slot e
+  teacher course não têm nem isso. Sujeira criada aqui também não se apaga.
+- **As ressalvas de governança** (data de corte da D1, grading periods, política de
+  escrita) seguem em `docs/DECISOES.md` como **requisito para quando existir
+  produção** — não como descrição do que está no ar.
+
+Quando houver produção, o checklist de onboarding do D-calendário vale integralmente:
+calendário certo **na criação**, porque o ano corrente não é editável.
+
 ## Setup
 
 Pré-requisitos: Node.js 20+, Docker.
@@ -286,7 +308,7 @@ As filas já existem (`toddle-to-rm.*`); os workers seguem o mesmo padrão do Fl
 
   Contexto obrigatório nas chamadas: `CODCOLIGADA;CODFILIAL;CODTIPOCURSO;CODSISTEMA`. Sem ele o RM responde *"Contexto inválido OU não foram configurados os parâmetros do Educacional"*.
 
-  **O bloqueio deixou de ser infraestrutura e passou a ser governança acadêmica.** O RM é o sistema de registro legal da escola. Antes de qualquer escrita: definir o que o Toddle está autorizado a lançar, quem aprova, qual a unidade oficial de frequência, e a política de conflito Toddle × RM. Sonda de escrita sem persistir dado: `docs/rm-sentencas/testar-saverecord.sh`.
+  **O bloqueio deixou de ser infraestrutura e passou a ser governança acadêmica.** Não porque *este* RM seja crítico — ele é sandbox (ver "Ambiente") — mas porque em produção o RM é o sistema de registro legal da escola, e a política tem de existir antes de a via de escrita ser ligada lá. Antes de qualquer escrita: definir o que o Toddle está autorizado a lançar, quem aprova, qual a unidade oficial de frequência, e a política de conflito Toddle × RM. Sonda de escrita sem persistir dado: `docs/rm-sentencas/testar-saverecord.sh`.
 - **Escrever direto no banco do RM é arriscado**: as regras de negócio vivem na aplicação, não no schema. Valide cada tabela/coluna/constraint com o dicionário de dados (GDIC) e teste exaustivamente em homologação. Prefira um usuário SQL com permissão mínima (INSERT/UPDATE apenas nas tabelas necessárias).
 - Tabelas-alvo típicas: `SFREQUENCIA` (frequência), `SNOTAS` (notas), `SMATRICULA`/`SMATRICPL` (matrículas), `STURMA`/`STURMADISC` (turmas → TeacherCourse), `SHORARIOTURMA` (horários). Sempre casando `CODCOLIGADA` e preenchendo `RECCREATEDBY`/`RECCREATEDON` para auditoria.
 - A tradução Toddle → RM usa a mesma `id_mapping` (agora no sentido inverso: `toddle_id` → `rm_code`/`rm_internal_id`).

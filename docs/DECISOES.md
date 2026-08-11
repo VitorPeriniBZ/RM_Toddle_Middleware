@@ -274,10 +274,15 @@ propósito, e o perfil horário delata lote do próprio RM — 3.141 alteraçõe
 meia-noite, picos de 6.237 às 9h.
 
 **Conclusão: near-real-time é solução para um problema que não existe.** Trocaria
-24h de latência por minutos, para 2 registros/dia, ao custo de ~2.300 chamadas
-diárias contra o ERP de produção, cursor, hash de payload, ordenação de
-dependência — e propagação de erro em minutos em vez de horas. Hoje um lançamento
-errado tem até as 3h da manhã para ser corrigido antes de sair do RM.
+24h de latência por minutos, para 2 registros/dia, ao custo de cursor, hash de
+payload, ordenação de dependência e ~2.300 chamadas diárias ao RM.
+
+Uma ressalva de honestidade: a primeira versão desta seção pesava "carga no ERP de
+**produção** da escola". **O RM aqui é sandbox** (ver "Ambiente", no README), então
+esse argumento não vale. O que sustenta a conclusão sozinho é a complexidade
+acrescentada para 2 registros por dia — e, num RM de produção de verdade, também a
+propagação de erro em minutos em vez de horas, porque hoje um lançamento errado tem
+até as 3h para ser corrigido antes de sair.
 
 **Recomendação:** se quiser menos latência, subir o batch para 2–4× por dia
 (03:00 / 12:00 / 18:00). Pega o ganho percebido com uma linha de configuração.
