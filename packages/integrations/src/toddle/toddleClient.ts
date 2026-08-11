@@ -291,11 +291,32 @@ export class ToddleClient {
    * Cria staff. O Toddle EXIGE `email` e o usa como IDENTIDADE — e-mail errado
    * gera conta inacessível que só pode ser arquivada, nunca excluída.
    */
-  async createStaff(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  /**
+   * Devolve o `staffId`, não o envelope.
+   *
+   * A resposta real é `{ response: { staff: { id, firstName, ... } } }` — o id
+   * vem ANINHADO em `staff`. Este método devolvia `response` cru, e quem chamava
+   * procurava `.id` na raiz: em 11/08/2026 o `POST` criou o staff no Toddle e o
+   * middleware concluiu que "o Toddle não devolveu id", abortando ANTES de gravar
+   * o de-para. Staff criado e sem identificação de volta — exatamente o estado
+   * que já custou 186 mapeamentos em 31/07.
+   *
+   * Extrair o id AQUI, e falhar alto se ele não vier, tira essa responsabilidade
+   * de cada chamador.
+   */
+  async createStaff(payload: Record<string, unknown>): Promise<string> {
     const { data } = await this.withRetry('POST /staff', () =>
-      this.http.post<{ response?: Record<string, unknown> }>('/public/v2/staff', payload),
+      this.http.post<{ response?: { staff?: { id?: string } } }>('/public/v2/staff', payload),
     );
-    return data?.response ?? {};
+    const id = data?.response?.staff?.id;
+    if (!id) {
+      throw new ToddleApiError(
+        `Toddle não devolveu staff.id: ${JSON.stringify(data?.response ?? data).slice(0, 300)}`,
+        undefined,
+        data,
+      );
+    }
+    return String(id);
   }
 
   async archiveStaff(staffId: string): Promise<void> {

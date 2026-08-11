@@ -193,7 +193,8 @@ export async function sincronizarProfessores(
   for (const prof of criarStaff.slice(0, limite)) {
     const [primeiro, ...resto] = prof.nome.split(/\s+/);
     try {
-      const criado = await comPaciencia(() =>
+      // `createStaff` já extrai e valida o id (a resposta o aninha em `staff`).
+      const staffId = await comPaciencia(() =>
         toddleClient.createStaff({
           firstName: primeiro ?? prof.nome,
           lastName: resto.join(' ') || primeiro || prof.nome,
@@ -201,8 +202,6 @@ export async function sincronizarProfessores(
           sourceId: prof.codProf,
         }),
       );
-      const staffId = String((criado.id as string) ?? (criado.staffId as string) ?? '');
-      if (!staffId) throw new Error(`Toddle não devolveu id: ${JSON.stringify(criado).slice(0, 200)}`);
       await idMappingRepository.upsert({ entityType: 'STAFF', rmCode: prof.codProf, toddleId: staffId });
       resumo.criados += 1;
       staffPorCodProf.set(prof.codProf, staffId);
