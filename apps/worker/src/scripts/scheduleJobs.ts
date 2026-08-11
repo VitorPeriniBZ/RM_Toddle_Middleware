@@ -1,6 +1,6 @@
 import { closeAllQueues, redisConnection } from '@rm-toddle/queues';
-import { upsertStudentsNightly, upsertStaffNightly, cronDoProfessorEfetivo, SCHEDULER } from '@rm-toddle/queues';
-import { env } from '@rm-toddle/config';
+import { upsertStudentsNightly, upsertStaffNightly, SCHEDULER } from '@rm-toddle/queues';
+import { env, cronDoProfessorEfetivo } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 
 /**

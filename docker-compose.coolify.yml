@@ -42,18 +42,28 @@
 
 services:
   # ---------------------------------------------------------------------------
-  # init: migrations + registro do agendamento. Roda a CADA deploy e sai.
+  # init: preflight + migrations + registro do agendamento. Roda a CADA deploy.
+  #
+  # O PREFLIGHT VEM PRIMEIRO, e é o que faz o deploy falhar quando o ambiente não
+  # tem o que os jobs agendados precisam. A lacuna que ele fecha: variável
+  # `.optional()` no Zod mas OBRIGATÓRIA em runtime para o job que está agendado.
+  # Em 10/08/2026 `RM_SENTENCA_TURMADISC` faltava em produção, o Zod não reclamou,
+  # o deploy passou verde — e o `staff.sync` das 03:30 morreu na DLQ, quebrado por
+  # um dia. Falhar no deploy custa um redeploy; falhar às 3h custa um dia.
+  #
+  # Vem ANTES das migrations de propósito: ambiente errado não deve nem tocar no
+  # banco.
   #
   # Por que o `schedule` mora aqui: ele precisa rodar uma vez por ambiente, e
   # "uma vez, à mão, alguém lembra" é exatamente como um cron deixa de existir
-  # sem dar erro nenhum. Ambos são idempotentes (a migration tem controle de
-  # versão, o scheduler é upsert por id), então repetir a cada deploy é seguro.
+  # sem dar erro nenhum. Os três são idempotentes (preflight só lê, a migration
+  # tem controle de versão, o scheduler é upsert por id).
   # ---------------------------------------------------------------------------
   init:
     build:
       context: .
       target: runtime
-    command: sh -c "npm run db:migrate && npm run schedule"
+    command: sh -c "npm run preflight && npm run db:migrate && npm run schedule"
     restart: "no"
     environment:
       NODE_ENV: production

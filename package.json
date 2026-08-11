@@ -30,7 +30,8 @@
     "reconciliar:turmas": "tsx apps/worker/src/scripts/reconciliarTurmas.ts",
     "criar:1714": "tsx apps/worker/src/scripts/criarTurma1714.ts",
     "reconciliar:professores": "tsx apps/worker/src/scripts/reconciliarProfessores.ts",
-    "sync:professores": "tsx apps/worker/src/scripts/syncProfessores.ts"
+    "sync:professores": "tsx apps/worker/src/scripts/syncProfessores.ts",
+    "preflight": "tsx apps/worker/src/scripts/preflight.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
