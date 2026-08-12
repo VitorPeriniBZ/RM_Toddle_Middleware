@@ -303,8 +303,10 @@ As filas já existem (`toddle-to-rm.*`); os workers seguem o mesmo padrão do Fl
 - **CORRIGIDO em 2026-08-04: existe caminho de escrita, e ele já está exposto.** Até esta data a conclusão registrada era "o acesso ao RM é read-only; escrever exige publicar o REST ou abrir a porta 1433". **Errado.** O `wsConsultaSQL` é read-only *por natureza* (executa Sentenças `SELECT`), mas o **`wsDataServer`** está publicado no MESMO host e MESMA porta 1951, autentica com as mesmas credenciais e responde: um `ReadRecord` em `EduAlunoData` devolveu o registro completo de um aluno (117 KB, dataset `EduAluno`/`SAluno`). A operação de escrita é `SaveRecord` na mesma interface, e passa pela camada **DataServer**, que aplica as validações do produto — diferente de `INSERT` direto. O `wsProcess` também responde.
 
   DataServers confirmados por sondagem (`ReadRecord` com chave inválida: `"Classe não encontrada"` = não existe; erro de formato = existe):
-  `EduFrequenciaDiariaData`, `EduHorarioTurmaData`, `EduNotasData`, `EduNotaEtapaData`, `EduTurmaDiscData`, `EduMatriculaData`, `EduProfessorData`.
+  `EduFrequenciaDiariaWSData`, `EduFrequenciaDiariaData`, `EduHorarioTurmaData`, `EduNotasData`, `EduNotaEtapaData`, `EduTurmaDiscData`, `EduMatriculaData`, `EduProfessorData`.
   Não existem: `EduFrequenciaData`, `SFrequenciaData`, `EduFaltaData`, `EduAulaData`, `EduDiarioClasseData`.
+
+  **Frequência: use `EduFrequenciaDiariaWSData`, não `EduFrequenciaDiariaData`.** Os dois existem nesta instalação e a lista acima é de *existência*, não de indicação de uso. O sem `WS` é o DataServer **das telas do produto**, e a TOTVS documenta que ele não deve ser chamado por web service. Trocar um pelo outro é **erro silencioso — ele responde**. O schema medido, os campos obrigatórios e a chave primária composta estão em [`docs/rm-dataservers/EduFrequenciaDiariaWSData.md`](docs/rm-dataservers/EduFrequenciaDiariaWSData.md); leia antes de montar o `SaveRecord`.
 
   Contexto obrigatório nas chamadas: `CODCOLIGADA;CODFILIAL;CODTIPOCURSO;CODSISTEMA`. Sem ele o RM responde *"Contexto inválido OU não foram configurados os parâmetros do Educacional"*.
 

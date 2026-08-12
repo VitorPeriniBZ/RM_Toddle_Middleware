@@ -18,8 +18,19 @@
 # ---------------------------------------------------------------------
 # SEGURANÇA — leia antes de rodar
 #
-# 1. O RM aqui é PRODUÇÃO da escola: sistema de registro acadêmico legal
-#    (histórico, MEC, Educacenso). Não há sandbox, não há "desfazer".
+# 1. CORRIGIDO em 2026-08-12: este RM é SANDBOX, não a produção da escola.
+#    A versão anterior deste cabeçalho dizia "é PRODUÇÃO, não há sandbox, não
+#    há desfazer" — falso. Ver a seção "Ambiente" do README.
+#
+#    As travas abaixo NÃO foram afrouxadas junto, porque o motivo delas não era
+#    o ambiente:
+#      - o alvo é trocado por .env, então o mesmo script alcança a produção da
+#        escola no dia em que ela entrar — e aí vale tudo o que a frase antiga
+#        dizia: registro acadêmico legal (histórico, MEC, Educacenso);
+#      - o bloqueio da via de escrita é de GOVERNANÇA, não de infraestrutura
+#        (README): a política de quem lança o quê tem de existir antes;
+#      - payload vazio é o que faz disto uma SONDA. Aceitar dado transformaria
+#        o script em ferramenta de escrita, que é outra coisa, com outra revisão.
 #
 # 2. Por isso o payload é FIXO NO CÓDIGO e VAZIO: <SFREQUENCIA></SFREQUENCIA>.
 #    O script NÃO aceita dados por parâmetro — não existe caminho para ele
@@ -52,7 +63,12 @@ RM_WS_SISTEMA=$(env_get RM_WS_SISTEMA)
 RM_CODFILIAL=$(env_get RM_CODFILIAL)
 
 EXECUTAR=0
-DATASERVER='EduFrequenciaDiariaData'
+# O DataServer de frequência para WEB SERVICE é o `WSData`. O `EduFrequenciaDiariaData`
+# (sem WS) é o das TELAS do produto, e a TOTVS documenta que não deve ser chamado por
+# WS — mas ele EXISTE nesta instalação e RESPONDE. Sondar o errado devolve resposta
+# plausível e leva à conclusão errada sobre o canal de escrita. Ver
+# docs/rm-dataservers/EduFrequenciaDiariaWSData.md.
+DATASERVER='EduFrequenciaDiariaWSData'
 for a in "$@"; do
   case "$a" in
     --executar) EXECUTAR=1 ;;
@@ -84,8 +100,10 @@ Este script faz UMA chamada SaveRecord com dataset vazio, para descobrir se a
 operacao de escrita existe neste ambiente. Nao grava dado nenhum: o payload e
 fixo no codigo e nao aceita parametro.
 
-Ainda assim, e uma chamada de ESCRITA no ERP de PRODUCAO da escola. Rode com
---executar apenas se estiver de acordo:
+Ainda assim, e uma chamada de ESCRITA. Este RM e SANDBOX, mas o alvo sai do
+.env: aponte para a producao da escola e esta mesma linha vira escrita no
+registro academico legal. Confira o endpoint acima antes. Rode com --executar
+apenas se estiver de acordo:
 
   ./docs/rm-sentencas/testar-saverecord.sh --executar
 AVISO
