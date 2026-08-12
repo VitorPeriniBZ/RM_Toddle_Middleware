@@ -1,6 +1,6 @@
 import { logger } from '@rm-toddle/config';
 import { idMappingRepository } from '@rm-toddle/db';
-import { fetchTeachersFromRm, type RmTeacher } from '@rm-toddle/domain';
+import { fetchTeachersFromRm, type RmTeacher, type RmTurmaDisc } from '@rm-toddle/domain';
 import { comPaciencia, toddleClient } from '@rm-toddle/integrations';
 
 /**
@@ -46,6 +46,16 @@ export interface ResumoSyncProfessores {
   criados: number;
   vinculados: number;
   pulados_sem_email: number;
+  /**
+   * Turma que o RM tem só por conveniência de lançamento e que NÃO deve virar
+   * turma no Toddle (`RM_TURMAS_IGNORADAS`). Configuração declarada, não
+   * pendência — por isso conta à parte de `turmas_nao_mapeadas`.
+   */
+  turmas_gerenciadas: number;
+  /**
+   * Turma que DEVERIA ter turma no Toddle e não tem. Diferente de zero é
+   * pendência real: sem `classId` não há onde pendurar o professor.
+   */
   turmas_nao_mapeadas: number;
   falhas: Array<{ o_que: string; alvo: string; erro: string }>;
 }
@@ -105,7 +115,8 @@ export async function sincronizarProfessores(
   const soMapearStaff: Array<{ prof: RmTeacher; staffId: string }> = [];
   const semEmail: RmTeacher[] = [];
   const vincular: Array<{ classId: string; staffId: string; codProf: string; idTurmaDisc: string; rotulo: string }> = [];
-  const turmasNaoMapeadas: string[] = [];
+  const turmasNaoMapeadas: RmTurmaDisc[] = [];
+  const turmasGerenciadas: string[] = [];
 
   for (const prof of professores.values()) {
     if (!prof.email) { semEmail.push(prof); continue; }
@@ -116,8 +127,18 @@ export async function sincronizarProfessores(
   }
 
   for (const td of turmaDiscs.values()) {
+    // Gerenciada NÃO é lacuna: ela não deve existir no Toddle, então não ter
+    // `classId` é o resultado correto. Contá-la junto com as não mapeadas fazia
+    // o job reportar 16 toda noite; um 17 — que seria lacuna de verdade —
+    // passaria batido no meio do próprio ruído. `reconciliarProfessores` já
+    // separava as duas coisas (situação TURMA_GERENCIADA); aqui faltava.
+    //
+    // O professor alocado numa gerenciada segue coberto: quem responde "ele
+    // está SÓ aqui?" é a reconciliação, que lê o mesmo `td.gerenciada`.
+    if (td.gerenciada) { turmasGerenciadas.push(td.idTurmaDisc); continue; }
+
     const classId = classPorTurmaDisc.get(td.idTurmaDisc);
-    if (!classId) { turmasNaoMapeadas.push(td.idTurmaDisc); continue; }
+    if (!classId) { turmasNaoMapeadas.push(td); continue; }
     const jaNaTurma = staffPorClass.get(classId) ?? new Set<string>();
 
     for (const codProf of td.codProfs) {
@@ -146,6 +167,7 @@ export async function sincronizarProfessores(
       soMapearStaff: soMapearStaff.length,
       semEmail: semEmail.length,
       vincular: vincular.length,
+      turmasGerenciadas: turmasGerenciadas.length,
       turmasNaoMapeadas: turmasNaoMapeadas.length,
       papel: papel.roleName,
       modo: executar ? 'EXECUTAR' : 'ensaio (nada será escrito)',
@@ -162,9 +184,20 @@ export async function sincronizarProfessores(
     );
   }
 
+  // Agora que gerenciada saiu da conta, qualquer não mapeada é pendência real —
+  // e o número sozinho não diz QUAL. Sem isto, o alarme dispara sem endereço.
+  for (const td of turmasNaoMapeadas) {
+    logger.warn(
+      { idTurmaDisc: td.idTurmaDisc, codTurma: td.codTurma, disciplina: td.nomeDisciplina },
+      'SEM TURMA NO TODDLE: turma-disciplina do RM não tem COURSE ativo na id_mapping — ' +
+        'professor não pode ser vinculado; rode `npm run reconciliar:turmas`',
+    );
+  }
+
   const resumo: ResumoSyncProfessores = {
     mapeados: 0, criados: 0, vinculados: 0,
     pulados_sem_email: semEmail.length,
+    turmas_gerenciadas: turmasGerenciadas.length,
     turmas_nao_mapeadas: turmasNaoMapeadas.length,
     falhas: [],
   };
