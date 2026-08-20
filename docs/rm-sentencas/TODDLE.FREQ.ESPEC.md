@@ -384,3 +384,101 @@ agosto: ou julho não foi lançado, ou o export foi cortado. Isso muda o que
 **12 das 185 turmas em escopo não têm nenhuma falta:** `1235, 1254, 1261, 1529,
 1534, 1542, 1613, 1614, 1615, 1665, 1672, 1715`. Pode ser turma sem falta, ou sem
 lançamento.
+
+---
+
+## Anexo — o que vivia nos comentários do `.sql`
+
+O `TODDLE.FREQ.sql` passou a conter **só SQL** em 20/08/2026, para poder ser colado
+direto no cadastro de Sentença do RM. Os comentários que estavam nele estão
+preservados abaixo, verbatim: parte já está descrita nas seções acima, parte é
+fato medido que não estava documentado em outro lugar. Onde houver divergência,
+**as seções acima são mais recentes que este anexo**.
+
+```text
+-- ============================================================
+-- TODDLE.FREQ — frequência lançada no RM, por aula
+--
+-- Alimenta a via RM -> Toddle. NÃO serve para escrever no RM (isso é o
+-- EduFrequenciaDiariaWSData via wsDataServer).
+--
+-- Cadastrada e VERIFICADA pelo web service em 05/08/2026: fevereiro/2026
+-- devolveu 2.449 linhas, 19 colunas, PK única, sem fan-out.
+-- O middleware a chama por RM_SENTENCA_FREQUENCIA=TODDLE.FREQ.
+--
+-- ─── ESTE ARQUIVO É A SENTENÇA CADASTRADA + 4 COLUNAS QUE FALTAM ────────────
+--
+-- A versão que está no RM é melhor que a minha proposta original em três pontos,
+-- e estão preservados aqui:
+--
+--   1. `STURMADISC` entra por `F.IDTURMADISC`, não via SHORARIOTURMA. Assim uma
+--      frequência cujo horário foi apagado não perde a turma.
+--   2. `SHORARIOTURMA` é LEFT JOIN, pelo mesmo motivo.
+--   3. `SHORARIO` entra por OUTER APPLY com TOP 1, ordenando pelo IDPERLET que
+--      casa com a turma. Isso evita o fan-out que o meu INNER JOIN causaria
+--      quando o mesmo CODHOR existe em mais de um período letivo. Verificado:
+--      2.449 chaves para 2.449 linhas.
+--
+-- O ÚNICO ajuste real que falta são as 4 colunas abaixo, marcadas com (+):
+-- CODCOLIGADA e as três de autoria. Ver §4 da ESPEC — sem CRIADO_POR não há
+-- como autorizar remoção de falta sem aprovação humana caso a caso.
+--
+-- PARÂMETROS (4): CODCOLIGADA, CODPERLET, DATAINICIAL, DATAFINAL.
+-- As datas no estilo 112, YYYYMMDD (ex.: 20260201). A janela é obrigatória e
+-- isso é bom: 21.300 linhas no ano inteiro, nos dois campi.
+-- ============================================================
+       -- MEDIDO: 'A' em 100% das linhas (21.300 no ano, 2.449 em fevereiro). O
+       -- SFREQUENCIA guarda SÓ AUSÊNCIA — presença é a ausência de linha. É por
+       -- isso que PRESENCA='P' na escrita REMOVE o registro.
+       -- MEDIDO: as 4 colunas abaixo vieram NULAS em todas as linhas — o DataSet
+       -- do .NET omite coluna nula, então elas nem aparecem no XML. Nenhuma
+       -- falta é justificada nesta escola (confirmar com a coordenação).
+       -- Resolução do período no Toddle.
+       -- ATENÇÃO: o sufixo do CODHOR NÃO identifica a faixa de forma estável
+       -- fora do campus 2. Ver §4.4 da ESPEC — no campus 1 a faixa 006 cobre
+       -- TRÊS horários diferentes. Para o campus 2 é 1:1 e verificado.
+       -- Escopo, para o recorte fail-closed do middleware.
+       -- (+) AUTORIA — o que sustenta a política de remoção de falta.
+-- Dia e hora NÃO estão em SHORARIOTURMA: vivem em SHORARIO, por CODHOR. O TOP 1
+-- ordenado pelo IDPERLET da turma é o que evita fan-out quando o CODHOR se
+-- repete entre períodos letivos.
+-- NÃO acrescente TOP nem LIMIT no SELECT externo. A Sentença de alunos nasceu
+-- com `SELECT TOP 30` e truncou o roster silenciosamente — apareciam 2 turmas de
+-- 185. (O TOP 1 do OUTER APPLY é outra coisa: é desambiguação de 1 registro.)
+--
+-- NÃO filtre por PRESENCA nem por campus. O primeiro esconde o que medimos; o
+-- segundo é responsabilidade do middleware (RM_CODFILIAL, fail-closed).
+```
+
+---
+
+## Validação de 20/08/2026 — recadastrada e medida
+
+Janela de fevereiro/2026 (`DATAINICIAL=20260201;DATAFINAL=20260228`):
+
+| verificação | resultado |
+|---|---|
+| linhas | 2.455 |
+| chave `(RA, ID_TURMADISC, DATA, ID_HORARIO_TURMA)` | 2.455 distintas — **zero duplicadas** |
+| `PRESENCA` | `'A'` em 100% |
+| `CODFILIAL` | campus 2: 940; campus 1: 1.515 |
+| `DATA` | 03/02 a 27/02 |
+| `CODTURNO` | 20 (1.288), 22 (940), 17 (115), 11 (110), 18 (2) |
+| marca d'água (`max ALTERADO_EM`) | 2026-08-06T15:58:59 |
+
+Contra a medição de 05/08 (2.449 linhas): seis a mais, coerente com base viva.
+
+**A chave única prova que o `OUTER APPLY ... TOP 1` em `SHORARIO` está funcionando.**
+Trocá-lo por `JOIN` reintroduz o fan-out quando o mesmo `CODHOR` existe em mais de
+um período letivo.
+
+**As 4 colunas de justificativa continuam ausentes** (`JUSTIFICADA`,
+`ID_JUSTIFICATIVA`, `JUSTIFICATIVA_DESCRICAO`, `COMPOE_TOTAL_FALTAS`) — nenhuma
+falta é justificada nesta escola, e o DataSet do .NET omite coluna nula.
+
+> ⚠️ `CRIADO_POR` e `ALTERADO_POR` vêm com **CPF** do lançador (`10952118700`,
+> `05915960758`…). Dado pessoal: usar para decidir autoria, **não persistir**.
+
+**Correção de 20/08:** este arquivo usava `@CODCOLIGADA`/`@CODPERLET`/`@DATAINICIAL`/
+`@DATAFINAL`. O TOTVS **recusa** a sintaxe `@` — parâmetro é `:NOME`. O `.sql`
+nunca tinha sido colado de volta no RM, então o erro sobreviveu meses.

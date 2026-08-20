@@ -6,18 +6,67 @@ comentar até o fim da query; o reparse não acha coluna e o save falha com
 `Concurrency violation: the UpdateCommand affected 0 of the expected 1 records`.
 A documentação fica aqui e nos `.md` ao lado. **`.sql` = máquina, `.md` = gente.**
 
-Todas recebem os mesmos dois parâmetros: `CODCOLIGADA` (Inteiro) e `CODPERLET`
-(**Texto** — a coluna é alfanumérica).
+**Parâmetro é `:NOME`, nunca `@NOME`.** O TOTVS **não aceita** a sintaxe `@` do
+T-SQL no corpo da Sentença — confirmado por Vitor em 20/08/2026, ao cadastrar. Isso
+vale inclusive dentro de função: `CAST(:DATAINICIAL AS VARCHAR(8))`, não
+`CAST(@DATAINICIAL ...)`. O `TODDLE.FREQ.sql` ficou com `@` por meses porque foi
+transcrito como T-SQL comum; é o tipo de erro que só aparece na hora de colar.
 
-| Sentença | Alimenta | Variável no `.env` |
+Quase todas recebem os mesmos dois parâmetros: `CODCOLIGADA` (Inteiro) e
+`CODPERLET` (**Texto** — a coluna é alfanumérica). A exceção é `TODDLE.FREQ`, que
+recebe **quatro** (mais `DATAINICIAL` e `DATAFINAL`, estilo 112 / `YYYYMMDD`).
+
+| Sentença | Alimenta | Variável no `.env` | linhas | chave |
+|---|---|---|---|---|
+| `TODDLE.STUDENTS.sql` | alunos + curso/matriz | `RM_SENTENCA_STUDENTS` | 597 | 590 RA — **7 dup.** |
+| `TODDLE.TURMADISC.sql` | professores, disciplinas, turmas | `RM_SENTENCA_TURMADISC` | 672 | única |
+| `TODDLE.RESP.sql` | responsáveis | `RM_SENTENCA_RESPONSAVEIS` | 594 | única |
+| `TODDLE.FREQ.sql` | frequência (leitura) | `RM_SENTENCA_FREQUENCIA` | 2.455¹ | única |
+| `TODDLE.NOTAS.sql` | notas de etapa | `RM_SENTENCA_NOTAS` | 7.268 | única |
+
+¹ fevereiro/2026; a Sentença exige janela de data.
+
+Cada Sentença tem exatamente **um `.sql`** (puro) e **um `.ESPEC.md`** (a
+documentação). Consolidado em 20/08/2026: existiam `.V1`/`.V2`/`.V3` soltos, sem
+dizer qual valia.
+
+> **As cinco foram recadastradas e validadas em 20/08/2026**, depois de a cópia de
+> base de 13–15/08 tê-las levado junto com o usuário `integracao.toddle`. Os `.sql`
+> desta pasta **são** o que está no RM: conferido comparando as colunas devolvidas
+> pelo web service com os apelidos de cada arquivo — zero divergência nas cinco.
+>
+> `TODDLE.NOTAS` e `TODDLE.RESP` foram **reconstruídas** nesta data (nunca tinham
+> sido commitadas; só existiam dentro do RM) e validadas na execução. Ver §6 de
+> `TODDLE.NOTAS.ESPEC.md` e o anexo de `TODDLE.RESP.ESPEC.md`.
+
+### Recorte de campus (`RM_CODFILIAL=2`)
+
+| Sentença | total | campus 2 |
 |---|---|---|
-| `TODDLE.STUDENTS.V2.sql` | alunos | `RM_SENTENCA_STUDENTS` |
-| `TODDLE.STUDENTS.V3.sql` | alunos + curso/matriz | `RM_SENTENCA_STUDENTS` |
-| `TODDLE.TURMADISC.V1.sql` | professores, disciplinas, turmas | `RM_SENTENCA_TURMADISC` |
+| STUDENTS | 597 | 299 linhas / **296 RA** |
+| TURMADISC | 672 | 304 |
+| RESP | 594 | 296 — cobertura **integral** do roster |
+| FREQ (fev) | 2.455 | 940 |
+| NOTAS | 7.268 | 4.428 |
 
-## Por que existe uma V3
+### Como diagnosticar quando uma para de responder
 
-A V2 não diz a qual **currículo** o aluno pertence, e sem isso o de-para turma
+O RM **não** distingue "Sentença não existe" de "usuário sem permissão" — as duas
+dão *"a consulta SQL utilizando a chave 1|S|X não existe ou não pôde ser executada
+por restrição de filtro por perfil/usuário"*, idêntico ao de um código inventado.
+
+**Sonda de existência:** chame com o número ERRADO de parâmetros. Se existe, o RM
+responde *"Quantidade de parâmetros passados para o SQL não corresponde ao
+esperado"* — e essa mensagem **vaza o corpo do SQL cadastrado**, que é como se
+descobriu, em 20/08, que a `TODDLE.RESP` tinha sido cadastrada com o SQL da
+`TODDLE.FREQ` colado por engano.
+
+Para separar "conta quebrada" de "Sentença faltando", sonde um DataServer:
+`GetSchema` de `EduFrequenciaDiariaWSData` responde com a mesma credencial.
+
+## Por que a Sentença de alunos traz curso e matriz
+
+Sem saber a qual **currículo** o aluno pertence, o de-para turma
 → year group é palpite. A EAV tem dois programas com escadas de série
 sobrepostas — conferido em `GET /year-groups` por currículo:
 
@@ -29,20 +78,19 @@ O 10º ano existe nos dois: `Grade 10` no UBD e `Year 5` no MYP. Os nomes de
 coorte também colidem — há dois `Batch of 2028` e dois `Year 1`, com ids
 diferentes. Sem saber o curso do aluno, não há critério para escolher.
 
-A V3 resolve trazendo `SHABILITACAOFILIAL` ("Matriz Aplicada") por
+A Sentença resolve trazendo `SHABILITACAOFILIAL` ("Matriz Aplicada") por
 `SMATRICPL.IDHABILITACAOFILIAL`: `CODCURSO`, `NOME_CURSO`, `CODHABILITACAO`,
 `NOME_HABILITACAO` e `ID_MATRIZ`. O de-para passa a ser
 `(curso, série) → year group`, determinado pelo dado.
 
 O middleware já lê essas colunas (`rmStudentSource.ts` → `CourseCode`,
-`CourseName`, `AppliedMatrixId`). Trocar V2 por V3 é uma linha no `.env` e não
-quebra nada: os apelidos da V2 continuam todos presentes na V3.
+`CourseName`, `AppliedMatrixId`). Os apelidos antigos continuam todos presentes, então a troca nao quebrou nada.
 
-A V3 **removeu** `PERIODO_SERIE`. Motivo: no retorno completo ela vem
+A Sentença **não traz** `PERIODO_SERIE`. Motivo: no retorno completo ela vem
 preenchida **só nas matrículas canceladas** (`CODSTATUS 17`) e vazia nas
 ativas — como fallback de série daria valor apenas para aluno inativo.
 
-## TODDLE.TURMADISC.V1
+## TODDLE.TURMADISC
 
 Uma linha por **turma-disciplina-professor**. Caminho no RM:
 
