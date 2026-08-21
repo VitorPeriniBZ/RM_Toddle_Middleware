@@ -5,7 +5,7 @@ import { contarProveniencia, pgPool, resumoPendencias } from '@rm-toddle/db';
 const cfg = tenantConfig;
 
 /**
- * Responde "os jobs rodaram bem?" a partir da tabela `operation`.
+ * Responde "os jobs rodaram bem?" a partir da tabela `job_run`.
  *
  *   npm run runs                 # últimos 20
  *   npm run runs -- --limite 50
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
   const { rows } = await pgPool.query<Linha>(
     `SELECT o.tipo, o.estado, o.created_at AS criado, o.updated_at AS atualizado,
             o.config_version, o.payload, o.resultado
-       FROM operation o
+       FROM job_run o
        JOIN tenant t ON t.id = o.tenant_id
       WHERE t.slug = $1
         AND ($2::text IS NULL OR o.tipo = $2)

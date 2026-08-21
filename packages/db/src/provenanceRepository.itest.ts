@@ -42,7 +42,7 @@ describe('granularidade de LINHA (frequência, nota)', () => {
       entidade: 'FREQUENCIA',
       chaveNatural: K,
       payloadHash: hashValor('A'),
-      operationId: runId,
+      runId: runId,
     });
     const m = await carregarProveniencia('FREQUENCIA', [K]);
     expect(m.get(chaveDoMapa(K))?.payloadHash).toBe(hashValor('A'));
@@ -53,7 +53,7 @@ describe('granularidade de LINHA (frequência, nota)', () => {
       entidade: 'FREQUENCIA',
       chaveNatural: K,
       payloadHash: hashValor('P'),
-      operationId: runId,
+      runId: runId,
     });
     const { rows } = await pgPool.query<{ c: number }>(
       'select count(*)::int c from rm_write_provenance where chave_natural = $1',
@@ -76,14 +76,14 @@ describe('granularidade de CAMPO (plano de aula)', () => {
       chaveNatural: K2,
       campo: 'CONTEUDOEFETIVO',
       payloadHash: hashValor('Frações'),
-      operationId: runId,
+      runId: runId,
     });
     await registrarEscrita({
       entidade: 'PLANO_AULA',
       chaveNatural: K2,
       campo: 'LICAOCASA',
       payloadHash: hashValor('pág. 42'),
-      operationId: runId,
+      runId: runId,
     });
     const m = await carregarProveniencia('PLANO_AULA', [K2]);
     expect(m.size).toBe(2);
@@ -106,7 +106,7 @@ describe('lote', () => {
         entidade: 'FREQUENCIA',
         chaveNatural: c,
         payloadHash: hashValor('A'),
-        operationId: runId,
+        runId: runId,
       });
     }
     expect((await carregarProveniencia('FREQUENCIA', chaves)).size).toBe(50);

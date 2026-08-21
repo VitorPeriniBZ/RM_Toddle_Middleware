@@ -42,7 +42,7 @@ export interface RegistrarPendenciaArgs {
   /** Hash do valor desejado. É por ele que se decide reabrir. */
   hashDesejado: string;
   origemId?: string;
-  operationId?: string | null;
+  runId?: string | null;
 }
 
 export interface Pendencia {
@@ -101,7 +101,7 @@ export async function registrarPendencia(args: RegistrarPendenciaArgs): Promise<
     const { rows } = await pgPool.query<{ estado: string }>(
       `INSERT INTO write_pendency
          (tenant_id, entidade, chave_natural, campo, veredito, porque,
-          valor_desejado, valor_no_rm, hash_desejado, origem_id, operation_id)
+          valor_desejado, valor_no_rm, hash_desejado, origem_id, run_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (tenant_id, entidade, chave_natural, coalesce(campo, ''))
        DO UPDATE SET
@@ -142,7 +142,7 @@ export async function registrarPendencia(args: RegistrarPendenciaArgs): Promise<
         args.valorNoRm ?? null,
         args.hashDesejado,
         args.origemId ?? null,
-        args.operationId ?? null,
+        args.runId ?? null,
       ],
     );
     return rows[0]?.estado === 'aberta';

@@ -8,7 +8,9 @@ const cfg = tenantConfig;
  * Gate de aprovação humana para escrita no RM.
  *
  * Usa `operation` e `approval` da migration 006, que existem exatamente para
- * isto: o CHECK de `operation.estado` já tem `needs_review` e `approved`.
+ * isto — e desde a migration 011 `operation` serve SÓ para isto: os estados de
+ * execução (`executing`/`succeeded`/`failed`) saíram do CHECK e foram para
+ * `job_run`. Aprovação é máquina de estados; execução é evento.
  *
  * ─── A TENSÃO DO SCHEMA, E COMO ELA SE RESOLVE ──────────────────────────────
  *
@@ -43,7 +45,7 @@ const cfg = tenantConfig;
  */
 
 export interface PlanoParaAprovar {
-  /** Chave do run (a mesma `idempotency_key` que `abrirRun` usa). */
+  /** Chave do run que propôs. Vira a `idempotency_key` da operação. */
   chave: string;
   tipo: string;
   /** O plano e os motivos, para quem aprova ler sem abrir código. */
@@ -95,8 +97,8 @@ export async function identidadeDeCli(quem: string): Promise<string> {
 /**
  * Põe o run em `needs_review` e para.
  *
- * Não cria linha nova: o run já tem a sua, aberta por `abrirRun`. Mudar o estado
- * preserva o `operation_id` que a proveniência e as pendências referenciam.
+ * Cria (ou reusa) a linha em `operation` com a MESMA chave do run que a propôs —
+ * então uma proposta por run, e reexecutar o run não empilha pedidos.
  */
 export async function pedirAprovacao(plano: PlanoParaAprovar): Promise<void> {
   await pgPool.query(
@@ -197,9 +199,14 @@ export async function decidirOperacao(
        DO UPDATE SET decisao = EXCLUDED.decisao, motivo = EXCLUDED.motivo, decidido_em = now()`,
       [operationId, aprovador, decisao, motivo],
     );
+    // `rejected`, não `failed`: recusa é uma DECISÃO humana registrada, não uma
+    // falha de execução. A primeira versão gravava `failed` porque o CHECK antigo
+    // de `operation` aceitava — herança de quando esta tabela também servia de
+    // registro de run. A migration 011 tirou os estados de execução do CHECK e
+    // isto passou a ser recusado pelo banco, que é o comportamento certo.
     await client.query(
       `UPDATE operation SET estado = $2, updated_at = now() WHERE id = $1`,
-      [operationId, decisao === 'approved' ? 'approved' : 'failed'],
+      [operationId, decisao === 'approved' ? 'approved' : 'rejected'],
     );
     await client.query('COMMIT');
     return { ok: true, estado: decisao };

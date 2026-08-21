@@ -5,7 +5,7 @@ import { pgPool } from './pool';
 const cfg = tenantConfig;
 
 /**
- * Registro durável de EXECUÇÃO, na tabela `operation`.
+ * Registro durável de EXECUÇÃO, na tabela `job_run`.
  *
  * ─── O PROBLEMA QUE ISTO RESOLVE ────────────────────────────────────────────
  *
@@ -23,12 +23,18 @@ const cfg = tenantConfig;
  * Efeito colateral não serve porque o resultado correto muitas vezes é "nada".
  * A saída é registrar o RUN, não o efeito.
  *
- * ─── POR QUE `operation`, E NÃO TABELA NOVA ─────────────────────────────────
+ * ─── POR QUE TABELA PRÓPRIA (correção de 21/08/2026) ────────────────────────
  *
- * A tabela já existe desde a migration 006, bem modelada, e estava com **0
- * linhas** — o caminho de sync nunca escrevia nela. `estado` já tem no CHECK
- * exatamente os valores de que preciso (`executing`, `succeeded`, `failed`), e
- * `idempotency_key` já é UNIQUE por tenant. Não precisou de migration.
+ * A primeira versão disto usava `operation` (migration 006), porque o CHECK dela
+ * já aceitava `executing`/`succeeded`/`failed` e "não precisou de migration".
+ * Foi conveniência, e virou dívida na mesma semana: `operation` foi desenhada
+ * para operação APROVÁVEL — máquina de estados, com `criado_por` e a tabela
+ * `approval` referenciando-a.
+ *
+ * Execução é outra coisa: um EVENTO, append-only. A migration 011 separou, e a
+ * janela foi essa porque as duas tabelas estavam vazias. Depois do writer,
+ * `operation` passa a ser trilha de auditoria de escrita no ERP de um cliente, e
+ * mexer nela deixa de ser refactor.
  *
  * ─── O QUE NÃO ENTRA AQUI ───────────────────────────────────────────────────
  *
@@ -37,13 +43,13 @@ const cfg = tenantConfig;
  * responder nenhuma pergunta que alguém tenha. Uma linha por RUN responde.
  */
 
-/** Estados que este módulo usa (o CHECK da tabela aceita outros, do fluxo de aprovação). */
+/** Estados que este módulo usa (o CHECK de job_run aceita exatamente estes três). */
 type EstadoRun = 'executing' | 'succeeded' | 'failed';
 
 let tenantIdCache: string | null = null;
 /**
  * Mesma resolução do idMappingRepository, e pelo mesmo motivo: sem tenant
- * resolvido a linha não pode ser gravada, porque `operation.tenant_id` é NOT NULL
+ * resolvido a linha não pode ser gravada, porque `job_run.tenant_id` é NOT NULL
  * e um run sem dono não é auditável.
  */
 async function tenantId(): Promise<string> {
@@ -93,9 +99,9 @@ export interface AbrirRunArgs {
 export async function abrirRun(args: AbrirRunArgs): Promise<string | null> {
   try {
     const { rows } = await pgPool.query<{ id: string }>(
-      `INSERT INTO operation (tenant_id, tipo, estado, payload, resultado, config_version, idempotency_key)
+      `INSERT INTO job_run (tenant_id, tipo, estado, payload, resultado, config_version, chave)
        VALUES ($1, $2, 'executing', $3, $4, $5, $6)
-       ON CONFLICT (tenant_id, idempotency_key) DO UPDATE
+       ON CONFLICT (tenant_id, chave) DO UPDATE
          SET estado     = 'executing',
              payload    = EXCLUDED.payload,
              resultado  = EXCLUDED.resultado,
@@ -129,7 +135,7 @@ export async function fecharRun(
   if (!id) return;
   try {
     await pgPool.query(
-      `UPDATE operation SET estado = $2, resultado = $3, updated_at = now() WHERE id = $1`,
+      `UPDATE job_run SET estado = $2, resultado = $3, updated_at = now() WHERE id = $1`,
       [id, estado, JSON.stringify(resultado)],
     );
   } catch (err) {
@@ -185,7 +191,7 @@ export async function acumularLote(
 ): Promise<RunFechado | null> {
   try {
     const { rows } = await pgPool.query<{ resultado: Record<string, unknown>; esperados: number | null }>(
-      `UPDATE operation
+      `UPDATE job_run
           SET resultado = COALESCE(resultado, '{}'::jsonb) || jsonb_build_object(
                 'created',          COALESCE((resultado->>'created')::int, 0)          + $3::int,
                 'updated',          COALESCE((resultado->>'updated')::int, 0)          + $4::int,
@@ -194,7 +200,7 @@ export async function acumularLote(
                 'lotesConcluidos',  COALESCE((resultado->>'lotesConcluidos')::int, 0)  + 1
               ),
               updated_at = now()
-        WHERE tenant_id = $1 AND idempotency_key = $2 AND estado = 'executing'
+        WHERE tenant_id = $1 AND chave = $2 AND estado = 'executing'
         RETURNING resultado, (payload->>'lotesEsperados')::int AS esperados`,
       [await tenantId(), runChave, c.created, c.updated, c.unarchived, c.failed],
     );
@@ -227,8 +233,8 @@ export async function fecharRunPorChave(
 ): Promise<void> {
   try {
     await pgPool.query(
-      `UPDATE operation SET estado = $3, resultado = $4, updated_at = now()
-        WHERE tenant_id = $1 AND idempotency_key = $2`,
+      `UPDATE job_run SET estado = $3, resultado = $4, updated_at = now()
+        WHERE tenant_id = $1 AND chave = $2`,
       [await tenantId(), chave, estado, JSON.stringify(resultado)],
     );
   } catch (err) {
@@ -246,7 +252,7 @@ export async function ultimaContagemEmEscopo(tipo: string): Promise<number | nul
   try {
     const { rows } = await pgPool.query<{ n: string | null }>(
       `SELECT (resultado->>'emEscopo') AS n
-         FROM operation
+         FROM job_run
         WHERE tenant_id = $1 AND tipo = $2 AND estado = 'succeeded'
           AND resultado ? 'emEscopo'
         ORDER BY created_at DESC

@@ -15,9 +15,9 @@ import { pgPool } from './pool';
  */
 
 const TIPO = 'teste.run';
-beforeEach(async () => { await pgPool.query('delete from operation where tipo = $1', [TIPO]); });
+beforeEach(async () => { await pgPool.query('delete from job_run where tipo = $1', [TIPO]); });
 afterAll(async () => {
-  await pgPool.query('delete from operation where tipo = $1', [TIPO]);
+  await pgPool.query('delete from job_run where tipo = $1', [TIPO]);
   await pgPool.end();
 });
 
@@ -79,7 +79,7 @@ describe('idempotência da chave', () => {
     await abrir('i1', 3);
     await abrir('i1', 3);
     const { rows } = await pgPool.query<{ c: number }>(
-      'select count(*)::int c from operation where idempotency_key = $1', ['i1'],
+      'select count(*)::int c from job_run where chave = $1', ['i1'],
     );
     expect(rows[0].c).toBe(1);
   });
