@@ -1,8 +1,12 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { configVersion, configVersionDetalhe, env, logger } from '@rm-toddle/config';
+import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
+
 import {
   montaLotes,
   PeriodTimeIndex,
@@ -79,10 +83,10 @@ function parseArgs(): Args {
 
 /** Um único campus. "ALL" não vale: o contexto do wsDataServer exige um CODFILIAL. */
 function campusUnico(): string {
-  const campi = env.RM_CODFILIAL.split(',').map((c) => c.trim()).filter(Boolean);
-  if (env.RM_CODFILIAL.toUpperCase() === 'ALL' || campi.length !== 1) {
+  const campi = cfg.rm.escopo.filiais.split(',').map((c) => c.trim()).filter(Boolean);
+  if (cfg.rm.escopo.filiais.toUpperCase() === 'ALL' || campi.length !== 1) {
     throw new Error(
-      `RM_CODFILIAL="${env.RM_CODFILIAL}" não serve para o shadow mode: o contexto do ` +
+      `RM_CODFILIAL="${cfg.rm.escopo.filiais}" não serve para o shadow mode: o contexto do ` +
         'wsDataServer exige UM CODFILIAL. Rode um campus por vez.',
     );
   }
@@ -158,7 +162,7 @@ async function main(): Promise<void> {
   });
 
   const ctx: ContextoProjecao = {
-    codColigada: env.RM_CODCOLIGADA,
+    codColigada: cfg.rm.escopo.coligada,
     cursoParaTurmaDisc,
     alunoParaRa,
     alvos,
@@ -181,9 +185,9 @@ async function main(): Promise<void> {
   p('  SHADOW MODE — frequência Toddle -> RM.  NADA FOI ESCRITO.');
   p('══════════════════════════════════════════════════════════════════');
   p(`  janela         ${args.de} → ${args.ate}`);
-  p(`  campus         CODFILIAL=${codFilial}   coligada=${env.RM_CODCOLIGADA}`);
+  p(`  campus         CODFILIAL=${codFilial}   coligada=${cfg.rm.escopo.coligada}`);
   p(`  configVersion  ${versao}`);
-  p(`  organização    ${env.TODDLE_ORG_ID}`);
+  p(`  organização    ${cfg.toddle.organizationId}`);
   if (args.diagnostico) p('  modo           DIAGNÓSTICO (sem filtro de curso na origem)');
   p('');
   p('── escopo ────────────────────────────────────────────────────────');

@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
-import { env, isRmSoapConfigured, logger } from '@rm-toddle/config';
+import { logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * Fonte de FREQUÊNCIA do RM, via Sentença `TODDLE.FREQ` no wsConsultaSQL.
@@ -103,10 +113,10 @@ export function paraEstilo112(dataIso: string): string {
 function classificaAutor(autor: string | undefined): { integracao: boolean; hash: string } {
   const bruto = (autor ?? '').trim();
   if (bruto === '') return { integracao: false, hash: '' };
-  const usuarioIntegracao = (env.RM_WS_USER ?? '').trim();
+  const usuarioIntegracao = (cfg.rm.conexao.usuario ?? '').trim();
   return {
     integracao: usuarioIntegracao !== '' && bruto.toLowerCase() === usuarioIntegracao.toLowerCase(),
-    hash: createHash('sha256').update(`${env.TENANT_SLUG}:${bruto}`).digest('hex').slice(0, 16),
+    hash: createHash('sha256').update(`${cfg.slug}:${bruto}`).digest('hex').slice(0, 16),
   };
 }
 
@@ -119,37 +129,37 @@ function classificaAutor(autor: string | undefined): { integracao: boolean; hash
 export async function fetchFrequenciaFromRm(
   janela: JanelaFrequencia,
 ): Promise<ResumoLeituraFrequencia> {
-  if (!isRmSoapConfigured) {
+  if (!rmSoapConfigurado) {
     throw new Error('wsConsultaSQL não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS).');
   }
-  if (!env.RM_SENTENCA_FREQUENCIA) {
+  if (!cfg.rm.sentencas.frequencia) {
     throw new Error(
       'RM_SENTENCA_FREQUENCIA não definido — informe o código da Sentença de frequência ' +
         '(ex.: TODDLE.FREQ). Ver docs/rm-sentencas/TODDLE.FREQ.ESPEC.md.',
     );
   }
-  if (!env.RM_CODPERLET) {
+  if (!cfg.rm.escopo.periodoLetivo) {
     throw new Error('RM_CODPERLET não definido — a Sentença de frequência exige o período letivo.');
   }
   if (janela.de > janela.ate) {
     throw new Error(`Janela invertida: de ${janela.de} é depois de até ${janela.ate}.`);
   }
 
-  const rows = await wsConsultaSqlClient.realizarConsulta(env.RM_SENTENCA_FREQUENCIA, {
-    CODCOLIGADA: env.RM_CODCOLIGADA,
-    CODPERLET: env.RM_CODPERLET,
+  const rows = await wsConsultaSqlClient.realizarConsulta(cfg.rm.sentencas.frequencia, {
+    CODCOLIGADA: cfg.rm.escopo.coligada,
+    CODPERLET: cfg.rm.escopo.periodoLetivo,
     DATAINICIAL: paraEstilo112(janela.de),
     DATAFINAL: paraEstilo112(janela.ate),
   });
 
   // Mesmo recorte fail-closed do roster: "ALL" tem de ser declarado, nunca é default.
-  const todosCampi = env.RM_CODFILIAL.trim().toUpperCase() === 'ALL';
+  const todosCampi = cfg.rm.escopo.filiais.trim().toUpperCase() === 'ALL';
   const campiPermitidos = todosCampi
     ? []
-    : env.RM_CODFILIAL.split(',').map((s) => s.trim()).filter(Boolean);
+    : cfg.rm.escopo.filiais.split(',').map((s) => s.trim()).filter(Boolean);
   if (!todosCampi && campiPermitidos.length === 0) {
     throw new Error(
-      `RM_CODFILIAL="${env.RM_CODFILIAL}" não produziu nenhum campus válido.`,
+      `RM_CODFILIAL="${cfg.rm.escopo.filiais}" não produziu nenhum campus válido.`,
     );
   }
 
@@ -193,7 +203,7 @@ export async function fetchFrequenciaFromRm(
     }
 
     faltas.push({
-      codColigada: pick(row, 'CODCOLIGADA') ?? String(env.RM_CODCOLIGADA),
+      codColigada: pick(row, 'CODCOLIGADA') ?? String(cfg.rm.escopo.coligada),
       ra,
       idTurmaDisc: pick(row, 'ID_TURMADISC', 'IDTURMADISC') ?? '',
       data,

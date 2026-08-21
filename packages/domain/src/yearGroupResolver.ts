@@ -1,6 +1,16 @@
-import { env } from '@rm-toddle/config';
+import { tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository } from '@rm-toddle/db';
 import { RmStudentContext } from '@rm-toddle/integrations';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * O POST /students do Toddle EXIGE yearGroupId — conceito que o RM não tem.
@@ -28,7 +38,7 @@ export async function resolveYearGroupId(yearGroupKey?: string): Promise<string>
     if (mapping) return mapping.toddleId;
   }
 
-  if (env.TODDLE_DEFAULT_YEAR_GROUP_ID) return env.TODDLE_DEFAULT_YEAR_GROUP_ID;
+  if (cfg.toddle.yearGroupPadrao) return cfg.toddle.yearGroupPadrao;
 
   throw new Error(
     `yearGroupId não resolvido (chave RM: ${yearGroupKey ?? 'ausente'}). ` +

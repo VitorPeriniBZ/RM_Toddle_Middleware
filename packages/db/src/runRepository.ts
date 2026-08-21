@@ -1,5 +1,8 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { pgPool } from './pool';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Registro durável de EXECUÇÃO, na tabela `operation`.
@@ -47,11 +50,11 @@ async function tenantId(): Promise<string> {
   if (tenantIdCache) return tenantIdCache;
   const { rows } = await pgPool.query<{ id: string }>(
     "SELECT id FROM tenant WHERE slug = $1 AND status = 'active'",
-    [env.TENANT_SLUG],
+    [cfg.slug],
   );
   if (!rows[0]) {
     throw new Error(
-      `TENANT_SLUG="${env.TENANT_SLUG}" não existe (ou está suspenso) na tabela tenant.`,
+      `TENANT_SLUG="${cfg.slug}" não existe (ou está suspenso) na tabela tenant.`,
     );
   }
   const resolvido = rows[0].id;

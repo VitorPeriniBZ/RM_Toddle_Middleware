@@ -1,7 +1,10 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { fetchResponsaveisFromRm, type Responsavel } from '@rm-toddle/domain';
 import { comPaciencia, toddleClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Cria os responsáveis ACADÊMICOS no Toddle, com os filhos vinculados.
@@ -71,7 +74,7 @@ async function main(): Promise<void> {
   console.log('\n══════════════════════════════════════════════════════════════');
   console.log('  Responsáveis acadêmicos → Toddle');
   console.log('══════════════════════════════════════════════════════════════');
-  console.log(`  organização        ${env.TODDLE_ORG_ID}`);
+  console.log(`  organização        ${cfg.toddle.organizationId}`);
   console.log(`  alunos em escopo   ${alunos.length}`);
   console.log('');
   console.log(`  responsáveis lidos do RM       ${resumo.responsaveis.length}`);

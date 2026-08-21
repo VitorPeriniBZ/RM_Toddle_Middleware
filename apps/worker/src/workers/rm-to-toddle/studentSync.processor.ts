@@ -1,5 +1,5 @@
 import { Job } from 'bullmq';
-import { env } from '@rm-toddle/config';
+import { env, tenantConfig } from '@rm-toddle/config';
 import { configVersion, configVersionDetalhe } from '@rm-toddle/config';
 import { toddleClient } from '@rm-toddle/integrations';
 import { isToddleStudentArchived } from '@rm-toddle/integrations';
@@ -26,6 +26,9 @@ import { QUEUE, STUDENT_JOB } from '@rm-toddle/queues';
 import { RmStudentContext } from '@rm-toddle/integrations';
 import { chunk } from '@rm-toddle/config';
 import { heartbeat, logger } from '@rm-toddle/config';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * FLUXO 1 — Sincronização de Alunos (TOTVS RM -> Toddle), em duas fases:
@@ -221,7 +224,7 @@ function isActiveContext(ctx: RmStudentContext): boolean {
   if (flag === 'S' || flag === 'T' || flag === '1') return true;
   if (flag === 'N' || flag === 'F' || flag === '0') return false;
 
-  const allowed = env.RM_ACTIVE_TERM_STATUSES
+  const allowed = cfg.rm.escopo.statusAtivos
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);

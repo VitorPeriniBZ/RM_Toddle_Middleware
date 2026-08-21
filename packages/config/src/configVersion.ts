@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { env } from './env';
+import { tenantConfig, type TenantConfig } from './tenantConfig';
 
 /**
  * Impressão digital da configuração que define ESCOPO e DESTINO de um sync.
@@ -23,21 +23,27 @@ import { env } from './env';
  *   - RM_CODPERLET       outro ano letivo
  *   - SOURCE_ID_PREFIX   muda o contrato de identidade entre os sistemas
  *
+ * CORREÇÃO DE 21/08/2026: a impressão era derivada do AMBIENTE, então era por
+ * DEPLOY. Num processo que atenda mais de uma escola, dois tenants com escopos
+ * diferentes gerariam a MESMA impressão — e a proteção passaria a mentir,
+ * aceitando lote de um escopo como se fosse de outro. Agora deriva do
+ * `TenantConfig` resolvido, então é por escola por construção.
+ *
  * O QUE NÃO ENTRA: nada que seja só de desempenho ou operação
  * (SYNC_BATCH_SIZE, TODDLE_PAGE_SIZE, LOG_LEVEL, cron). Mudar o tamanho do lote
  * não torna o dado do job errado, e forçar reprocesso nesses casos seria atrito
  * sem ganho.
  */
-export function configVersion(): string {
+export function configVersion(cfg: TenantConfig = tenantConfig): string {
   const relevante = {
-    tenant: env.TENANT_SLUG,
-    campi: env.RM_CODFILIAL,
-    orgDestino: env.TODDLE_ORG_ID,
-    sentencaAlunos: env.RM_SENTENCA_STUDENTS ?? '',
-    coligada: env.RM_CODCOLIGADA,
-    perlet: env.RM_CODPERLET ?? '',
-    prefixoSourceId: env.SOURCE_ID_PREFIX,
-    statusAtivos: env.RM_ACTIVE_TERM_STATUSES,
+    tenant: cfg.slug,
+    campi: cfg.rm.escopo.filiais,
+    orgDestino: cfg.toddle.organizationId,
+    sentencaAlunos: cfg.rm.sentencas.alunos ?? '',
+    coligada: cfg.rm.escopo.coligada,
+    perlet: cfg.rm.escopo.periodoLetivo ?? '',
+    prefixoSourceId: cfg.sourceIdPrefix,
+    statusAtivos: cfg.rm.escopo.statusAtivos,
   };
 
   // Chaves ordenadas: a impressão não pode depender da ordem de declaração.
@@ -46,14 +52,14 @@ export function configVersion(): string {
 }
 
 /** Detalhamento legível — para log e para explicar uma recusa. */
-export function configVersionDetalhe(): Record<string, string> {
+export function configVersionDetalhe(cfg: TenantConfig = tenantConfig): Record<string, string> {
   return {
-    version: configVersion(),
-    tenant: env.TENANT_SLUG,
-    campi: env.RM_CODFILIAL,
-    orgDestino: env.TODDLE_ORG_ID,
-    sentencaAlunos: env.RM_SENTENCA_STUDENTS ?? '(vazia)',
-    perlet: env.RM_CODPERLET ?? '(vazio)',
-    prefixoSourceId: env.SOURCE_ID_PREFIX,
+    version: configVersion(cfg),
+    tenant: cfg.slug,
+    campi: cfg.rm.escopo.filiais,
+    orgDestino: cfg.toddle.organizationId,
+    sentencaAlunos: cfg.rm.sentencas.alunos ?? '(vazia)',
+    perlet: cfg.rm.escopo.periodoLetivo ?? '(vazio)',
+    prefixoSourceId: cfg.sourceIdPrefix,
   };
 }

@@ -1,7 +1,5 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
-import { env } from '@rm-toddle/config';
-import { chunk } from '@rm-toddle/config';
-import { logger } from '@rm-toddle/config';
+import { chunk, logger, tenantConfig, type TenantConfig } from '@rm-toddle/config';
 import {
   ToddleAttendance,
   ToddleGradingPeriod,
@@ -76,12 +74,13 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export class ToddleClient {
   private readonly http: AxiosInstance;
 
-  constructor() {
+  /** Ver a nota do construtor em wsConsultaSqlClient.ts: config, não ambiente. */
+  constructor(private readonly cfg: TenantConfig = tenantConfig) {
     this.http = axios.create({
-      baseURL: env.TODDLE_BASE_URL,
+      baseURL: cfg.toddle.baseUrl,
       timeout: 60_000,
       headers: {
-        Authorization: `Bearer ${env.TODDLE_TOKEN}`,
+        Authorization: `Bearer ${cfg.toddle.token}`,
         'Content-Type': 'application/json',
       },
     });
@@ -191,7 +190,7 @@ export class ToddleClient {
             params: {
               sourceIds: JSON.stringify(group),
               pageNumber,
-              pageSize: env.TODDLE_PAGE_SIZE,
+              pageSize: this.cfg.toddle.pageSize,
             },
           }),
         );
@@ -201,7 +200,7 @@ export class ToddleClient {
         logger.debug({ pageNumber, count: students.length }, 'Toddle GET /students página lida');
 
         // Última página: veio menos que o pageSize pedido.
-        if (students.length < env.TODDLE_PAGE_SIZE) break;
+        if (students.length < this.cfg.toddle.pageSize) break;
         pageNumber += 1;
       }
     }
@@ -220,7 +219,7 @@ export class ToddleClient {
   async listStudentsPage(pageNumber: number): Promise<ToddleStudent[]> {
     const { data } = await this.withRetry('GET /students (página)', () =>
       this.http.get<ToddleStudentsListResponse>('/public/v2/students', {
-        params: { pageNumber, pageSize: env.TODDLE_PAGE_SIZE },
+        params: { pageNumber, pageSize: this.cfg.toddle.pageSize },
       }),
     );
     return data?.response?.students ?? [];
@@ -1027,10 +1026,10 @@ export class ToddleClient {
           'o token deveria estar restrito a uma.',
       );
     }
-    if (orgIds[0] !== env.TODDLE_ORG_ID) {
+    if (orgIds[0] !== this.cfg.toddle.organizationId) {
       throw new ToddleApiError(
         `Organização divergente: o token resolve para ${orgIds[0]}, mas TODDLE_ORG_ID declara ` +
-          `${env.TODDLE_ORG_ID}. Abortando ANTES de qualquer escrita — os mapeamentos da ` +
+          `${this.cfg.toddle.organizationId}. Abortando ANTES de qualquer escrita — os mapeamentos da ` +
           'id_mapping pertencem à organização declarada e não valem na outra.',
       );
     }
@@ -1040,4 +1039,5 @@ export class ToddleClient {
   }
 }
 
+/** Instância padrão do tenant do ambiente. Ver a nota em wsConsultaSqlClient.ts. */
 export const toddleClient = new ToddleClient();

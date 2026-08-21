@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { XMLParser } from 'fast-xml-parser';
-import { env, isRmSoapConfigured, logger } from '@rm-toddle/config';
+import { logger, rmSoapConfigurado, tenantConfig, type TenantConfig } from '@rm-toddle/config';
 
 /**
  * Cliente do TOTVS RM wsDataServer (SOAP 1.1) — SOMENTE LEITURA.
@@ -72,13 +72,14 @@ class WsDataServerClient {
     } as unknown as boolean,
   });
 
-  constructor() {
+  /** Ver a nota do construtor em wsConsultaSqlClient.ts: config, não ambiente. */
+  constructor(private readonly cfg: TenantConfig = tenantConfig) {
     this.http = axios.create({
-      baseURL: isRmSoapConfigured ? `${env.RM_WS_BASEURL}${SERVICE_PATH}` : undefined,
+      baseURL: rmSoapConfigurado(cfg) ? `${cfg.rm.conexao.baseUrl}${SERVICE_PATH}` : undefined,
       timeout: 300_000, // ReadView de horário/etapa da filial inteira é pesado
       headers: { 'Content-Type': 'text/xml; charset=utf-8' },
-      auth: isRmSoapConfigured
-        ? { username: env.RM_WS_USER as string, password: env.RM_WS_PASS as string }
+      auth: rmSoapConfigurado(cfg)
+        ? { username: cfg.rm.conexao.usuario as string, password: cfg.rm.conexao.senha as string }
         : undefined,
     });
   }
@@ -86,10 +87,10 @@ class WsDataServerClient {
   /** Contexto exigido em toda chamada. Um só CODFILIAL — "ALL" não vale aqui. */
   private contexto(codFilial: string): string {
     return [
-      `CODCOLIGADA=${env.RM_CODCOLIGADA}`,
+      `CODCOLIGADA=${this.cfg.rm.escopo.coligada}`,
       `CODFILIAL=${codFilial}`,
       'CODTIPOCURSO=1',
-      `CODSISTEMA=${env.RM_WS_SISTEMA}`,
+      `CODSISTEMA=${this.cfg.rm.conexao.sistema}`,
     ].join(';');
   }
 
@@ -110,7 +111,7 @@ class WsDataServerClient {
     rowElement: string,
     codFilial: string,
   ): Promise<DataServerRow[]> {
-    if (!isRmSoapConfigured) {
+    if (!rmSoapConfigurado(this.cfg)) {
       throw new RmDataServerError(
         'wsDataServer não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS no .env).',
         dataServer,
@@ -155,7 +156,7 @@ class WsDataServerClient {
    * chave primária, sem tentativa-e-erro contra dados reais.
    */
   async getSchema(dataServer: string, codFilial: string): Promise<string> {
-    if (!isRmSoapConfigured) {
+    if (!rmSoapConfigurado(this.cfg)) {
       throw new RmDataServerError('wsDataServer não configurado.', dataServer);
     }
 
@@ -257,4 +258,5 @@ class WsDataServerClient {
   }
 }
 
+/** Instância padrão do tenant do ambiente. Ver a nota em wsConsultaSqlClient.ts. */
 export const wsDataServerClient = new WsDataServerClient();

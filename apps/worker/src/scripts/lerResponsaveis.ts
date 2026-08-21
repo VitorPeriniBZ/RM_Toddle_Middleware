@@ -1,6 +1,9 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { fetchResponsaveisFromRm } from '@rm-toddle/domain';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Lê os responsáveis ACADÊMICOS do RM e relata o que iria para o Toddle.
@@ -27,7 +30,7 @@ async function main(): Promise<void> {
   p('══════════════════════════════════════════════════════════════════');
   p('  Responsáveis ACADÊMICOS — SOMENTE LEITURA. Nada foi escrito.');
   p('══════════════════════════════════════════════════════════════════');
-  p(`  sentença   ${env.RM_SENTENCA_RESPONSAVEIS}`);
+  p(`  sentença   ${cfg.rm.sentencas.responsaveis}`);
   p(`  escopo     ${ras.length} alunos com mapeamento STUDENT ativo`);
   p('');
   p('── o que o RM devolveu ───────────────────────────────────────────');

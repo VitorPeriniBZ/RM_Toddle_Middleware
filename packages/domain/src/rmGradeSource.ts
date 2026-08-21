@@ -1,5 +1,15 @@
-import { env, isRmSoapConfigured, logger } from '@rm-toddle/config';
+import { logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * Fonte de NOTAS do RM, via Sentença `TODDLE.NOTAS`.
@@ -86,15 +96,15 @@ export async function fetchNotasFromRm(
   idsTurmaDisc: string[],
   ras: string[],
 ): Promise<ResumoNotas> {
-  if (!isRmSoapConfigured) {
+  if (!rmSoapConfigurado) {
     throw new Error('wsConsultaSQL não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS).');
   }
-  if (!env.RM_SENTENCA_NOTAS) {
+  if (!cfg.rm.sentencas.notas) {
     throw new Error(
       'RM_SENTENCA_NOTAS não definido — informe o código da Sentença de notas (ex.: TODDLE.NOTAS).',
     );
   }
-  if (!env.RM_CODPERLET) {
+  if (!cfg.rm.escopo.periodoLetivo) {
     throw new Error('RM_CODPERLET não definido — a Sentença de notas exige o período letivo.');
   }
   if (idsTurmaDisc.length === 0 || ras.length === 0) {
@@ -103,17 +113,17 @@ export async function fetchNotasFromRm(
     );
   }
 
-  const rows = await wsConsultaSqlClient.realizarConsulta(env.RM_SENTENCA_NOTAS, {
-    CODCOLIGADA: env.RM_CODCOLIGADA,
-    CODPERLET: env.RM_CODPERLET,
+  const rows = await wsConsultaSqlClient.realizarConsulta(cfg.rm.sentencas.notas, {
+    CODCOLIGADA: cfg.rm.escopo.coligada,
+    CODPERLET: cfg.rm.escopo.periodoLetivo,
   });
 
   const turmas = new Set(idsTurmaDisc);
   const alunos = new Set(ras);
-  const todosCampi = env.RM_CODFILIAL.trim().toUpperCase() === 'ALL';
+  const todosCampi = cfg.rm.escopo.filiais.trim().toUpperCase() === 'ALL';
   const campiPermitidos = todosCampi
     ? []
-    : env.RM_CODFILIAL.split(',').map((s) => s.trim()).filter(Boolean);
+    : cfg.rm.escopo.filiais.split(',').map((s) => s.trim()).filter(Boolean);
 
   const notas: RmNota[] = [];
   const dominioEtapa: Record<string, number> = {};
@@ -171,10 +181,10 @@ export async function fetchNotasFromRm(
     if (alteradoEm && (marcaDagua === undefined || alteradoEm > marcaDagua)) marcaDagua = alteradoEm;
 
     const autor = (pick(row, 'CRIADO_POR') ?? '').trim().toLowerCase();
-    const usuarioIntegracao = (env.RM_WS_USER ?? '').trim().toLowerCase();
+    const usuarioIntegracao = (cfg.rm.conexao.usuario ?? '').trim().toLowerCase();
 
     notas.push({
-      codColigada: pick(row, 'CODCOLIGADA') ?? String(env.RM_CODCOLIGADA),
+      codColigada: pick(row, 'CODCOLIGADA') ?? String(cfg.rm.escopo.coligada),
       ra,
       idTurmaDisc,
       codEtapa,

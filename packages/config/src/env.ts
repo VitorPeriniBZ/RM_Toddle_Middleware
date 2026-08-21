@@ -249,6 +249,13 @@ export const env = {
 };
 
 /** Fonte de dados do RM via SOAP (wsConsultaSQL) — usada no Fluxo 1. */
+/**
+ * @deprecated Use `rmSoapConfigurado(cfg)` de tenantConfig.ts.
+ *
+ * Esta constante é derivada do AMBIENTE, então responde "o wsConsultaSQL do
+ * DEPLOY está configurado?" — não "o da ESCOLA X está?". Continua aqui porque a
+ * validação cruzada logo abaixo a usa, e ali o ambiente é a pergunta certa.
+ */
 export const isRmSoapConfigured = Boolean(
   raw.RM_WS_BASEURL && raw.RM_WS_USER && raw.RM_WS_PASS,
 );

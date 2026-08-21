@@ -1,5 +1,7 @@
-import { cronDoProfessorEfetivo, env, isRmSoapConfigured, logger } from '@rm-toddle/config';
+import { cronDoProfessorEfetivo, env, logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Verifica, ANTES de o deploy terminar, se este ambiente tem o que os jobs
@@ -47,18 +49,18 @@ function checar(): Checagem[] {
   // --- o que TODO sync para o Toddle precisa ---------------------------------
   c.push({
     nome: 'wsConsultaSQL configurado',
-    ok: isRmSoapConfigured,
-    detalhe: isRmSoapConfigured
-      ? `${env.RM_WS_BASEURL}`
+    ok: rmSoapConfigurado(cfg),
+    detalhe: rmSoapConfigurado(cfg)
+      ? `${cfg.rm.conexao.baseUrl}`
       : 'faltam RM_WS_BASEURL / RM_WS_USER / RM_WS_PASS — nenhuma leitura do RM funciona',
     fatal: true,
   });
 
   c.push({
     nome: 'RM_CODPERLET (ano letivo)',
-    ok: Boolean(env.RM_CODPERLET),
-    detalhe: env.RM_CODPERLET
-      ? String(env.RM_CODPERLET)
+    ok: Boolean(cfg.rm.escopo.periodoLetivo),
+    detalhe: cfg.rm.escopo.periodoLetivo
+      ? String(cfg.rm.escopo.periodoLetivo)
       : 'ausente — as Sentenças exigem o período letivo e falham em runtime',
     fatal: true,
   });
@@ -69,12 +71,12 @@ function checar(): Checagem[] {
    * ninguém e o middleware cria 253 alunos DUPLICADOS — e aluno no Toddle só
    * arquiva, nunca apaga. Ter default não significa que o default serve.
    */
-  const prefixoOk = env.NODE_ENV !== 'production' || env.SOURCE_ID_PREFIX.trim() !== '';
+  const prefixoOk = env.NODE_ENV !== 'production' || cfg.sourceIdPrefix.trim() !== '';
   c.push({
     nome: 'SOURCE_ID_PREFIX não vazio (produção)',
     ok: prefixoOk,
     detalhe: prefixoOk
-      ? `"${env.SOURCE_ID_PREFIX}"`
+      ? `"${cfg.sourceIdPrefix}"`
       : 'VAZIO em produção — a busca por sourceId não acharia ninguém e o sync ' +
         'CRIARIA alunos duplicados, irreversivelmente',
     fatal: true,
@@ -83,17 +85,17 @@ function checar(): Checagem[] {
   // --- sync de ALUNO: está agendado, então é obrigatório ---------------------
   c.push({
     nome: `RM_SENTENCA_STUDENTS (sync de aluno, cron "${env.STUDENTS_SYNC_CRON}")`,
-    ok: Boolean(env.RM_SENTENCA_STUDENTS),
-    detalhe: env.RM_SENTENCA_STUDENTS ?? 'ausente — o job students.extract falha em runtime',
+    ok: Boolean(cfg.rm.sentencas.alunos),
+    detalhe: cfg.rm.sentencas.alunos ?? 'ausente — o job students.extract falha em runtime',
     fatal: true,
   });
 
   // --- sync de PROFESSOR: idem. Foi aqui que doeu ----------------------------
   c.push({
     nome: `RM_SENTENCA_TURMADISC (sync de professor, cron "${cronDoProfessorEfetivo()}")`,
-    ok: Boolean(env.RM_SENTENCA_TURMADISC),
+    ok: Boolean(cfg.rm.sentencas.turmaDisc),
     detalhe:
-      env.RM_SENTENCA_TURMADISC ??
+      cfg.rm.sentencas.turmaDisc ??
       'ausente — o job staff.sync falha em runtime e vai para a DLQ. ' +
         'Foi exatamente isto em 10/08/2026: opcional no Zod, obrigatória para o job agendado',
     fatal: true,
@@ -102,24 +104,24 @@ function checar(): Checagem[] {
   // --- escopo e destino ------------------------------------------------------
   c.push({
     nome: 'TODDLE_ORG_ID',
-    ok: Boolean(env.TODDLE_ORG_ID),
-    detalhe: env.TODDLE_ORG_ID || 'ausente',
+    ok: Boolean(cfg.toddle.organizationId),
+    detalhe: cfg.toddle.organizationId || 'ausente',
     fatal: true,
   });
 
   c.push({
     nome: 'RM_CODFILIAL (escopo de campus)',
-    ok: Boolean(env.RM_CODFILIAL),
-    detalhe: env.RM_CODFILIAL,
+    ok: Boolean(cfg.rm.escopo.filiais),
+    detalhe: cfg.rm.escopo.filiais,
     fatal: true,
   });
 
   // --- avisos: não derrubam o deploy ----------------------------------------
   c.push({
     nome: 'RM_TURMAS_IGNORADAS',
-    ok: Boolean(env.RM_TURMAS_IGNORADAS?.trim()),
-    detalhe: env.RM_TURMAS_IGNORADAS?.trim()
-      ? env.RM_TURMAS_IGNORADAS
+    ok: Boolean(cfg.rm.escopo.turmasIgnoradas?.trim()),
+    detalhe: cfg.rm.escopo.turmasIgnoradas?.trim()
+      ? cfg.rm.escopo.turmasIgnoradas
       : 'vazia — turmas de conveniência de lançamento (na EAV, "IG") vão aparecer ' +
         'como deriva na reconciliação. Correto para quem não tem essa convenção',
     fatal: false,
@@ -161,9 +163,9 @@ function checar(): Checagem[] {
 
   c.push({
     nome: 'TODDLE_DEFAULT_YEAR_GROUP_ID',
-    ok: Boolean(env.TODDLE_DEFAULT_YEAR_GROUP_ID),
-    detalhe: env.TODDLE_DEFAULT_YEAR_GROUP_ID
-      ? env.TODDLE_DEFAULT_YEAR_GROUP_ID
+    ok: Boolean(cfg.toddle.yearGroupPadrao),
+    detalhe: cfg.toddle.yearGroupPadrao
+      ? cfg.toddle.yearGroupPadrao
       : 'vazio (fail-closed) — aluno de turma sem de-para vai para a DLQ em vez de ' +
         'entrar num grupo genérico. É o comportamento desejado, mas alguém tem de olhar a DLQ',
     fatal: false,

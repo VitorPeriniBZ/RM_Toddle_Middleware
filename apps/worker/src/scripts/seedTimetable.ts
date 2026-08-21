@@ -1,7 +1,10 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { diaSemanaRm, RmAttendanceTargets, type RmHorario } from '@rm-toddle/domain';
 import { toddleClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Espelha a grade de horário do RM (`SHorarioTurma`) como timetable slots no
@@ -184,7 +187,7 @@ async function main(): Promise<void> {
   ]);
   const periodIdPorFaixa = new Map(periodos.map((p) => [p.rmCode, p.toddleId]));
 
-  const alvosRm = await RmAttendanceTargets.carregar(cursos.map((c) => c.rmCode), env.RM_CODFILIAL);
+  const alvosRm = await RmAttendanceTargets.carregar(cursos.map((c) => c.rmCode), cfg.rm.escopo.filiais);
   const horarios = alvosRm.todosHorarios();
 
   // ─── planeja ──────────────────────────────────────────────────────────────

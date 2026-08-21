@@ -1,6 +1,9 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Compara as turma-disciplina do RM com o nosso de-para e relata a DERIVA.
@@ -56,9 +59,9 @@ async function main(): Promise<void> {
   // ─── o RM ─────────────────────────────────────────────────────────────────
   const doRm = await wsDataServerClient.readView(
     'EduTurmaDiscData',
-    `STurmaDisc.CODCOLIGADA=${env.RM_CODCOLIGADA} AND STurmaDisc.CODFILIAL=${env.RM_CODFILIAL}`,
+    `STurmaDisc.CODCOLIGADA=${cfg.rm.escopo.coligada} AND STurmaDisc.CODFILIAL=${cfg.rm.escopo.filiais}`,
     'STURMADISC',
-    env.RM_CODFILIAL,
+    cfg.rm.escopo.filiais,
   );
 
   // O período letivo corrente do campus. Vem do que as turmas mapeadas usam, para
@@ -164,7 +167,7 @@ async function main(): Promise<void> {
   p('  Reconciliação de turma-disciplina — RM × de-para');
   p('  SOMENTE LEITURA. Nada foi criado, arquivado ou alterado.');
   p('══════════════════════════════════════════════════════════════════');
-  p(`  campus ${env.RM_CODFILIAL}   coligada ${env.RM_CODCOLIGADA}   IDPERLET ${perlet}`);
+  p(`  campus ${cfg.rm.escopo.filiais}   coligada ${cfg.rm.escopo.coligada}   IDPERLET ${perlet}`);
   p('');
   p(`  turma-disciplina no RM (campus)        ${doRm.length}`);
   p(`  do período letivo corrente             ${doPerlet.length}`);

@@ -1,5 +1,15 @@
-import { env, logger } from '@rm-toddle/config';
+import { logger, tenantConfig } from '@rm-toddle/config';
 import { wsDataServerClient } from '@rm-toddle/integrations';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * Os alvos que uma frequência precisa acertar no RM: IDHORARIOTURMA e CODETAPA.
@@ -168,7 +178,7 @@ export class RmAttendanceTargets {
     // linhas sem erro, o que parece tabela vazia.
     const etapasBrutas = await wsDataServerClient.readView(
       'EduEtapasData',
-      `SETAPAS.CODCOLIGADA=${env.RM_CODCOLIGADA} AND SETAPAS.IDTURMADISC IN (${lista})`,
+      `SETAPAS.CODCOLIGADA=${cfg.rm.escopo.coligada} AND SETAPAS.IDTURMADISC IN (${lista})`,
       'SEtapas',
       codFilial,
     );

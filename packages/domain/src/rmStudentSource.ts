@@ -1,9 +1,19 @@
-import { env, isRmSoapConfigured } from '@rm-toddle/config';
+import { rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, ConsultaRow } from '@rm-toddle/integrations';
 import { RmStudentContext } from '@rm-toddle/integrations';
 import { StudentEnrichment } from '@rm-toddle/contracts';
 import { sanitizeEmail } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * Fonte de alunos do RM via wsConsultaSQL (SOAP), no lugar do REST /StudentContexts.
@@ -30,23 +40,23 @@ export async function fetchStudentsFromRm(): Promise<{
   contexts: RmStudentContext[];
   enrichmentByCode: Map<string, StudentEnrichment>;
 }> {
-  if (!isRmSoapConfigured) {
+  if (!rmSoapConfigurado) {
     throw new Error('wsConsultaSQL não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS).');
   }
-  if (!env.RM_SENTENCA_STUDENTS) {
+  if (!cfg.rm.sentencas.alunos) {
     throw new Error(
       'RM_SENTENCA_STUDENTS não definido — informe o código da Sentença SQL de alunos cadastrada no RM.',
     );
   }
-  if (!env.RM_CODPERLET) {
+  if (!cfg.rm.escopo.periodoLetivo) {
     throw new Error(
       'RM_CODPERLET não definido — a Sentença de alunos exige o período letivo (ex.: 2026).',
     );
   }
 
-  const rows = await wsConsultaSqlClient.realizarConsulta(env.RM_SENTENCA_STUDENTS, {
-    CODCOLIGADA: env.RM_CODCOLIGADA,
-    CODPERLET: env.RM_CODPERLET,
+  const rows = await wsConsultaSqlClient.realizarConsulta(cfg.rm.sentencas.alunos, {
+    CODCOLIGADA: cfg.rm.escopo.coligada,
+    CODPERLET: cfg.rm.escopo.periodoLetivo,
   });
 
   const contexts: RmStudentContext[] = [];
@@ -56,14 +66,14 @@ export async function fetchStudentsFromRm(): Promise<{
   // RM_CODFILIAL. O literal "ALL" inclui todos os campi — mas é uma DECLARAÇÃO
   // explícita, não o default de antes. Variável ausente não chega aqui: o Zod
   // aborta o processo (ver config/env.ts).
-  const allBranches = env.RM_CODFILIAL.trim().toUpperCase() === 'ALL';
+  const allBranches = cfg.rm.escopo.filiais.trim().toUpperCase() === 'ALL';
   const allowedBranches = allBranches
     ? []
-    : env.RM_CODFILIAL.split(',').map((s) => s.trim()).filter(Boolean);
+    : cfg.rm.escopo.filiais.split(',').map((s) => s.trim()).filter(Boolean);
 
   if (!allBranches && allowedBranches.length === 0) {
     throw new Error(
-      `RM_CODFILIAL="${env.RM_CODFILIAL}" não produziu nenhum campus válido. ` +
+      `RM_CODFILIAL="${cfg.rm.escopo.filiais}" não produziu nenhum campus válido. ` +
         'Informe os códigos separados por vírgula (ex.: "2") ou "ALL".',
     );
   }

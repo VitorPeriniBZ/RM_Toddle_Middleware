@@ -1,6 +1,9 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Cria no Toddle os períodos da grade de horário do RM, e a grade que os liga às
@@ -113,7 +116,7 @@ async function main(): Promise<void> {
       attendanceVersion: curriculo?.attendanceVersion,
       timetableVersion: curriculo?.timetableVersion,
       academicYearId,
-      organizacao: env.TODDLE_ORG_ID,
+      organizacao: cfg.toddle.organizationId,
       jaMapeados: jaMapeados.length,
     },
     'Alvos resolvidos',
@@ -149,7 +152,7 @@ async function main(): Promise<void> {
   console.log('\n══════════════════════════════════════════════════════════');
   console.log('  Períodos da grade do RM no Toddle');
   console.log('══════════════════════════════════════════════════════════');
-  console.log(`  organização     ${env.TODDLE_ORG_ID}`);
+  console.log(`  organização     ${cfg.toddle.organizationId}`);
   console.log(`  currículo       ${curriculumId}  "${nomeCurriculo}"`);
   console.log(`  ano acadêmico   ${academicYearId}  (isCurrent)`);
   console.log(`  grade           "${ROTULO_GRADE}"`);
