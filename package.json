@@ -38,7 +38,9 @@
     "teste:decisao": "tsx apps/worker/src/scripts/testarDecisaoDeEscrita.ts",
     "teste:proveniencia": "tsx apps/worker/src/scripts/testarProveniencia.ts",
     "teste:pendencias": "tsx apps/worker/src/scripts/testarPendencias.ts",
-    "pendencias": "tsx apps/worker/src/scripts/pendencias.ts"
+    "pendencias": "tsx apps/worker/src/scripts/pendencias.ts",
+    "teste:teto": "tsx apps/worker/src/scripts/testarTetoEAprovacao.ts",
+    "aprovar": "tsx apps/worker/src/scripts/aprovar.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",

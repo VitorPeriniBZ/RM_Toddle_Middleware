@@ -7,6 +7,7 @@ import {
   idMappingRepository,
   pgPool,
   registrarPendencia,
+  contarProveniencia,
   resumoPendencias,
   type VereditoPendente,
 } from '@rm-toddle/db';
@@ -26,6 +27,7 @@ import {
   PeriodTimeIndex,
   projetaLote,
   resumirDecisoes,
+  avaliarVolume,
   RmAttendanceTargets,
   POLITICA_PRESENCA,
   type ContextoProjecao,
@@ -248,6 +250,31 @@ async function main(): Promise<void> {
   }
   const filaPendencias = await resumoPendencias();
 
+  // ─── TETO DE VOLUME ───────────────────────────────────────────────────────
+  //
+  // Avaliado no shadow, não só no writer: é aqui que se descobre, ANTES de haver
+  // escrita, se o plano de um dia normal já cairia no gate. Se cair, o limite
+  // está calibrado errado — e é muito melhor saber isso agora do que ver o
+  // primeiro run de produção parar esperando aprovação às 3h da manhã.
+  //
+  // `historico` vem da proveniência: quantas linhas a integração já escreveu.
+  // `null` enquanto nunca escreveu, e aí o veredito é sempre PRECISA_APROVACAO —
+  // de propósito, porque a primeira escrita da vida passa por humano.
+  const jaEscritas = await contarProveniencia();
+  const volume = avaliarVolume(
+    {
+      aEscrever: resumoDecisoes.aEscrever,
+      emEscopo: resumo.projetados.length,
+      historico: jaEscritas.FREQUENCIA ?? null,
+    },
+    {
+      tetoAbsoluto: env.WRITE_TETO_ABSOLUTO,
+      desvioMaxPct: env.WRITE_DESVIO_MAX_PCT,
+      tetoEscopoPct: env.WRITE_TETO_ESCOPO_PCT,
+      pisoSemAprovacao: env.WRITE_PISO_SEM_APROVACAO,
+    },
+  );
+
   // ─── relatório ────────────────────────────────────────────────────────────
   const linhas: string[] = [];
   const p = (s = ''): void => {
@@ -316,6 +343,15 @@ async function main(): Promise<void> {
       p(`      ${d.veredito}  origem=${origemId}`);
       p(`          ${d.porque}`);
     }
+  }
+  p('');
+  p(`  teto de volume                          ${volume.veredito}`);
+  for (const m of volume.motivos) p(`      ${m}`);
+  if (volume.veredito === 'PRECISA_APROVACAO') {
+    p('      -> o writer pararia aqui e esperaria `npm run aprovar`');
+  }
+  if (volume.veredito === 'RECUSADO') {
+    p('      -> nem aprovação libera. O número é a evidência do defeito');
   }
   p('');
   p(`  fila de pendências (total aberto)       ${filaPendencias.abertas}`);

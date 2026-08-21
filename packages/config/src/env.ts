@@ -194,6 +194,28 @@ const envSchema = z.object({
    * 0 = desligado.
    */
   SYNC_DESVIO_MAX_PCT: z.coerce.number().min(0).max(100).default(10),
+
+  // --- Teto de volume da ESCRITA no RM ---
+  //
+  // As guardas por registro (`decidirEscrita`) são cegas para "quantas?". Um
+  // JOIN errado no de-para virando produto cartesiano produz milhares de
+  // decisões individualmente CORRETAS — o erro só existe no agregado.
+  //
+  // Estes quatro números são a única guarda que olha o tamanho do plano.
+  /** Acima disto o run é RECUSADO: o número é a evidência do defeito. */
+  WRITE_TETO_ABSOLUTO: z.coerce.number().int().positive().default(5_000),
+  /** Percentual acima do histórico que exige aprovação humana. */
+  WRITE_DESVIO_MAX_PCT: z.coerce.number().min(0).default(50),
+  /** Percentual do escopo que, sozinho, exige aprovação. */
+  WRITE_TETO_ESCOPO_PCT: z.coerce.number().min(0).max(100).default(30),
+  /**
+   * Abaixo disto nunca pede aprovação.
+   *
+   * Percentual sobre número pequeno é ruído: 2 → 6 linhas é +200% e não
+   * significa nada. Sem o piso, correção miúda viraria pedido de aprovação — e
+   * aprovação que aparece por nada é aprovação que alguém passa a dar sem ler.
+   */
+  WRITE_PISO_SEM_APROVACAO: z.coerce.number().int().min(0).default(50),
 });
 
 const parsed = envSchema.safeParse(process.env);

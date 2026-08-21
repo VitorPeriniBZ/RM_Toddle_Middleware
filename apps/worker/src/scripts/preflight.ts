@@ -161,6 +161,25 @@ function checar(): Checagem[] {
     fatal: false,
   });
 
+  /**
+   * O gate de escrita pode ser desligado sem ninguém notar — basta afrouxar os
+   * dois percentuais. E, ao contrário de uma variável ausente, "gate frouxo"
+   * parece configuração normal. Esta checagem existe para isso ter nome.
+   */
+  const gateFrouxo = env.WRITE_TETO_ESCOPO_PCT >= 100 && env.WRITE_DESVIO_MAX_PCT >= 1_000;
+  c.push({
+    nome: 'Teto de volume da escrita no RM',
+    ok: !gateFrouxo,
+    detalhe: gateFrouxo
+      ? `DESLIGADO na prática (escopo ${env.WRITE_TETO_ESCOPO_PCT}%, desvio ` +
+        `${env.WRITE_DESVIO_MAX_PCT}%) — só o teto absoluto de ` +
+        `${env.WRITE_TETO_ABSOLUTO} ainda barra. Um de-para em produto cartesiano ` +
+        'passaria sem pedir aprovação'
+      : `absoluto ${env.WRITE_TETO_ABSOLUTO}, desvio ${env.WRITE_DESVIO_MAX_PCT}%, ` +
+        `escopo ${env.WRITE_TETO_ESCOPO_PCT}%, piso ${env.WRITE_PISO_SEM_APROVACAO}`,
+    fatal: false,
+  });
+
   c.push({
     nome: 'TODDLE_DEFAULT_YEAR_GROUP_ID',
     ok: Boolean(cfg.toddle.yearGroupPadrao),

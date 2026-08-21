@@ -4,3 +4,4 @@ export * from './idMappingRepository';
 export * from './runRepository';
 export * from './provenanceRepository';
 export * from './pendencyRepository';
+export * from './approvalRepository';
