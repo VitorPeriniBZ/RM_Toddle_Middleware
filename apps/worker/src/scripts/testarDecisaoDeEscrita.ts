@@ -17,8 +17,17 @@ import type { Decisao, EstadoNoRm, Proveniencia, Veredito } from '@rm-toddle/dom
  * acadêmico legal de 300 alunos. É a classe de defeito que nenhum monitor pega.
  */
 
-const USUARIO = 'integracao.toddle';
 let falhas = 0;
+
+/** Como a leitura do RM entrega uma linha que a INTEGRAÇÃO criou. */
+const daIntegracao = (valor: string, tocadaDepois = false): EstadoNoRm => ({
+  valor,
+  autoriaEhIntegracao: true,
+  tocadaDepoisDeCriada: tocadaDepois,
+});
+
+/** Como entrega uma linha que um HUMANO criou. */
+const deHumano = (valor: string): EstadoNoRm => ({ valor, autoriaEhIntegracao: false });
 
 function caso(
   nome: string,
@@ -26,22 +35,8 @@ function caso(
   desejado: string | null,
   noRm: EstadoNoRm | null,
   prov: Proveniencia | null,
-  /**
-   * `null` = a integração NÃO tem usuário configurado.
-   *
-   * Não usar `undefined` aqui: passar `undefined` a um parâmetro com valor
-   * default aciona o default, então o caso "sem usuário" silenciosamente virava
-   * "com usuário" e o teste passava por engano. Foi o que aconteceu na primeira
-   * execução deste arquivo.
-   */
-  usuario: string | null = USUARIO,
 ): Decisao {
-  const d = decidirEscrita(
-    { chaveNatural: 'k', valor: desejado },
-    noRm,
-    prov,
-    usuario ?? undefined,
-  );
+  const d = decidirEscrita({ chaveNatural: 'k', valor: desejado }, noRm, prov);
   const ok = d.veredito === esperado;
   if (!ok) falhas += 1;
   console.log(`  ${ok ? 'ok  ' : 'FALHA'} ${nome}`);
@@ -72,21 +67,21 @@ caso(
   'RM preenchido por humano, sem proveniência -> CONFLITO',
   'CONFLITO_HUMANO',
   'A',
-  { valor: 'P', alteradoPor: '10952118700' },
+  deHumano('P'),
   null,
 );
 caso(
-  'RM preenchido, autoria desconhecida -> CONFLITO (fail-closed)',
+  'RM preenchido, autoria DESCONHECIDA -> CONFLITO (fail-closed)',
   'CONFLITO_HUMANO',
   'A',
   { valor: 'P' },
   null,
 );
 caso(
-  'nosso, mas o RM tem outro valor -> alguém editou depois',
+  'nosso pela proveniência, mas o RM tem outro valor -> editaram depois',
   'EDITADO_POR_FORA',
   'Frações',
-  { valor: 'Frações e decimais', alteradoPor: '05915960758' },
+  deHumano('Frações e decimais'),
   nosso('Frações'),
 );
 
@@ -95,7 +90,7 @@ caso(
   'saiu do Toddle mas existe no RM -> pede humano',
   'REMOCAO_PEDE_HUMANO',
   null,
-  { valor: 'A' },
+  daIntegracao('A'),
   nosso('A'),
 );
 caso('saiu do Toddle e já não existe no RM -> nada', 'NADA_A_FAZER', null, { valor: null }, null);
@@ -103,39 +98,24 @@ caso('saiu do Toddle, RM nunca teve -> nada', 'NADA_A_FAZER', null, null, null);
 
 console.log('\n── recuperação após restauração do NOSSO banco ───────────────');
 caso(
-  'sem proveniência, mas o RM diz que o autor é a integração -> atualiza',
+  'sem proveniência, mas o RM diz que a autoria é da integração -> atualiza',
   'ATUALIZAR_NOSSO',
   'A',
-  { valor: 'P', alteradoPor: USUARIO },
+  daIntegracao('P'),
   null,
 );
 caso(
-  'idem, autoria só em RECCREATEDBY',
-  'ATUALIZAR_NOSSO',
+  'a integração criou, MAS alguém tocou depois -> editaram por fora',
+  'EDITADO_POR_FORA',
   'A',
-  { valor: 'P', criadoPor: USUARIO },
+  daIntegracao('P', true),
   null,
 );
 caso(
-  'autor com espaço em volta ainda é reconhecido',
-  'ATUALIZAR_NOSSO',
-  'A',
-  { valor: 'P', alteradoPor: ` ${USUARIO} ` },
-  null,
-);
-caso(
-  'ALTERADO_POR humano vence CRIADO_POR da integração',
+  'autoria da integração NÃO é derivada (campo ausente) -> fail-closed',
   'CONFLITO_HUMANO',
   'A',
-  { valor: 'P', criadoPor: USUARIO, alteradoPor: '10952118700' },
-  null,
-);
-caso(
-  'sem usuário de integração configurado -> fail-closed',
-  'CONFLITO_HUMANO',
-  'A',
-  { valor: 'P', alteradoPor: USUARIO },
-  null,
+  { valor: 'P', tocadaDepoisDeCriada: false },
   null,
 );
 
@@ -177,6 +157,8 @@ const amostras: Array<[string | null, EstadoNoRm | null, Proveniencia | null]> =
   ['A', { valor: 'P' }, null],
   ['A', { valor: 'P' }, nosso('Z')],
   ['A', { valor: 'P' }, nosso('P')],
+  ['A', daIntegracao('P'), null],
+  ['A', daIntegracao('P', true), null],
   [null, { valor: 'A' }, nosso('A')],
   [null, null, null],
 ];

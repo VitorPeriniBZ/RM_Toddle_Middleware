@@ -77,13 +77,23 @@ export interface Desejado {
   valor: string | null;
 }
 
-/** O que o RM tem hoje, lido por Sentença. `null` = não existe a linha/campo. */
+/**
+ * O que o RM tem hoje, lido por Sentença. `null` = não existe a linha/campo.
+ *
+ * ─── A AUTORIA VEM DERIVADA, NUNCA O LOGIN CRU ──────────────────────────────
+ *
+ * `CRIADO_POR` no RM traz **CPF de professor** — 41 dos 45 autores medidos na
+ * frequência. `rmAttendanceSource` deriva os dois booleanos abaixo e descarta o
+ * original na hora, e este módulo não pode ser a porta por onde o CPF volta a
+ * circular. Quem lê o RM já sabe comparar com a conta da integração; aqui só
+ * chega a conclusão.
+ */
 export interface EstadoNoRm {
   valor: string | null;
-  /** `RECCREATEDBY` — o login que criou. */
-  criadoPor?: string;
-  /** `RECMODIFIEDBY` — o login que alterou por último. */
-  alteradoPor?: string;
+  /** `CRIADO_POR` é a conta da integração? Derivado na leitura. */
+  autoriaEhIntegracao?: boolean;
+  /** `ALTERADO_EM > CRIADO_EM`: alguém tocou depois de criada. */
+  tocadaDepoisDeCriada?: boolean;
 }
 
 /** O que registramos ter escrito. `null` = nunca escrevemos esta chave. */
@@ -114,17 +124,13 @@ const vazio = (v: string | null | undefined): boolean => !v || v.trim() === '';
 /**
  * Decide. A ordem de avaliação é a ordem de gravidade, e não é permutável.
  *
- * @param usuarioIntegracao login da integração no RM (`RM_WS_USER`). Serve de
- *   segunda evidência de autoria quando a proveniência local foi perdida — por
- *   exemplo depois de uma restauração do nosso Postgres. Sem ele, um banco
- *   recém-restaurado veria todo o próprio trabalho anterior como conflito
- *   humano e pararia o sync inteiro.
+ * A ordem importa: proveniência local vence, e só na ausência dela o RM é
+ * consultado como segunda evidência de autoria.
  */
 export function decidirEscrita(
   desejado: Desejado,
   noRm: EstadoNoRm | null,
   proveniencia: Proveniencia | null,
-  usuarioIntegracao?: string,
 ): Decisao {
   const valorRm = noRm?.valor ?? null;
   const existeNoRm = !vazio(valorRm);
@@ -175,33 +181,17 @@ export function decidirEscrita(
     };
   }
 
-  // 4. Existe, é diferente, e não temos proveniência.
-  if (!proveniencia) {
-    // Segunda evidência: o próprio RM diz quem escreveu. Cobre o caso de o nosso
-    // Postgres ter sido restaurado e perdido a proveniência.
-    const autor = noRm?.alteradoPor ?? noRm?.criadoPor;
-    if (usuarioIntegracao && autor && autor.trim() === usuarioIntegracao.trim()) {
+  // 4. Temos proveniência local: ela é a evidência mais forte.
+  if (proveniencia) {
+    if (proveniencia.payloadHash === hashValor(valorRm)) {
+      // É nosso e está intacto desde a última escrita. Único UPDATE autorizado.
       return {
         veredito: 'ATUALIZAR_NOSSO',
-        porque:
-          `sem proveniência local, mas o RM registra "${autor}" como autor — é a ` +
-          'conta da integração, então a linha é nossa',
+        porque: 'a linha é nossa e está intacta desde a última escrita; a origem mudou',
         podeEscrever: true,
         pendencia: false,
       };
     }
-    return {
-      veredito: 'CONFLITO_HUMANO',
-      porque:
-        `o RM tem valor diferente e a autoria é ${autor ? `"${autor}"` : 'desconhecida'}, ` +
-        'não a integração. Sobrescrever apagaria lançamento humano',
-      podeEscrever: false,
-      pendencia: true,
-    };
-  }
-
-  // 5. Temos proveniência, mas o RM não tem o que deixamos: editaram depois.
-  if (proveniencia.payloadHash !== hashValor(valorRm)) {
     return {
       veredito: 'EDITADO_POR_FORA',
       porque:
@@ -212,12 +202,40 @@ export function decidirEscrita(
     };
   }
 
-  // 6. É nosso, está intacto, e o Toddle mudou. Único UPDATE autorizado.
+  // 5. Sem proveniência local. O RM ainda pode confirmar que a linha é nossa.
+  //
+  //    Isto não é conveniência: sem esse caminho, uma restauração do NOSSO
+  //    Postgres faria a integração ver todo o próprio trabalho anterior como
+  //    conflito humano e parar o sync inteiro.
+  if (noRm?.autoriaEhIntegracao) {
+    if (noRm.tocadaDepoisDeCriada) {
+      return {
+        veredito: 'EDITADO_POR_FORA',
+        porque:
+          'a integração criou esta linha, mas ela foi alterada depois, dentro do RM. ' +
+          'Quem mexeu por último manda, e não fomos nós',
+        podeEscrever: false,
+        pendencia: true,
+      };
+    }
+    return {
+      veredito: 'ATUALIZAR_NOSSO',
+      porque:
+        'sem proveniência local, mas o RM registra a conta da integração como autora ' +
+        'e a linha não foi tocada depois — é nossa',
+      podeEscrever: true,
+      pendencia: false,
+    };
+  }
+
+  // 6. Existe, é diferente, e nada indica que seja nosso. Fail-closed.
   return {
-    veredito: 'ATUALIZAR_NOSSO',
-    porque: 'a linha é nossa e está intacta desde a última escrita; a origem mudou',
-    podeEscrever: true,
-    pendencia: false,
+    veredito: 'CONFLITO_HUMANO',
+    porque:
+      'o RM tem valor diferente e a autoria não é da integração. ' +
+      'Sobrescrever apagaria lançamento humano',
+    podeEscrever: false,
+    pendencia: true,
   };
 }
 
