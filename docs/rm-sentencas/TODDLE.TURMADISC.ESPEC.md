@@ -148,12 +148,32 @@ alunos.
 
 Publicar `TODDLE.TURMADISC` **não** destrava tudo. Seguem pendentes:
 
-1. **Academic course codes reais no portal do Toddle.** O `POST /teacher-courses`
-   exige `academicCourseId` (a API responde
-   `Academic Course ID is required. Teacher courses can only be created when
-   linked to an academic course.`). Existem 25 no UBD, **todos de
-   demonstração**, e só 6 são de nível série (`Y1`–`Y6`). Faltam os de `Grade 7`
-   a `Grade 12`. Não há `POST` para criá-los — é portal ou ticket ao Toddle.
+1. ~~**Academic course codes reais no portal do Toddle.**~~ **RESOLVIDO — medido em
+   21/08/2026.** Continua verdade que o `POST /teacher-courses` exige
+   `academicCourseId` e que **não há `POST`** para criar academic course (só
+   `GET /public/v2/academic-course-codes`), então isso segue sendo portal ou
+   ticket ao Toddle. Mas os códigos que faltavam **existem**:
+
+   | currículo | academic course codes | teacher courses |
+   |---|---|---|
+   | `...975` | 18 (`Yr1`–`Yr5`, `GR-5`, `GR-6`) | 16 ACTIVE, séries Year 1–5 |
+   | `...976` | 25 (`Y1`–`Y6`, e `Y7`–`Y12` por disciplina) | 100 ACTIVE, séries Grade 6–12 |
+
+   Os 116 teacher courses casam **exatamente** com os 116 mapeamentos
+   `TEACHER_COURSE` do de-para — nada apontando para o vazio. A afirmação
+   anterior ("só 6 são de nível série, faltam Grade 7 a Grade 12") está
+   desatualizada: hoje há `Y7 ENG/MATHS/SCI`, `Y8 ENG/MATHS/SCI`,
+   `Y9 ENG/MATHS/SOCIAL`, `Y10 ACC/ENG/MATHS/SCI`, `Y11 ENG/MATHS/SCI` e
+   `Y12 BIO/CS/ENG`.
+
+   **O que isso destrava e o que não:** criar turma para uma combinação
+   (série, disciplina) que **já tem** teacher course é possível hoje. Combinação
+   NOVA continua dependendo de alguém criar o academic course no portal — e é
+   isso que pode morder na virada de 2027, se a escola oferecer disciplina nova.
+
+   Nota de leitura da API: o `GET /teacher-courses` **não devolve**
+   `academicCourseId` (devolve `code`, tipo `C-<id>`), embora o `POST` o exija.
+   Não conclua "teacher course sem academic course" a partir do GET.
 2. **E-mails de 5 professores no RM:** 3 sem e-mail nenhum (CODPROF 165, 169,
    166) e 2 com e-mail inválido (104 com domínio `escolaameriana` sem o "c"; 124
    com `lojaode@gmail.com` no campo institucional).

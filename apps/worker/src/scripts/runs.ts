@@ -1,0 +1,165 @@
+import { logger, tenantConfig } from '@rm-toddle/config';
+import { pgPool } from '@rm-toddle/db';
+
+/** Config da escola atendida por este processo. */
+const cfg = tenantConfig;
+
+/**
+ * Responde "os jobs rodaram bem?" a partir da tabela `operation`.
+ *
+ *   npm run runs                 # últimos 20
+ *   npm run runs -- --limite 50
+ *   npm run runs -- --tipo staff.sync
+ *   npm run runs -- --so-problema
+ *
+ * ─── POR QUE ESTE COMANDO EXISTE ────────────────────────────────────────────
+ *
+ * Em 20/08/2026 eu tentei DUAS vezes responder essa pergunta e errei as duas
+ * condições, porque tentei inferir saúde de efeito colateral em dado de negócio:
+ * o contador do BullMQ CAI (o conjunto é podado) e o `max(updated_at)` do de-para
+ * não se move num run legítimo em que nada mudou — que para professor é o caso
+ * normal. O registro de run existe para tornar isso uma consulta; este comando é
+ * a consulta.
+ *
+ * ─── O QUE OLHAR ────────────────────────────────────────────────────────────
+ *
+ * `executing` com `created_at` velho é a assinatura de "morreu no meio": um lote
+ * esgotou as tentativas, foi para a DLQ e nunca fechou o run. Não é bug do
+ * registro — é o sinal.
+ *
+ * `turmas_nao_mapeadas > 0` no sync de professor é o CANÁRIO DE FEVEREIRO:
+ * turma-disciplina nova no RM sem turma no Toddle. Foi assim que a `1714` ficou
+ * de fora com 60 faltas órfãs. Em regime normal é 0.
+ */
+
+interface Linha {
+  tipo: string;
+  estado: string;
+  criado: Date;
+  atualizado: Date;
+  config_version: string | null;
+  payload: Record<string, unknown> | null;
+  resultado: Record<string, unknown> | null;
+}
+
+function arg(nome: string): string | undefined {
+  const i = process.argv.indexOf(`--${nome}`);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+const n = (v: unknown): number | undefined =>
+  v === undefined || v === null ? undefined : Number(v);
+
+async function main(): Promise<void> {
+  const limite = Number(arg('limite') ?? 20);
+  const tipo = arg('tipo');
+  const soProblema = process.argv.includes('--so-problema');
+
+  const { rows } = await pgPool.query<Linha>(
+    `SELECT o.tipo, o.estado, o.created_at AS criado, o.updated_at AS atualizado,
+            o.config_version, o.payload, o.resultado
+       FROM operation o
+       JOIN tenant t ON t.id = o.tenant_id
+      WHERE t.slug = $1
+        AND ($2::text IS NULL OR o.tipo = $2)
+        AND ($3::bool = false OR o.estado <> 'succeeded')
+      ORDER BY o.created_at DESC
+      LIMIT $4`,
+    [cfg.slug, tipo ?? null, soProblema, limite],
+  );
+
+  const p = (s = ''): void => console.log(s);
+  p();
+  p('══════════════════════════════════════════════════════════════════════');
+  p(`  Execuções — tenant ${cfg.slug}${tipo ? `, tipo ${tipo}` : ''}`);
+  p('══════════════════════════════════════════════════════════════════════');
+
+  if (rows.length === 0) {
+    p();
+    p('  Nenhum run registrado.');
+    p();
+    p('  Se os jobs estão rodando, isto significa que este deploy é ANTERIOR ao');
+    p('  registro de execução — o worker precisa ser redeployado. Enquanto isso,');
+    p('  "rodou bem?" só se responde lendo log de container, que morre no deploy.');
+    p();
+    await pgPool.end();
+    return;
+  }
+
+  const marca = { succeeded: 'ok  ', failed: 'FALHA', executing: 'ABERTO' } as Record<string, string>;
+  const agora = Date.now();
+
+  for (const r of rows) {
+    const res = r.resultado ?? {};
+    const pay = r.payload ?? {};
+    const dur = Math.round((new Date(r.atualizado).getTime() - new Date(r.criado).getTime()) / 1000);
+    p();
+    p(
+      `  ${new Date(r.criado).toISOString().slice(0, 16).replace('T', ' ')}  ` +
+        `${(marca[r.estado] ?? r.estado).padEnd(6)}  ${r.tipo.padEnd(16)}  ${dur}s  cfg=${r.config_version ?? '-'}`,
+    );
+
+    // Alunos
+    const emEscopo = n(res.emEscopo) ?? n(pay.emEscopo);
+    const esperados = n(pay.lotesEsperados);
+    if (emEscopo !== undefined) {
+      // Run abortado pela guarda nunca teve lote: mostrar `created=0 updated=0`
+      // ali sugeriria que ele tentou e não conseguiu, quando ele recusou ANTES.
+      const contadores =
+        esperados === undefined
+          ? ''
+          : `  lotes=${n(res.lotesConcluidos) ?? 0}/${esperados}` +
+            `  created=${n(res.created) ?? 0} updated=${n(res.updated) ?? 0} failed=${n(res.failed) ?? 0}`;
+      p(`        emEscopo=${emEscopo}${contadores}`);
+    }
+    // Professores
+    if (res.vinculados !== undefined || res.turmas_nao_mapeadas !== undefined) {
+      p(
+        `        criados=${n(res.criados) ?? 0} vinculados=${n(res.vinculados) ?? 0} ` +
+          `semEmail=${n(res.pulados_sem_email) ?? 0} gerenciadas=${n(res.turmas_gerenciadas) ?? 0} ` +
+          `naoMapeadas=${n(res.turmas_nao_mapeadas) ?? 0}`,
+      );
+    }
+    if (res.motivo) p(`        motivo: ${String(res.motivo)}`);
+    if (res.erro) p(`        erro: ${String(res.erro)}`);
+
+    // Os dois alarmes que este comando existe para tornar visíveis.
+    const naoMapeadas = n(res.turmas_nao_mapeadas) ?? 0;
+    if (naoMapeadas > 0) {
+      p(`        ⚠ ${naoMapeadas} turma-disciplina no RM sem turma no Toddle —`);
+      p('          nota e frequência dela não têm destino. Rode reconciliar:turmas.');
+    }
+    const abertoHa = (agora - new Date(r.atualizado).getTime()) / 3_600_000;
+    if (r.estado === 'executing' && abertoHa > 2) {
+      p(`        ⚠ aberto há ${abertoHa.toFixed(1)}h — morreu no meio. Confira a DLQ.`);
+    }
+  }
+
+  // Resumo: a pergunta "e agora, está bem?" tem de ter resposta na última linha.
+  const ultimoOk = rows.find((r) => r.estado === 'succeeded');
+  const horasDesde = ultimoOk
+    ? (agora - new Date(ultimoOk.criado).getTime()) / 3_600_000
+    : undefined;
+  p();
+  p('──────────────────────────────────────────────────────────────────────');
+  if (horasDesde === undefined) {
+    p('  NENHUM run bem-sucedido no histórico consultado.');
+  } else {
+    // 13h é o limiar recomendado para o heartbeat: o cron tem uma janela de 11h
+    // entre 16:00 e 03:00, então menos que isso alerta toda madrugada.
+    const alerta = horasDesde > 13 ? '  ⚠ acima do limiar de 13h' : '';
+    p(`  Último sucesso há ${horasDesde.toFixed(1)}h (${ultimoOk?.tipo}).${alerta}`);
+  }
+  const presos = rows.filter((r) => r.estado === 'executing').length;
+  const falhos = rows.filter((r) => r.estado === 'failed').length;
+  const plural = (k: number, um: string, muitos: string): string => `${k} ${k === 1 ? um : muitos}`;
+  p(`  Nos ${rows.length} runs listados: ${plural(falhos, 'com falha', 'com falha')}, ${plural(presos, 'aberto', 'abertos')}.`);
+  p();
+
+  await pgPool.end();
+}
+
+main().catch((err) => {
+  logger.error({ err }, 'Falha ao listar execuções');
+  process.exit(1);
+});
