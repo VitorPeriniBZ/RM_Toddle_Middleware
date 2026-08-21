@@ -12,9 +12,10 @@ vale inclusive dentro de função: `CAST(:DATAINICIAL AS VARCHAR(8))`, não
 `CAST(@DATAINICIAL ...)`. O `TODDLE.FREQ.sql` ficou com `@` por meses porque foi
 transcrito como T-SQL comum; é o tipo de erro que só aparece na hora de colar.
 
-Quase todas recebem os mesmos dois parâmetros: `CODCOLIGADA` (Inteiro) e
-`CODPERLET` (**Texto** — a coluna é alfanumérica). A exceção é `TODDLE.FREQ`, que
-recebe **quatro** (mais `DATAINICIAL` e `DATAFINAL`, estilo 112 / `YYYYMMDD`).
+A maioria recebe os mesmos dois parâmetros: `CODCOLIGADA` (Inteiro) e
+`CODPERLET` (**Texto** — a coluna é alfanumérica). As exceções são `TODDLE.FREQ` e
+`TODDLE.PLANOAULA`, que recebem **quatro** (mais `DATAINICIAL` e `DATAFINAL`,
+estilo 112 / `YYYYMMDD`) — nas duas, o volume anual não cabe numa resposta só.
 
 | Sentença | Alimenta | Variável no `.env` | linhas | chave |
 |---|---|---|---|---|
@@ -23,8 +24,13 @@ recebe **quatro** (mais `DATAINICIAL` e `DATAFINAL`, estilo 112 / `YYYYMMDD`).
 | `TODDLE.RESP.sql` | responsáveis | `RM_SENTENCA_RESPONSAVEIS` | 594 | única |
 | `TODDLE.FREQ.sql` | frequência (leitura) | `RM_SENTENCA_FREQUENCIA` | 2.455¹ | única |
 | `TODDLE.NOTAS.sql` | notas de etapa | `RM_SENTENCA_NOTAS` | 7.268 | única |
+| `TODDLE.PLANOAULA.sql` | plano de aula + autoria² | (a definir) | — | **a cadastrar** |
 
 ¹ fevereiro/2026; a Sentença exige janela de data.
+² **Escrita em 21/08/2026 mas NÃO cadastrada e NÃO executada**, e o fluxo que ela
+serve está bloqueado: o Toddle não expõe plano de aula na API. Existe agora porque
+cadastrar Sentença tem prazo de terceiro — ver `TODDLE.PLANOAULA.ESPEC.md` §7.
+Também recebe **quatro** parâmetros, como a `TODDLE.FREQ`.
 
 Cada Sentença tem exatamente **um `.sql`** (puro) e **um `.ESPEC.md`** (a
 documentação). Consolidado em 20/08/2026: existiam `.V1`/`.V2`/`.V3` soltos, sem
