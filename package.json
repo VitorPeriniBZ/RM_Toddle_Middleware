@@ -36,6 +36,7 @@
     "sync:professores": "tsx apps/worker/src/scripts/syncProfessores.ts",
     "preflight": "tsx apps/worker/src/scripts/preflight.ts",
     "checar:config": "./scripts/checar-camada-de-config.sh",
+    "testar:restore": "./scripts/testar-restore.sh",
     "runs": "tsx apps/worker/src/scripts/runs.ts",
     "pendencias": "tsx apps/worker/src/scripts/pendencias.ts",
     "aprovar": "tsx apps/worker/src/scripts/aprovar.ts",
