@@ -1,0 +1,39 @@
+name: CI
+
+# Só a suíte PURA roda aqui, e isso é decisão, não limitação.
+#
+# A suíte de integração exige Postgres e as `.itest.ts` verificam comportamento
+# do banco (índice único com coalesce, aritmética jsonb dentro do UPDATE, CHECKs,
+# ON DELETE RESTRICT). Subir um serviço para isso é possível, mas o valor do CI
+# está em ser rápido e nunca falhar por infraestrutura — um CI que pisca vermelho
+# por rede é um CI que as pessoas param de ler.
+#
+# A `unit` cobre justamente o que não pode errar em silêncio: a decisão de
+# escrever no registro acadêmico de um aluno, e o teto de volume.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # A ordem é deliberada: a trava de config é a mais barata e a que pega o
+      # erro mais chato de reverter (config de escola vazando para fora da
+      # camada, que só dói quando a segunda escola existe).
+      - name: Camada de configuração intacta
+        run: npm run checar:config
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Suíte pura
+        run: npm test
