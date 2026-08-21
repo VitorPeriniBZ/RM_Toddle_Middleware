@@ -254,6 +254,108 @@ A turma é **marcada**, não descartada: descartar faria a contagem mentir e
 eliminaria a checagem `PROF_SO_NA_GERENCIADA`, que é a única defesa contra
 professor invisível.
 
+## D6 — Plano de aula é do professor: Toddle → RM, e só nessa direção
+
+**21/08/2026.** Decisão do Vitor, textual:
+
+> "o plano de aula é o professor que vai inserir, vai do toddle para o totvs."
+
+### Por que isso precisava ser perguntado
+
+A descrição do escopo listava "plano de aula" nas **duas** direções (TOTVS →
+Toddle junto de alunos/turma/professores, e Toddle → TOTVS junto de
+frequência/nota). Isso é conflito de origem: se o ERP manda plano de aula e o
+professor também edita plano de aula no LMS, um apaga o outro.
+
+Três conselheiros consultados chegaram, **separadamente**, à mesma hipótese: são
+dois objetos diferentes com o mesmo nome em português — o **prescrito** (ementa /
+conteúdo programático, que a coordenação determina) e o **ministrado** (registro
+do que foi dado, obrigação de diário). A decisão confirma: o que a integração
+carrega é o **ministrado**.
+
+### O que isso resolve
+
+**Não existe sincronização bidirecional neste sistema.** Cada fluxo tem origem
+única:
+
+| direção | o que carrega |
+|---|---|
+| TOTVS → Toddle | alunos, turma, disciplina, professores |
+| Toddle → TOTVS | frequência, nota, **plano de aula (ministrado)** |
+
+Isso é uma restrição de projeto, não uma escolha de conveniência: uma pessoa não
+mantém merge bidirecional do mesmo objeto, e `last-write-wins` entre um LMS e um
+ERP consultado por SOAP algumas vezes ao dia não é estratégia de conflito — a
+"última escrita" que se observa é a última que se *viu*, não a última que
+*aconteceu*.
+
+### O destino no RM, e a consequência que ninguém previu
+
+Levantado no mesmo dia (ver `docs/rm-dataservers/EduPlanoAulaData.md`): o
+DataServer **`EduPlanoAulaData`** existe e escreve em `SPLANOAULA`, chaveada por
+`IDTURMADISC` + `IDHORARIOTURMA` — **as mesmas chaves que o fluxo de frequência
+já resolve**. O campo é `CONTEUDOEFETIVO` ("Conteúdo efetivo da aula
+ministrada"), nunca `CONTEUDO` (que é o previsto, da coordenação).
+
+Mas: **as 22.367 linhas de plano de aula já existem**, pré-criadas pela grade
+horária, cobrindo o ano letivo inteiro — e **12.166 já têm `CONTEUDOEFETIVO`
+preenchido à mão por professores**.
+
+Então escrever plano de aula é **UPDATE de linha da escola**, não INSERT. E a
+regra de proveniência que protege a frequência — *"só altere linha que a
+integração criou"* — **não traduz**: aqui nenhuma linha é nossa. Aplicada à
+linha, ela bloquearia 100% das escritas; ignorada, sobrescreveria 12.166
+conteúdos humanos.
+
+A regra passa a ser **por campo**: escrever `CONTEUDOEFETIVO` só quando vazio, ou
+quando a última escrita dele foi nossa (proveniência em tabela local). Campo
+preenchido por humano e nunca tocado por nós vira pendência de revisão, não
+sobrescrita.
+
+### O que isso exige, e ainda não existe
+
+1. **Sentença de leitura de plano de aula com autoria.** O schema do DataServer
+   **não expõe** `RECCREATEDBY`/`RECMODIFIEDBY`, embora as colunas existam na
+   tabela. Sem elas a regra por campo não é verificável. É o mesmo papel que a
+   `TODDLE.FREQ` cumpre para frequência — e cadastrar Sentença depende do
+   administrador do RM, ou seja **é dependência de caminho crítico com prazo de
+   terceiro**.
+2. **Saber o que `CONFIRMADO` faz.** Vem `'N'` em 100% das 22.367 linhas. Se
+   `'S'` fecha a aula para edição, é a guarda natural de "não mexer em aula
+   fechada" — o análogo da etapa liberada para nota.
+3. **⛔ O Toddle NÃO expõe plano de aula na API — medido em 21/08/2026.** Este é
+   o bloqueio real do fluxo, e ele não é de código.
+
+   Varredura nos 151 endpoints das duas coleções (2.0 e 1.0): **zero** menção a
+   `unit plan`, `lesson plan` ou equivalente. E, porque coleção Postman pode
+   estar incompleta, foi perguntado ao **servidor**: `unit-plans`, `unitplans`,
+   `lesson-plans`, `lessonplans`, `units`, `lessons`, `planner`, `planners`,
+   `curriculum-units` — todas devolvem `"Route Not Found"`. As aninhadas
+   (`/teacher-courses/:id/units`, `/lesson-plans`, `/lessons`, `/planner`)
+   também, testadas com id real de teacher course. Só `/teacher-courses/:id` e
+   `/teacher-courses/:id/staff` respondem 200.
+
+   O planejamento de unidade é o coração do produto Toddle, e o professor
+   preenche isso pela interface — mas **a Open API V2 não o publica**. Sem
+   superfície de leitura na origem, o fluxo não tem de onde partir.
+
+   **O que fazer:** perguntar ao Toddle se plano de aula é exposto por API (sob
+   solicitação, outro tier, ou roadmap). É pergunta com prazo de terceiro, então
+   vale mandar agora e seguir com os outros fluxos.
+
+   **A alternativa que existe, e por que é ruim:** `POST /assignments` aceita
+   `classId` + `title` + `description` e é legível por `GET`. Daria para carregar
+   conteúdo de aula ali, mas *assignment é tarefa para o aluno*, não registro de
+   aula — obrigaria o professor a criar uma tarefa falsa por aula, e o que
+   chegaria ao diário do RM viria de um campo que significa outra coisa. É gambiarra
+   semântica; só considerar se o Toddle responder que não vai expor plano de aula.
+
+   Consequência de escopo: **`frequência` e `nota` têm superfície completa nos
+   dois lados; `plano de aula` não.** Os dois primeiros podem avançar hoje; o
+   terceiro está bloqueado por terceiro.
+
+---
+
 ## Quanto o dado do RM muda de fato — medido em 10/08/2026
 
 Antes de considerar near-real-time, medi os `RECMODIFIEDON` do próprio RM.
