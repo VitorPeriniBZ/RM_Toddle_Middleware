@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
+import { chaveNaturalRm } from './attendanceProjection';
+import type { EstadoNoRm } from './rmWriteDecision';
 
 /**
  * A config da escola que este processo atende.
@@ -296,4 +298,53 @@ function simNaoOuUndefined(valor: string | undefined): boolean | undefined {
   if (v === 'S' || v === '1' || v === 'TRUE') return true;
   if (v === 'N' || v === '0' || v === 'FALSE') return false;
   return undefined;
+}
+
+/**
+ * A chave natural desta falta, montada pela MESMA função que a projeção usa.
+ *
+ * ─── POR QUE ISTO NÃO PODE SER UMA SEGUNDA IMPLEMENTAÇÃO ────────────────────
+ *
+ * A decisão de escrever cruza dois lados: o que o Toddle quer escrever (chave
+ * montada por `chaveNaturalRm` a partir de `LinhaFrequencia`) e o que o RM já tem
+ * (chave montada aqui a partir de `RmFalta`). Se as duas fórmulas divergirem —
+ * uma vírgula, uma ordem de campo, um `codColigada` como `"1"` contra `1` — o
+ * cruzamento não casa NADA.
+ *
+ * E o modo de falha é o pior possível: tudo aparece como `ESCREVER_NOVO`, a
+ * proteção contra sobrescrever lançamento humano **se desliga em silêncio**, e o
+ * relatório fica bonito. Por isso não há duas fórmulas: há uma, chamada dos dois
+ * lados.
+ */
+export function chaveNaturalDeFalta(f: RmFalta): string {
+  return chaveNaturalRm({
+    codColigada: Number(f.codColigada),
+    idHorarioTurma: f.idHorarioTurma,
+    idTurmaDisc: f.idTurmaDisc,
+    ra: f.ra,
+    data: f.data,
+    presenca: f.presenca,
+  });
+}
+
+/**
+ * Traduz uma falta lida do RM no estado que a decisão de escrita espera.
+ *
+ * A autoria vai DERIVADA (`autoriaEhIntegracao`, `tocadaDepoisDeCriada`) e nunca
+ * como login: `CRIADO_POR` traz CPF de professor, e este módulo já o descarta na
+ * leitura. Ver a nota em `EstadoNoRm`.
+ */
+export function estadoNoRmDeFalta(f: RmFalta): EstadoNoRm {
+  return {
+    valor: f.presenca,
+    autoriaEhIntegracao: f.criadoPelaIntegracao,
+    tocadaDepoisDeCriada: f.alteradaDepoisDeCriada,
+  };
+}
+
+/** Índice das faltas do RM por chave natural, para o cruzamento em lote. */
+export function indexaFaltasPorChave(faltas: RmFalta[]): Map<string, RmFalta> {
+  const m = new Map<string, RmFalta>();
+  for (const f of faltas) m.set(chaveNaturalDeFalta(f), f);
+  return m;
 }

@@ -45,6 +45,26 @@ A janela obrigatória é acerto de desenho: 21.300 linhas no ano, nos dois campi
 Sem parâmetro de campus, de propósito: o middleware filtra por `RM_CODFILIAL`
 (fail-closed) e a coluna `CODFILIAL` no resultado torna o recorte auditável.
 
+## 2.1 A janela tem TETO — medido em 21/08/2026
+
+Uma janela de **7 meses** (`2026-02-01` a `2026-08-21`) **aborta a resposta**:
+
+```
+AxiosError: stream has been aborted   (HTTP 200, corpo truncado)
+  at WsConsultaSqlClient.realizarConsulta
+```
+
+Repare no pior detalhe: o **status é 200**. O RM não devolve erro — ele começa a
+responder e o stream morre no meio. Sem tratamento, isso é indistinguível de
+"resposta vazia", e um sync que interpretasse assim concluiria "nada a fazer" com
+a integração cega.
+
+Referência de tamanho: fevereiro (2.455 linhas) dá ~3 MB e passa
+confortavelmente; o ano inteiro são 21.300 linhas, e 7 meses já não cabem.
+
+**Consequência prática:** o consumidor tem de fatiar por mês, não pedir período
+longo. Uma janela mensal é o padrão seguro, e é o que a via de volta deve usar.
+
 ## 3. O que a verificação provou
 
 ### 3.1 O domínio de `PRESENCA` — a pendência mais antiga do projeto

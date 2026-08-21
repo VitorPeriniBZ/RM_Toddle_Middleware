@@ -1,19 +1,26 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
-import { idMappingRepository, pgPool } from '@rm-toddle/db';
+import { carregarProveniencia, chaveDoMapa, idMappingRepository, pgPool } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
 const cfg = tenantConfig;
 
 import {
+  chaveNaturalRm,
+  decidirEscrita,
+  estadoNoRmDeFalta,
+  fetchFrequenciaFromRm,
+  indexaFaltasPorChave,
   montaLotes,
   PeriodTimeIndex,
   projetaLote,
+  resumirDecisoes,
   RmAttendanceTargets,
   POLITICA_PRESENCA,
   type ContextoProjecao,
+  type Decisao,
 } from '@rm-toddle/domain';
 
 /**
@@ -172,6 +179,37 @@ async function main(): Promise<void> {
   const resumo = projetaLote(registros, ctx);
   const lotes = montaLotes(resumo.projetados);
 
+  // ─── DECISÃO DE ESCRITA ───────────────────────────────────────────────────
+  //
+  // Projetar responde "o RM aceitaria esta linha?". Decidir responde a pergunta
+  // que importa antes de escrever: "posso escrever sem apagar trabalho humano?".
+  //
+  // O RM tem 21.300 ausências lançadas à mão e o `SaveRecord` é upsert que não
+  // diz se inseriu ou atualizou. Então o shadow lê o estado ATUAL do RM na mesma
+  // janela e cruza com a proveniência do que nós já escrevemos.
+  //
+  // Isto roda no shadow, não só no writer, de propósito: o plano tem de ser
+  // visível ANTES de existir escrita. Ver docs/DECISOES.md D1.
+  const noRm = await fetchFrequenciaFromRm({ de: args.de, ate: args.ate });
+  const faltasPorChave = indexaFaltasPorChave(noRm.faltas);
+  const chavesProjetadas = resumo.projetados.map((pr) => pr.chaveRm);
+  const proveniencia = await carregarProveniencia('FREQUENCIA', chavesProjetadas);
+
+  const decisoes = new Map<string, Decisao>();
+  for (const pr of resumo.projetados) {
+    const chave = chaveNaturalRm(pr.linha);
+    const falta = faltasPorChave.get(chave);
+    decisoes.set(
+      pr.origemId,
+      decidirEscrita(
+        { chaveNatural: chave, valor: pr.linha.presenca },
+        falta ? estadoNoRmDeFalta(falta) : null,
+        proveniencia.get(chaveDoMapa(chave)) ?? null,
+      ),
+    );
+  }
+  const resumoDecisoes = resumirDecisoes([...decisoes.values()]);
+
   // ─── relatório ────────────────────────────────────────────────────────────
   const linhas: string[] = [];
   const p = (s = ''): void => {
@@ -219,6 +257,29 @@ async function main(): Promise<void> {
     p('    campus 2 nunca foi cadastrada lá. Enquanto isso, nenhum lançamento real');
     p('    do Toddle tem como apontar para uma aula do RM.');
   }
+  p('');
+  p('── decisão de escrita ────────────────────────────────────────────');
+  p(`  frequência já no RM nesta janela        ${noRm.faltas.length}`);
+  p(`  criadas pela integração                 ${noRm.criadasPelaIntegracao}`);
+  p(`  proveniência nossa encontrada           ${proveniencia.size}`);
+  p('');
+  for (const [veredito, n] of Object.entries(resumoDecisoes.porVeredito).sort((a, b) => b[1] - a[1])) {
+    const marca = veredito === 'CONFLITO_HUMANO' || veredito === 'EDITADO_POR_FORA' ? ' ⚠' : '';
+    p(`      ${veredito.padEnd(22)} ${String(n).padStart(5)}${marca}`);
+  }
+  p('');
+  p(`  ESCREVERIA                              ${resumoDecisoes.aEscrever}`);
+  p(`  PENDÊNCIA (precisa de humano)            ${resumoDecisoes.pendencias}`);
+  if (resumoDecisoes.pendencias > 0) {
+    p('');
+    p('  Nenhuma pendência é escrita automaticamente. Amostra:');
+    const amostra = [...decisoes.entries()].filter(([, d]) => d.pendencia).slice(0, 5);
+    for (const [origemId, d] of amostra) {
+      p(`      ${d.veredito}  origem=${origemId}`);
+      p(`          ${d.porque}`);
+    }
+  }
+
   p('');
   p('── origem ────────────────────────────────────────────────────────');
   p(`  registros lidos do Toddle               ${resumo.lidos}`);
