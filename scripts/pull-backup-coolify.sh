@@ -54,7 +54,7 @@ if [[ -z "${COOLIFY_SSH_HOST:-}" || -z "${COOLIFY_PG_CONTAINER:-}" ]] && [[ -f "
         [[ -z "${!chave:-}" ]] && export "$chave=$valor"
         ;;
     esac
-  done < <(grep -E '^COOLIFY_(SSH_HOST|PG_CONTAINER|PG_DB|PG_USER)=' "$REPO/.env" || true)
+  done < <(grep -E '^(COOLIFY_(SSH_HOST|PG_CONTAINER|PG_DB|PG_USER)|HEARTBEAT_URL_BACKUP)=' "$REPO/.env" || true)
 fi
 
 : "${COOLIFY_SSH_HOST:?COOLIFY_SSH_HOST não definida (ex.: deploy@servidor) — ambiente ou .env}"
@@ -68,18 +68,57 @@ ALVO="$DESTINO/coolify-$STAMP.sql.gz"
 PARCIAL="$ALVO.parcial"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-falhar() { log "FALHOU: $*"; rm -f "$PARCIAL"; exit 1; }
+
+# ─── ALERTA POR AUSÊNCIA DE SUCESSO ──────────────────────────────────────────
+#
+# Este backup falhou CALADO em 15/08, 16/08 e 21/08/2026 — visível só para quem
+# abrisse este log à mão, o que ninguém faz. Mesmo desenho do heartbeat dos jobs
+# do worker: pinga vivo, e o monitor externo reclama do silêncio.
+#
+# HEARTBEAT_URL_BACKUP vazia = desligado. `--max-time 5` porque monitor lento não
+# pode travar o backup, e `|| true` porque monitor fora do ar não pode reprovar um
+# backup que deu certo.
+ping_hb() { # $1 = "" (sucesso) | "/fail"
+  [[ -n "${HEARTBEAT_URL_BACKUP:-}" ]] || return 0
+  curl -fsS --max-time 5 -o /dev/null "${HEARTBEAT_URL_BACKUP%/}$1" || true
+}
+
+INICIO_EPOCH=$(date +%s)
+
+# Reporta o OBSERVADO, nunca um palpite de causa.
+#
+# A mensagem antiga era "ssh/pg_dump retornou erro (chave SSH? nome do container?
+# BatchMode exige auth sem senha)" — três hipóteses, TODAS erradas nas 3 falhas
+# reais, e custaram tempo procurando no lugar errado. O que resolveu o caso foi a
+# DURAÇÃO: sucesso leva 2-6s, e as 3 falhas levaram 0s, o que com
+# ConnectTimeout=20 só pode ser rede indisponível no instante do disparo (laptop
+# recém-acordado). Por isso duração é campo permanente daqui em diante, e o
+# stderr do ssh passou a ser capturado em vez de jogado em /dev/null.
+falhar() {
+  local dur=$(( $(date +%s) - INICIO_EPOCH ))
+  log "FALHOU em ${dur}s: $*"
+  if [[ "$dur" -le 1 ]]; then
+    log "  duracao ~0s com ConnectTimeout=20: a rede nao estava disponivel no disparo (nao e chave nem container)"
+  fi
+  rm -f "$PARCIAL"
+  ping_hb /fail
+  exit 1
+}
 
 log "puxando dump de $COOLIFY_SSH_HOST (container $COOLIFY_PG_CONTAINER, banco $PG_DB)"
 
 # `set -o pipefail` já está ativo: se o pg_dump ou o ssh falharem, o pipe falha —
 # sem isto um dump vazio passaria por sucesso, que é o pior modo de falha
 # possível num backup.
+ERRO_SSH="$(mktemp)"
 if ! ssh -o BatchMode=yes -o ConnectTimeout=20 "$COOLIFY_SSH_HOST" \
       "docker exec -u postgres '$COOLIFY_PG_CONTAINER' pg_dump -d '$PG_DB' -U '$PG_USER' --no-owner --no-privileges" \
-      2>/dev/null | gzip -9 > "$PARCIAL"; then
-  falhar "ssh/pg_dump retornou erro (chave SSH? nome do container? BatchMode exige auth sem senha)"
+      2>"$ERRO_SSH" | gzip -9 > "$PARCIAL"; then
+  MOTIVO="$(tr -d '\r' < "$ERRO_SSH" | grep -v '^$' | tail -3 | tr '\n' ' ')"
+  rm -f "$ERRO_SSH"
+  falhar "ssh/pg_dump: ${MOTIVO:-(sem stderr)}"
 fi
+rm -f "$ERRO_SSH"
 
 # --- verificações: backup que não é verificado não é backup -------------------
 BYTES=$(wc -c < "$PARCIAL" | tr -d ' ')
@@ -119,3 +158,10 @@ if [[ "$TOTAL" -gt "$RETER" ]]; then
 fi
 
 log "dumps retidos: $(find "$DESTINO" -name 'coolify-*.sql.gz' -type f | wc -l | tr -d ' ')/$RETER"
+
+# Ping de VIVO só aqui: depois de o dump existir, passar nas verificações
+# (tamanho, gzip íntegro, id_mapping com linhas) e ser promovido de .parcial.
+# Pingar antes disso transformaria o monitor em teatro — ele confirmaria que o
+# script rodou, não que existe backup.
+ping_hb ""
+log "duracao total: $(( $(date +%s) - INICIO_EPOCH ))s"

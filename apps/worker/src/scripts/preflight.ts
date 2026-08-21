@@ -125,6 +125,40 @@ function checar(): Checagem[] {
     fatal: false,
   });
 
+  /**
+   * Não derruba o deploy: monitor é opcional por desenho, e um ambiente de teste
+   * legitimamente não tem. Mas AVISA alto, porque "esqueci de configurar o
+   * alerta" é indistinguível de "está tudo bem" — e foi exatamente assim que 8
+   * dias de integração morta passaram sem ninguém notar, em 12-20/08/2026.
+   */
+  const monitorados = [
+    ['alunos', env.HEARTBEAT_URL_ALUNOS],
+    ['professores', env.HEARTBEAT_URL_PROFESSORES],
+  ] as const;
+  const semMonitor = monitorados.filter(([, url]) => !url).map(([nome]) => nome);
+  c.push({
+    nome: 'HEARTBEAT_URL_* (alerta por ausência de sucesso)',
+    ok: semMonitor.length === 0,
+    detalhe:
+      semMonitor.length === 0
+        ? 'os dois jobs pingam monitor externo'
+        : `SEM monitor: ${semMonitor.join(', ')}. Nenhum alerta será emitido se o job ` +
+          'parar de rodar — a falha volta a ser silenciosa, que é o modo em que a ' +
+          'integração ficou 8 dias parada sem ninguém saber',
+    fatal: false,
+  });
+
+  c.push({
+    nome: 'SYNC_DESVIO_MAX_PCT (guarda de desvio de contagem)',
+    ok: env.SYNC_DESVIO_MAX_PCT > 0,
+    detalhe:
+      env.SYNC_DESVIO_MAX_PCT > 0
+        ? `${env.SYNC_DESVIO_MAX_PCT}%`
+        : 'DESLIGADA (0) — se o RM servir uma cópia antiga da base, o sync ' +
+          'sobrescreve o Toddle com dado velho reportando failed=0',
+    fatal: false,
+  });
+
   c.push({
     nome: 'TODDLE_DEFAULT_YEAR_GROUP_ID',
     ok: Boolean(env.TODDLE_DEFAULT_YEAR_GROUP_ID),

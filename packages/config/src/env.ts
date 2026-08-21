@@ -161,6 +161,39 @@ const envSchema = z.object({
   REDIS_URL: z.string().default('redis://localhost:6379'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   NODE_ENV: z.string().default('development'),
+
+  // --- Alerta por AUSÊNCIA de sucesso (dead man's switch) ---
+  //
+  // URL de um monitor externo (Healthchecks.io, Uptime Kuma, ntfy com cron
+  // check...). O job dá um ping ao terminar; o SERVIÇO EXTERNO alerta quando o
+  // ping NÃO chega.
+  //
+  // A inversão é o ponto inteiro, e é o que faltava: entre 12 e 20/08/2026 a
+  // integração ficou 8 dias morta e ninguém soube. Um alerta construído DENTRO
+  // deste processo não teria disparado — o processo era justamente o que estava
+  // parado. Alerta por silêncio sobrevive a container morto, Redis fora, senha
+  // expirada e Sentença apagada.
+  //
+  // Vazias = desligado, sem quebrar nada. Ninguém é obrigado a ter monitor.
+  //
+  // LIMIAR, no monitor externo: o cron é 4x ao dia, mas os intervalos são
+  // DESIGUAIS — 03:00, 09:00, 12:00, 16:00 deixa uma janela de 11h entre 16:00 e
+  // 03:00. Limiar de 8h alertaria toda madrugada, e alerta que cria ruído é
+  // alerta que passa a ser ignorado. Use ~13h (ou "grace" de 1h sobre 12h).
+  HEARTBEAT_URL_ALUNOS: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  HEARTBEAT_URL_PROFESSORES: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  /** Timeout do ping. Curto de propósito: monitor lento não pode atrasar o job. */
+  HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+
+  /**
+   * Guarda de desvio de contagem, em pontos percentuais. O sync é completo: se o
+   * RM voltar a servir uma cópia ANTIGA da base — que já aconteceu em 13-15/08 —
+   * ele sobrescreveria os alunos no Toddle com dado velho e `failed=0`, sem um
+   * único log de erro. Esta é a única defesa contra isso.
+   *
+   * 0 = desligado.
+   */
+  SYNC_DESVIO_MAX_PCT: z.coerce.number().min(0).max(100).default(10),
 });
 
 const parsed = envSchema.safeParse(process.env);
