@@ -51,6 +51,23 @@ export interface RmEtapaFalta {
   dtFim: string;
   /** Frequência mínima da etapa (75,00 na EAV). Informativo. */
   freqMin: string | null;
+  /**
+   * `AULASDADAS` da etapa, como o RM tem hoje.
+   *
+   * NÃO é informativo: medido em 21/08/2026, o `SaveRecord` **recusa** a escrita
+   * sem ele — "O campo número de aulas dadas deve ser preenchido", em
+   * `EduFrequenciaDiariaObj.ValidaEtapa`. A documentação dizia que omitir era o
+   * certo porque o XSD marca `minOccurs=0`; opcional no XSD não é opcional na
+   * regra de negócio.
+   *
+   * E é o DENOMINADOR dos 75% de reprovação por falta. Por isso o writer **ecoa
+   * este valor de volta** em vez de calcular: administrar o número de aulas dadas
+   * mudaria quem reprova, e isso não é decisão de integração.
+   *
+   * `null` = a etapa não tem o valor, e aí não há o que ecoar — a escrita
+   * naquela etapa é impossível até alguém preencher no RM.
+   */
+  aulasDadas: string | null;
 }
 
 const DIAS_UTEIS = new Set(['2', '3', '4', '5', '6']);
@@ -206,6 +223,7 @@ export class RmAttendanceTargets {
         dtInicio,
         dtFim,
         freqMin: row.FREQMIN ?? null,
+        aulasDadas: row.AULASDADAS ?? null,
       };
       const atual = etapasPorTurmaDisc.get(idTurmaDisc);
       if (atual) atual.push(etapa);

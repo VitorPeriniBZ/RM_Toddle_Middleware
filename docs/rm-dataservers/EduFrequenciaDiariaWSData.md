@@ -99,8 +99,38 @@ revisão — nunca "vence o último".
 desta escola é **75%**. Escrever valor errado ali não erra um registro de
 presença: altera o cálculo de reprovação por falta.
 
-A gramática permite **omitir o campo**, e é o que devemos fazer. O middleware
-não tem por que administrar o número de aulas dadas.
+> ## ⛔ MEDIDO EM 21/08/2026 — ESTA SEÇÃO ESTAVA ERRADA
+>
+> O aviso "não verificado" abaixo estava certo em duvidar, e a conclusão acima
+> estava errada. **`AULASDADAS` é OBRIGATÓRIO.** O primeiro `SaveRecord` real
+> deste projeto foi recusado com:
+>
+> ```
+> O campo número de aulas dadas deve ser preenchido.
+>   at RM.Edu.NotaFalta.EduFrequenciaDiariaObj.ValidaEtapa(...)
+> ```
+>
+> Opcional no XSD **não** é opcional na regra de negócio. `minOccurs=0` descreve
+> a gramática, não a validação do domínio.
+>
+> **E a saída não é calcular.** Este campo é o denominador dos 75% de reprovação
+> por falta; administrá-lo mudaria quem reprova. O writer **ecoa o valor que o RM
+> já tem** — lido de `SEtapas.AULASDADAS` pela etapa alvo, via `EduEtapasData`, e
+> devolvido intacto. Está em `RmEtapaFalta.aulasDadas`.
+>
+> Com o eco, a mesma escrita foi ACEITA e confirmada por leitura (223 → 224
+> faltas na janela), e a resposta de sucesso é a PK:
+> `1;5760;1655;202100172;05/03/2026 00:00:00`.
+>
+> **Uma corrida conhecida e não resolvida:** entre ler o `AULASDADAS` e escrever,
+> um professor pode editá-lo — e o eco reverteria a edição dele em silêncio, no
+> campo de maior consequência do sistema. Mitigação obrigatória: leitura e escrita
+> no MESMO job, janela mínima, e o valor ecoado gravado na proveniência por campo,
+> para a reversão ser ao menos detectável. Nunca ler às 08:00 e escrever às 08:40.
+>
+> `CODSUBTURMA` segue omitível: não existe subturma na coligada 1.
+
+A gramática permite **omitir o campo** — mas a regra de negócio NÃO (ver acima).
 
 > **Não verificado:** opcional no XSD não é o mesmo que opcional na regra de
 > negócio — a aplicação pode exigir o campo em tempo de execução. É a primeira
@@ -604,11 +634,18 @@ Contexto obrigatório do `wsDataServer`:
    ausência é `UNMAPPED`/`OUT_OF_SCOPE`, não tentativa de SOAP. Existem **86.519
    registros de frequência de demonstração** no tenant do Toddle contra 253
    alunos reais — "não é demo" e "não está arquivado" **não** são autorização.
-3. **Testar se `AULASDADAS` omitido é aceito** (§4).
+3. ~~**Testar se `AULASDADAS` omitido é aceito** (§4).~~ **FEITO em 21/08: NÃO é
+   aceito.** Ecoar o valor do RM. Ver o aviso na §4.
 4. **Timeout é `SENT_UNKNOWN`, não falha.** Reler o RM antes de reenviar.
 5. **Não usar `Delete` nem SQL direto.** `isDeleted=true` no Toddle é evento de
    revogação no LMS; no RM é alteração de registro acadêmico legal, e passa por
    aprovação.
+6. **`PRESENCA='P'` REMOVE o registro — medido em 21/08/2026.** Era inferência num
+   comentário ("o `SFREQUENCIA` guarda só ausência, por isso 'P' remove"); agora é
+   fato: escrevi uma falta (223 → 224) e a removi com `'P'` (224 → 223), conferindo
+   por leitura nas duas direções. **É o nosso único caminho de desfazer**, e por
+   isso a política de retry tem de ser por veredito: operação destrutiva não
+   retenta às cegas, vai para a DLQ na primeira falha.
 
 ## 10. DataServers sondados
 

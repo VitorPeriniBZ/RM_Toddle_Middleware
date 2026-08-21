@@ -40,7 +40,8 @@
     "teste:pendencias": "tsx apps/worker/src/scripts/testarPendencias.ts",
     "pendencias": "tsx apps/worker/src/scripts/pendencias.ts",
     "teste:teto": "tsx apps/worker/src/scripts/testarTetoEAprovacao.ts",
-    "aprovar": "tsx apps/worker/src/scripts/aprovar.ts"
+    "aprovar": "tsx apps/worker/src/scripts/aprovar.ts",
+    "lancar:falta": "tsx apps/worker/src/scripts/lancarUmaFalta.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",

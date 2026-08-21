@@ -13,13 +13,20 @@ import { logger, rmSoapConfigurado, tenantConfig, type TenantConfig } from '@rm-
  *   auth      HTTP Basic, o mesmo usuário do wsConsultaSQL
  *   contexto  CODCOLIGADA;CODFILIAL;CODTIPOCURSO;CODSISTEMA — obrigatório
  *
- * ─── POR QUE NÃO EXISTE `saveRecord` AQUI ───────────────────────────────────
+ * ─── `saveRecord` PASSOU A EXISTIR EM 21/08/2026 ────────────────────────────
  *
- * `SaveRecord` existe no serviço e funciona. Não está implementado neste cliente
- * de propósito: enquanto o shadow mode não tiver validado a projeção, um método
- * de escrita disponível é só uma chamada acidental de distância de alterar
- * registro acadêmico legal. Quando for a hora, ele entra junto com a máquina de
- * aprovação (operation/approval), não antes.
+ * Este cabeçalho dizia: "não está implementado de propósito... quando for a
+ * hora, ele entra junto com a máquina de aprovação (operation/approval), não
+ * antes."
+ *
+ * A condição foi cumprida. Existem agora: decisão por registro
+ * (`decidirEscrita`, 6 vereditos), proveniência do que escrevemos
+ * (`rm_write_provenance`), fila do que foi recusado (`write_pendency`) e teto de
+ * volume com gate humano (`avaliarVolume` + `operation`/`approval`).
+ *
+ * O método NÃO é usado por nenhum job agendado. Só o
+ * `npm run lancar:falta -- --executar` o chama, com uma linha, e por decisão
+ * explícita de quem digita.
  *
  * ─── DUAS ARMADILHAS MEDIDAS ────────────────────────────────────────────────
  *
@@ -255,6 +262,75 @@ class WsDataServerClient {
     } catch {
       return rawFault.slice(0, 400);
     }
+  }
+
+  /**
+   * `SaveRecord` — a operação de ESCRITA. Uma chamada, um dataset.
+   *
+   * ─── HTTP 200 NÃO É SUCESSO ─────────────────────────────────────────────
+   *
+   * O RM devolve erro de negócio com **HTTP 200** e a mensagem dentro de
+   * `SaveRecordResult`, muitas vezes com stack trace .NET. Este projeto já se
+   * enganou duas vezes com isso — inclusive um script que reportou "o RM aceitou
+   * um dataset vazio" porque só procurava `<faultstring>`.
+   *
+   * Então o sucesso aqui é afirmado por parser ESTRITO, e mesmo assim
+   * `ok: true` significa "o RM não reclamou", nunca "o dado está lá". A prova de
+   * gravação é reler.
+   *
+   * ─── TIMEOUT NÃO É FALHA ────────────────────────────────────────────────
+   *
+   * §9.4 de EduFrequenciaDiariaWSData.md: timeout é `SENT_UNKNOWN`. A escrita
+   * pode ter acontecido. Retentar às cegas duplicaria; tratar como falha
+   * esconderia. Por isso `desconhecido: true` é um terceiro estado, e quem chama
+   * TEM de reler o RM antes de decidir qualquer coisa.
+   */
+  async saveRecord(
+    dataServer: string,
+    xmlDataset: string,
+    contexto: string,
+  ): Promise<{ ok: boolean; desconhecido: boolean; resposta: string }> {
+    if (!rmSoapConfigurado(this.cfg)) {
+      throw new RmDataServerError('wsDataServer não configurado.', dataServer);
+    }
+
+    const body =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      `<soap:Envelope xmlns:soap="${SOAP_NS}" xmlns:tot="${TOTVS_NS}">` +
+      '<soap:Body><tot:SaveRecord>' +
+      `<tot:DataServerName>${escapeXml(dataServer)}</tot:DataServerName>` +
+      `<tot:XML>${escapeXml(xmlDataset)}</tot:XML>` +
+      `<tot:Contexto>${escapeXml(contexto)}</tot:Contexto>` +
+      '</tot:SaveRecord></soap:Body></soap:Envelope>';
+
+    let texto: string;
+    try {
+      const res = await this.http.post('', body, {
+        headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/SaveRecord` },
+      });
+      texto = String(res.data ?? '');
+    } catch (err) {
+      const e = err as { code?: string; message?: string };
+      const transitorio =
+        e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT' || /timeout|aborted/i.test(e.message ?? '');
+      if (transitorio) {
+        logger.warn(
+          { dataServer, err: e.message },
+          'SaveRecord sem resposta — a escrita PODE ter acontecido. Releia o RM antes de reenviar',
+        );
+        return { ok: false, desconhecido: true, resposta: e.message ?? 'timeout' };
+      }
+      throw new RmDataServerError(`SaveRecord falhou: ${e.message}`, dataServer);
+    }
+
+    const m = /<SaveRecordResult[^>]*>([\s\S]*?)<\/SaveRecordResult>/.exec(texto);
+    const resultado = (m?.[1] ?? texto).trim();
+    // Erro de negócio do RM: texto longo, stack trace, "não foi encontrada",
+    // "inválido". Sucesso costuma ser vazio ou um id curto.
+    const pareceErro =
+      /erro|error|exception|não foi|nao foi|inválid|invalid|falha|at RM\./i.test(resultado) ||
+      resultado.length > 200;
+    return { ok: !pareceErro, desconhecido: false, resposta: resultado };
   }
 }
 
