@@ -1,5 +1,5 @@
 import { logger, tenantConfig } from '@rm-toddle/config';
-import { pgPool } from '@rm-toddle/db';
+import { contarProveniencia, pgPool, resumoPendencias } from '@rm-toddle/db';
 
 /** Config da escola atendida por este processo. */
 const cfg = tenantConfig;
@@ -50,6 +50,28 @@ function arg(nome: string): string | undefined {
 const n = (v: unknown): number | undefined =>
   v === undefined || v === null ? undefined : Number(v);
 
+/**
+ * A fila de pendências e o total escrito no RM.
+ *
+ * Sai em função porque tem de aparecer TAMBÉM quando não há run registrado —
+ * pendência sem run é o caso de um deploy antigo do worker convivendo com um
+ * shadow rodado à mão, e é justamente aí que ninguém iria olhar.
+ */
+async function mostrarFila(p: (s?: string) => void): Promise<void> {
+  const fila = await resumoPendencias();
+  if (fila.abertas > 0) {
+    p(`  ⚠ ${fila.abertas} pendência(s) de escrita ABERTA(S) — ${JSON.stringify(fila.porVeredito)}`);
+    if (fila.maisAntigaDias !== undefined && fila.maisAntigaDias > 7) {
+      p(`      a mais antiga está aberta há ${fila.maisAntigaDias} dias`);
+    }
+    p('      -> npm run pendencias');
+  }
+  const escrito = await contarProveniencia();
+  if (Object.keys(escrito).length > 0) {
+    p(`  linhas escritas no RM pela integração: ${JSON.stringify(escrito)}`);
+  }
+}
+
 async function main(): Promise<void> {
   const limite = Number(arg('limite') ?? 20);
   const tipo = arg('tipo');
@@ -81,6 +103,8 @@ async function main(): Promise<void> {
     p('  Se os jobs estão rodando, isto significa que este deploy é ANTERIOR ao');
     p('  registro de execução — o worker precisa ser redeployado. Enquanto isso,');
     p('  "rodou bem?" só se responde lendo log de container, que morre no deploy.');
+    p();
+    await mostrarFila(p);
     p();
     await pgPool.end();
     return;
@@ -150,6 +174,8 @@ async function main(): Promise<void> {
     const alerta = horasDesde > 13 ? '  ⚠ acima do limiar de 13h' : '';
     p(`  Último sucesso há ${horasDesde.toFixed(1)}h (${ultimoOk?.tipo}).${alerta}`);
   }
+  await mostrarFila(p);
+
   const presos = rows.filter((r) => r.estado === 'executing').length;
   const falhos = rows.filter((r) => r.estado === 'failed').length;
   const plural = (k: number, um: string, muitos: string): string => `${k} ${k === 1 ? um : muitos}`;

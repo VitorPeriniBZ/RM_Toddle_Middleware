@@ -1,7 +1,15 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
-import { carregarProveniencia, chaveDoMapa, idMappingRepository, pgPool } from '@rm-toddle/db';
+import {
+  carregarProveniencia,
+  chaveDoMapa,
+  idMappingRepository,
+  pgPool,
+  registrarPendencia,
+  resumoPendencias,
+  type VereditoPendente,
+} from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
@@ -12,6 +20,7 @@ import {
   decidirEscrita,
   estadoNoRmDeFalta,
   fetchFrequenciaFromRm,
+  hashValor,
   indexaFaltasPorChave,
   montaLotes,
   PeriodTimeIndex,
@@ -210,6 +219,35 @@ async function main(): Promise<void> {
   }
   const resumoDecisoes = resumirDecisoes([...decisoes.values()]);
 
+  // ─── PENDÊNCIAS: a única escrita que o shadow faz, e é no NOSSO banco ─────
+  //
+  // Registrar aqui, e não só no writer, é o que torna a fila útil antes de
+  // existir escrita no RM: dá para descobrir HOJE quantos conflitos a via de
+  // volta encontraria, e com a coordenação decidir a política antes de a primeira
+  // escrita acontecer.
+  //
+  // Não viola o "shadow não escreve": o contrato do shadow é não tocar RM nem
+  // Toddle. Anotar no nosso Postgres que alguém precisa olhar não muda dado de
+  // ninguém.
+  let pendenciasAbertas = 0;
+  for (const pr of resumo.projetados) {
+    const d = decisoes.get(pr.origemId);
+    if (!d?.pendencia) continue;
+    const chave = chaveNaturalRm(pr.linha);
+    const abriu = await registrarPendencia({
+      entidade: 'FREQUENCIA',
+      chaveNatural: chave,
+      veredito: d.veredito as VereditoPendente,
+      porque: d.porque,
+      valorDesejado: pr.linha.presenca,
+      valorNoRm: faltasPorChave.get(chave)?.presenca ?? null,
+      hashDesejado: hashValor(pr.linha.presenca),
+      origemId: pr.origemId,
+    });
+    if (abriu) pendenciasAbertas += 1;
+  }
+  const filaPendencias = await resumoPendencias();
+
   // ─── relatório ────────────────────────────────────────────────────────────
   const linhas: string[] = [];
   const p = (s = ''): void => {
@@ -272,12 +310,21 @@ async function main(): Promise<void> {
   p(`  PENDÊNCIA (precisa de humano)            ${resumoDecisoes.pendencias}`);
   if (resumoDecisoes.pendencias > 0) {
     p('');
-    p('  Nenhuma pendência é escrita automaticamente. Amostra:');
+    p(`  ${pendenciasAbertas} pendência(s) ABERTA(S) nesta passada — nenhuma escrita automática.`);
     const amostra = [...decisoes.entries()].filter(([, d]) => d.pendencia).slice(0, 5);
     for (const [origemId, d] of amostra) {
       p(`      ${d.veredito}  origem=${origemId}`);
       p(`          ${d.porque}`);
     }
+  }
+  p('');
+  p(`  fila de pendências (total aberto)       ${filaPendencias.abertas}`);
+  if (filaPendencias.abertas > 0) {
+    p(`      por veredito: ${JSON.stringify(filaPendencias.porVeredito)}`);
+    if (filaPendencias.maisAntigaDias !== undefined) {
+      p(`      mais antiga: ${filaPendencias.maisAntigaDias} dia(s)`);
+    }
+    p('      -> npm run pendencias');
   }
 
   p('');
