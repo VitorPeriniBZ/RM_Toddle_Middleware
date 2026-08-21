@@ -34,7 +34,9 @@
     "preflight": "tsx apps/worker/src/scripts/preflight.ts",
     "teste:run": "tsx apps/worker/src/scripts/testarRegistroDeRun.ts",
     "checar:config": "./scripts/checar-camada-de-config.sh",
-    "runs": "tsx apps/worker/src/scripts/runs.ts"
+    "runs": "tsx apps/worker/src/scripts/runs.ts",
+    "teste:decisao": "tsx apps/worker/src/scripts/testarDecisaoDeEscrita.ts",
+    "teste:proveniencia": "tsx apps/worker/src/scripts/testarProveniencia.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
