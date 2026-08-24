@@ -67,6 +67,16 @@ export interface Recusado {
   origemId: string;
   motivo: MotivoRecusa;
   detalhe: string;
+  /**
+   * Só em `OPCAO_SEM_POLITICA`: o código de chamada que ficou sem tradução.
+   *
+   * É campo estruturado, e não texto a ser extraído do `detalhe`, porque quem
+   * consome isto abre uma PENDÊNCIA agrupada por código — uma linha dizendo
+   * "decidam o que 'Leave' significa", não uma por aluno por aula. Fazer isso
+   * por regex sobre mensagem de erro quebraria no dia em que alguém melhorar a
+   * frase.
+   */
+  opcao?: { abreviacao: string; rotulo: string };
 }
 
 export type ResultadoProjecao = Projetado | Recusado;
@@ -119,7 +129,12 @@ export function projetaRegistro(
   ctx: ContextoProjecao,
 ): ResultadoProjecao {
   const origemId = id(registro.id) ?? '(sem id)';
-  const recusa = (motivo: MotivoRecusa, detalhe: string): Recusado => ({
+  const recusa = (
+    motivo: MotivoRecusa,
+    detalhe: string,
+    opcao?: { abreviacao: string; rotulo: string },
+  ): Recusado => ({
+    ...(opcao ? { opcao } : {}),
     status: 'recusado',
     origemId,
     motivo,
@@ -236,6 +251,7 @@ export function projetaRegistro(
       'OPCAO_SEM_POLITICA',
       `opção "${registro.attendanceOption?.label ?? '?'}" (abreviação "${abrev}") não tem política ` +
         'de tradução para PRESENCA. Precisa de decisão da escola antes de virar lançamento.',
+      { abreviacao: abrev, rotulo: registro.attendanceOption?.label ?? '?' },
     );
   }
 

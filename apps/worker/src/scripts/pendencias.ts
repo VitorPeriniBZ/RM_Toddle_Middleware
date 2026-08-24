@@ -100,8 +100,16 @@ async function main(): Promise<void> {
     p(`  ${marca} ${x.veredito}   ${x.entidade}${x.campo ? ` / ${x.campo}` : ''}`);
     p(`      id        ${x.id}`);
     p(`      chave     ${x.chaveNatural}`);
-    p(`      Toddle    ${x.valorDesejado ?? '(removido)'}`);
-    p(`      RM        ${x.valorNoRm ?? '(ausente)'}`);
+    // "(removido)" só faz sentido quando havia um valor e ele sumiu do Toddle —
+    // que é o caso de REMOCAO_PEDE_HUMANO. Em OPCAO_SEM_POLITICA a pendência é
+    // sobre o CÓDIGO, não sobre uma linha, e nunca houve valor a desejar; imprimir
+    // "removido" ali faria parecer que um professor apagou um lançamento.
+    if (x.veredito === 'OPCAO_SEM_POLITICA') {
+      p('      escopo    o código de chamada, não uma aula — decisão de política');
+    } else {
+      p(`      Toddle    ${x.valorDesejado ?? '(removido)'}`);
+      p(`      RM        ${x.valorNoRm ?? '(ausente)'}`);
+    }
     p(`      porque    ${x.porque}`);
     p(
       `      idade     ${idade}d, vista ${x.vezesVista}x` +

@@ -28,7 +28,21 @@ const cfg = tenantConfig;
  * perder o item custa menos.
  */
 
-export type VereditoPendente = 'CONFLITO_HUMANO' | 'EDITADO_POR_FORA' | 'REMOCAO_PEDE_HUMANO';
+/**
+ * O que pode aterrar nesta fila.
+ *
+ * Os três primeiros vêm de `decidirEscrita`. `OPCAO_SEM_POLITICA` vem da
+ * PROJEÇÃO (migration 012) e é a exceção deliberada: um código de chamada sem
+ * par em PRESENCA não é defeito de dado, é decisão de escola pendente — e sem
+ * ela o aluno fica sem frequência no RM, em silêncio.
+ */
+export type VereditoPendente =
+  | 'CONFLITO_HUMANO'
+  | 'EDITADO_POR_FORA'
+  | 'REMOCAO_PEDE_HUMANO'
+  | 'OPCAO_SEM_POLITICA'
+  /** O RM recusou ESTA linha. Só se descobre tentando — ver a migration 013. */
+  | 'RM_RECUSOU';
 export type EstadoPendencia = 'aberta' | 'resolvida' | 'ignorada';
 
 export interface RegistrarPendenciaArgs {
