@@ -304,6 +304,31 @@ export class RmAttendanceTargets {
   }
 
   /**
+   * `AULASDADAS` de uma etapa, para ser ECOADO de volta ao RM.
+   *
+   * Medido em 21/08/2026: o `SaveRecord` recusa o dataset sem este campo
+   * ("O campo número de aulas dadas deve ser preenchido"). Ecoar, e nunca
+   * calcular, é o que impede a integração de mexer no denominador dos 75% de
+   * reprovação por falta — ver a nota em `RmEtapaFalta.aulasDadas`.
+   *
+   * `null` significa duas coisas diferentes que o chamador precisa distinguir da
+   * ausência de etapa: ou a etapa não existe no índice, ou existe e está sem o
+   * valor. Nos dois casos não há o que ecoar, e a escrita naquela etapa é
+   * impossível até alguém preencher no RM — por isso quem monta o lote deve
+   * RECUSAR em vez de omitir o campo e deixar o RM responder.
+   *
+   * RESSALVA CONHECIDA, ainda sem mitigação: entre esta leitura e o `SaveRecord`
+   * um professor pode alterar o número na tela do RM, e o eco reverteria a
+   * alteração dele em silêncio. A janela é o tempo de um run; estreitá-la é o
+   * paliativo atual.
+   */
+  aulasDadasDe(idTurmaDisc: string, codEtapa: string): string | null {
+    const etapas = this.etapasPorTurmaDisc.get(idTurmaDisc);
+    if (!etapas?.length) return null;
+    return etapas.find((e) => e.codEtapa === codEtapa)?.aulasDadas ?? null;
+  }
+
+  /**
    * Todos os horários do índice, achatados. Usado por quem precisa espelhar a
    * grade inteira (ex.: criar timetable slots no Toddle), não só resolver um.
    */
