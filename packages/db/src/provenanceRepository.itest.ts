@@ -8,6 +8,7 @@ import {
   escritasDoRun,
   registrarEscrita,
 } from './provenanceRepository';
+import { tenantConfig } from '@rm-toddle/config';
 import { pgPool } from './pool';
 
 /**
@@ -23,7 +24,14 @@ const K = '1|5791|1240|202600009|2026-03-02';
 let runId: string | null = null;
 
 const limpar = async (): Promise<void> => {
-  await pgPool.query('delete from rm_write_provenance');
+  // Escopado ao tenant DA SUÍTE. A versão anterior era `delete from rm_write_provenance`, sem
+  // cláusula, e em 24/08/2026 levou dado real junto. O `globalSetup` já garante
+  // que a suíte roda sob um tenant próprio; esta cláusula é a segunda tranca,
+  // para que rodar com o slug errado falhe em vez de destruir.
+  await pgPool.query(
+    'delete from rm_write_provenance where tenant_id = (select id from tenant where slug = $1)',
+    [tenantConfig.slug],
+  );
   await pgPool.query("delete from operation where tipo = 'teste.prov'");
 };
 

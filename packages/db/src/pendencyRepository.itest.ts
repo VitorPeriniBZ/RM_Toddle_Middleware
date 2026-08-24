@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { tenantConfig } from '@rm-toddle/config';
 import { hashValor } from '@rm-toddle/domain';
 import {
   listarPendencias,
@@ -33,10 +34,20 @@ const base = {
 };
 
 beforeEach(async () => {
-  await pgPool.query('delete from write_pendency');
+  // Escopado ao tenant DA SUÍTE. Ver a nota em vitest.integracao.setup.ts: a
+  // versão sem cláusula apagou as pendências abertas de verdade em 24/08/2026.
+  await pgPool.query(
+    'delete from write_pendency where tenant_id = (select id from tenant where slug = $1)',
+    [tenantConfig.slug],
+  );
 });
 afterAll(async () => {
-  await pgPool.query('delete from write_pendency');
+  // Escopado ao tenant DA SUÍTE. Ver a nota em vitest.integracao.setup.ts: a
+  // versão sem cláusula apagou as pendências abertas de verdade em 24/08/2026.
+  await pgPool.query(
+    'delete from write_pendency where tenant_id = (select id from tenant where slug = $1)',
+    [tenantConfig.slug],
+  );
   await pgPool.end();
 });
 
@@ -56,7 +67,14 @@ describe('redetecção do MESMO conflito', () => {
     for (let i = 0; i < 3; i += 1) {
       await registrarPendencia({ ...base, valorDesejado: 'A', hashDesejado: hashValor('A') });
     }
-    const { rows } = await pgPool.query<{ c: number }>('select count(*)::int c from write_pendency');
+    // Contagem escopada ao tenant da suíte. Sem a cláusula, este `count(*)`
+    // enxerga as pendências abertas de OUTRAS escolas e o teste passa a falhar
+    // conforme a produção acumula fila — falha que não diz nada sobre o código.
+    const { rows } = await pgPool.query<{ c: number }>(
+      `select count(*)::int c from write_pendency
+        where tenant_id = (select id from tenant where slug = $1)`,
+      [tenantConfig.slug],
+    );
     expect(rows[0].c).toBe(1);
     expect((await listarPendencias())[0].vezesVista).toBe(3);
   });
@@ -156,7 +174,7 @@ describe('o banco protege a integridade', () => {
       pgPool.query(
         `insert into write_pendency
            (tenant_id, entidade, chave_natural, veredito, porque, hash_desejado, estado)
-         select t.id, ${valores} from tenant t limit 1`,
+         select t.id, ${valores} from tenant t where t.slug = '${tenantConfig.slug}'`,
       ),
     ).rejects.toThrow();
   });

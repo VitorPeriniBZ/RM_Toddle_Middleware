@@ -24,7 +24,21 @@ const limpar = async (): Promise<void> => {
        (select id from operation where tipo like 'teste.gate%')`,
   );
   await pgPool.query("delete from operation where tipo like 'teste.gate%'");
-  await pgPool.query("delete from user_identity where provider = 'cli'");
+  // SÓ as identidades que este teste criou.
+  //
+  // A versão anterior apagava TODA identidade `provider='cli'`, e passou por um
+  // ano feliz porque a tabela vivia vazia. Em 24/08/2026 uma aprovação REAL foi
+  // registrada (a primeira escrita de frequência no RM), e a suíte inteira caiu:
+  // `approval.approver_id` referencia `user_identity`, e o FK — corretamente —
+  // recusou apagar a identidade de quem assinou uma decisão de verdade.
+  //
+  // Teste que limpa por categoria em vez de por posse destrói dado de produção
+  // assim que produção passa a existir. E o dado aqui é trilha de auditoria de
+  // escrita em ERP de cliente: exatamente o que não se apaga para deixar um teste
+  // verde. Daí o prefixo, igual ao que `tipo` já usava.
+  await pgPool.query(
+    "delete from user_identity where provider = 'cli' and subject like 'teste.gate:%'",
+  );
 };
 
 beforeEach(limpar);
@@ -44,7 +58,7 @@ describe('run de cron: sem proponente, aprovável por quem opera', () => {
     expect(op.payload.aEscrever).toBe(3000);
     expect(op.criadoPor).toBeUndefined(); // o scheduler propôs
 
-    expect((await decidirOperacao(op.id, 'vitor', 'approved', 'conferi com a coordenação')).ok).toBe(true);
+    expect((await decidirOperacao(op.id, 'teste.gate:vitor', 'approved', 'conferi com a coordenação')).ok).toBe(true);
     expect(await estaAprovado(chave)).toBe(true);
     expect((await operacoesPendentes()).length).toBe(0);
   });
@@ -53,7 +67,7 @@ describe('run de cron: sem proponente, aprovável por quem opera', () => {
     const chave = 'gate-cron-2';
     await pedirAprovacao({ chave, tipo: 'teste.gate', payload: {} });
     const [op] = await operacoesPendentes();
-    await decidirOperacao(op.id, 'vitor', 'approved', 'volume explicado pela janela maior');
+    await decidirOperacao(op.id, 'teste.gate:vitor', 'approved', 'volume explicado pela janela maior');
 
     const { rows } = await pgPool.query<{ decisao: string; motivo: string; subject: string }>(
       `select a.decisao, a.motivo, u.subject from approval a
@@ -61,7 +75,7 @@ describe('run de cron: sem proponente, aprovável por quem opera', () => {
          join operation o on o.id = a.operation_id
         where o.idempotency_key = $1`, [chave],
     );
-    expect(rows[0]).toMatchObject({ decisao: 'approved', subject: 'vitor' });
+    expect(rows[0]).toMatchObject({ decisao: 'approved', subject: 'teste.gate:vitor' });
     expect(rows[0].motivo).toContain('janela');
   });
 });
@@ -71,7 +85,7 @@ describe('recusa', () => {
     const chave = 'gate-cron-3';
     await pedirAprovacao({ chave, tipo: 'teste.gate', payload: {} });
     const [op] = await operacoesPendentes();
-    expect((await decidirOperacao(op.id, 'vitor', 'rejected', 'era bug do de-para')).ok).toBe(true);
+    expect((await decidirOperacao(op.id, 'teste.gate:vitor', 'rejected', 'era bug do de-para')).ok).toBe(true);
     expect(await estaAprovado(chave)).toBe(false);
   });
 
@@ -79,8 +93,8 @@ describe('recusa', () => {
     const chave = 'gate-cron-4';
     await pedirAprovacao({ chave, tipo: 'teste.gate', payload: {} });
     const [op] = await operacoesPendentes();
-    await decidirOperacao(op.id, 'vitor', 'rejected', 'primeira');
-    const r = await decidirOperacao(op.id, 'vitor', 'approved', 'mudei de ideia');
+    await decidirOperacao(op.id, 'teste.gate:vitor', 'rejected', 'primeira');
+    const r = await decidirOperacao(op.id, 'teste.gate:vitor', 'approved', 'mudei de ideia');
     expect(r.ok).toBe(false);
   });
 });
@@ -90,7 +104,7 @@ describe('segregação de funções, onde ela significa algo', () => {
   // aplicação". Run de cron tem `criado_por` NULL e não há de quem segregar;
   // operação com proponente exige outra identidade.
   it('quem propôs NÃO aprova, mas outra pessoa aprova', async () => {
-    const proponente = await identidadeDeCli('ana');
+    const proponente = await identidadeDeCli('teste.gate:ana');
     const chave = 'gate-proposto-1';
     await pgPool.query(
       `insert into operation (tenant_id, tipo, estado, payload, idempotency_key, criado_por)
@@ -100,17 +114,17 @@ describe('segregação de funções, onde ela significa algo', () => {
     );
     const op = (await operacoesPendentes()).find((o) => o.chave === chave)!;
 
-    const auto = await decidirOperacao(op.id, 'ana', 'approved', 'eu mesma');
+    const auto = await decidirOperacao(op.id, 'teste.gate:ana', 'approved', 'eu mesma');
     expect(auto.ok).toBe(false);
     expect(auto.ok === false && auto.erro).toMatch(/não pode aprová-la/);
 
-    expect((await decidirOperacao(op.id, 'vitor', 'approved', 'revisei o plano da ana')).ok).toBe(true);
+    expect((await decidirOperacao(op.id, 'teste.gate:vitor', 'approved', 'revisei o plano da ana')).ok).toBe(true);
   });
 });
 
 describe('fail-closed', () => {
   it('operação inexistente é recusada', async () => {
-    const r = await decidirOperacao('00000000-0000-0000-0000-000000000000', 'v', 'approved', 'x');
+    const r = await decidirOperacao('00000000-0000-0000-0000-000000000000', 'teste.gate:v', 'approved', 'x');
     expect(r.ok).toBe(false);
   });
 
@@ -121,8 +135,8 @@ describe('fail-closed', () => {
 
 describe('identidade de CLI', () => {
   it('é idempotente por nome', async () => {
-    const a = await identidadeDeCli('vitor');
-    const b = await identidadeDeCli('vitor');
+    const a = await identidadeDeCli('teste.gate:vitor');
+    const b = await identidadeDeCli('teste.gate:vitor');
     expect(a).toBe(b);
   });
 });

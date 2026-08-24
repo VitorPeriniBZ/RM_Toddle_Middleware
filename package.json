@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
-    "test:integracao": "vitest run --project integration",
+    "test:integracao": "TENANT_SLUG=integracao-teste vitest run --project integration",
     "db:migrate": "tsx packages/db/src/migrate.ts",
     "worker:students": "tsx apps/worker/src/workers/rm-to-toddle/studentSync.worker.ts",
     "enqueue:students": "tsx apps/worker/src/scripts/enqueueStudentSync.ts",

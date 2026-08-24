@@ -41,6 +41,16 @@ export default defineWorkspace([
       name: 'integration',
       include: ['packages/*/src/**/*.itest.ts', 'apps/*/src/**/*.itest.ts'],
       environment: 'node',
+      // TENANT PRÓPRIO, e isto não é detalhe de arrumação.
+      //
+      // Em 24/08/2026 a suíte apagou as 24 linhas de proveniência da primeira
+      // escrita real no RM, porque um `limpar` fazia `delete from
+      // rm_write_provenance` sem cláusula. Rodar sob o tenant de uma escola de
+      // verdade é destrutivo por construção; sob um tenant só da suíte, não há o
+      // que destruir. `dotenv` não sobrescreve o ambiente, então o `.env` da
+      // máquina não vaza para cá.
+      env: { TENANT_SLUG: 'integracao-teste' },
+      globalSetup: ['./vitest.integracao.setup.ts'],
       // Um banco, uma conexão: testes que mexem nas mesmas tabelas em paralelo
       // produzem falha intermitente, que é pior que teste lento.
       fileParallelism: false,
