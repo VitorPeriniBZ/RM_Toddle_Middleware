@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
-import { env, isRmSoapConfigured, logger, sanitizeEmail } from '@rm-toddle/config';
+import { logger, rmSoapConfigurado, sanitizeEmail, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * Fonte de RESPONSÁVEIS do RM, via Sentença `TODDLE.RESP`.
@@ -109,16 +119,16 @@ function normalizaNome(nome: string): string {
  *   não estiver aqui não entra, e lista vazia é erro, nunca "todos".
  */
 export async function fetchResponsaveisFromRm(rasEmEscopo: string[]): Promise<ResumoResponsaveis> {
-  if (!isRmSoapConfigured) {
+  if (!rmSoapConfigurado) {
     throw new Error('wsConsultaSQL não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS).');
   }
-  if (!env.RM_SENTENCA_RESPONSAVEIS) {
+  if (!cfg.rm.sentencas.responsaveis) {
     throw new Error(
       'RM_SENTENCA_RESPONSAVEIS não definido — informe o código da Sentença de responsáveis ' +
         '(ex.: TODDLE.RESP). Ver docs/rm-sentencas/TODDLE.RESP.ESPEC.md.',
     );
   }
-  if (!env.RM_CODPERLET) {
+  if (!cfg.rm.escopo.periodoLetivo) {
     throw new Error('RM_CODPERLET não definido — a Sentença de responsáveis exige o período letivo.');
   }
   if (rasEmEscopo.length === 0) {
@@ -128,9 +138,9 @@ export async function fetchResponsaveisFromRm(rasEmEscopo: string[]): Promise<Re
     );
   }
 
-  const rows = await wsConsultaSqlClient.realizarConsulta(env.RM_SENTENCA_RESPONSAVEIS, {
-    CODCOLIGADA: env.RM_CODCOLIGADA,
-    CODPERLET: env.RM_CODPERLET,
+  const rows = await wsConsultaSqlClient.realizarConsulta(cfg.rm.sentencas.responsaveis, {
+    CODCOLIGADA: cfg.rm.escopo.coligada,
+    CODPERLET: cfg.rm.escopo.periodoLetivo,
   });
 
   const emEscopo = new Set(rasEmEscopo);
@@ -189,7 +199,7 @@ export async function fetchResponsaveisFromRm(rasEmEscopo: string[]): Promise<Re
       ras: [ra],
       parentescoPorRa: parentesco ? { [ra]: parentesco } : {},
       nomeHash: createHash('sha256')
-        .update(`${env.TENANT_SLUG}:${normalizaNome(nome)}`)
+        .update(`${cfg.slug}:${normalizaNome(nome)}`)
         .digest('hex')
         .slice(0, 16),
       nomesVistos: new Set([nome.trim()]),

@@ -1,5 +1,15 @@
-import { env, logger } from '@rm-toddle/config';
+import { logger, tenantConfig } from '@rm-toddle/config';
 import { wsDataServerClient } from '@rm-toddle/integrations';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * Os alvos que uma frequência precisa acertar no RM: IDHORARIOTURMA e CODETAPA.
@@ -41,6 +51,23 @@ export interface RmEtapaFalta {
   dtFim: string;
   /** Frequência mínima da etapa (75,00 na EAV). Informativo. */
   freqMin: string | null;
+  /**
+   * `AULASDADAS` da etapa, como o RM tem hoje.
+   *
+   * NÃO é informativo: medido em 21/08/2026, o `SaveRecord` **recusa** a escrita
+   * sem ele — "O campo número de aulas dadas deve ser preenchido", em
+   * `EduFrequenciaDiariaObj.ValidaEtapa`. A documentação dizia que omitir era o
+   * certo porque o XSD marca `minOccurs=0`; opcional no XSD não é opcional na
+   * regra de negócio.
+   *
+   * E é o DENOMINADOR dos 75% de reprovação por falta. Por isso o writer **ecoa
+   * este valor de volta** em vez de calcular: administrar o número de aulas dadas
+   * mudaria quem reprova, e isso não é decisão de integração.
+   *
+   * `null` = a etapa não tem o valor, e aí não há o que ecoar — a escrita
+   * naquela etapa é impossível até alguém preencher no RM.
+   */
+  aulasDadas: string | null;
 }
 
 const DIAS_UTEIS = new Set(['2', '3', '4', '5', '6']);
@@ -168,7 +195,7 @@ export class RmAttendanceTargets {
     // linhas sem erro, o que parece tabela vazia.
     const etapasBrutas = await wsDataServerClient.readView(
       'EduEtapasData',
-      `SETAPAS.CODCOLIGADA=${env.RM_CODCOLIGADA} AND SETAPAS.IDTURMADISC IN (${lista})`,
+      `SETAPAS.CODCOLIGADA=${cfg.rm.escopo.coligada} AND SETAPAS.IDTURMADISC IN (${lista})`,
       'SEtapas',
       codFilial,
     );
@@ -196,6 +223,7 @@ export class RmAttendanceTargets {
         dtInicio,
         dtFim,
         freqMin: row.FREQMIN ?? null,
+        aulasDadas: row.AULASDADAS ?? null,
       };
       const atual = etapasPorTurmaDisc.get(idTurmaDisc);
       if (atual) atual.push(etapa);
@@ -273,6 +301,31 @@ export class RmAttendanceTargets {
     if (cobrem.length === 0) return null;
     if (cobrem.length > 1) return { ambiguo: cobrem };
     return { etapa: cobrem[0] };
+  }
+
+  /**
+   * `AULASDADAS` de uma etapa, para ser ECOADO de volta ao RM.
+   *
+   * Medido em 21/08/2026: o `SaveRecord` recusa o dataset sem este campo
+   * ("O campo número de aulas dadas deve ser preenchido"). Ecoar, e nunca
+   * calcular, é o que impede a integração de mexer no denominador dos 75% de
+   * reprovação por falta — ver a nota em `RmEtapaFalta.aulasDadas`.
+   *
+   * `null` significa duas coisas diferentes que o chamador precisa distinguir da
+   * ausência de etapa: ou a etapa não existe no índice, ou existe e está sem o
+   * valor. Nos dois casos não há o que ecoar, e a escrita naquela etapa é
+   * impossível até alguém preencher no RM — por isso quem monta o lote deve
+   * RECUSAR em vez de omitir o campo e deixar o RM responder.
+   *
+   * RESSALVA CONHECIDA, ainda sem mitigação: entre esta leitura e o `SaveRecord`
+   * um professor pode alterar o número na tela do RM, e o eco reverteria a
+   * alteração dele em silêncio. A janela é o tempo de um run; estreitá-la é o
+   * paliativo atual.
+   */
+  aulasDadasDe(idTurmaDisc: string, codEtapa: string): string | null {
+    const etapas = this.etapasPorTurmaDisc.get(idTurmaDisc);
+    if (!etapas?.length) return null;
+    return etapas.find((e) => e.codEtapa === codEtapa)?.aulasDadas ?? null;
   }
 
   /**

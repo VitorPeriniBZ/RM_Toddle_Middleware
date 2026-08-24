@@ -1,9 +1,16 @@
 import { Job } from 'bullmq';
-import { env } from '@rm-toddle/config';
+import { env, tenantConfig } from '@rm-toddle/config';
 import { configVersion, configVersionDetalhe } from '@rm-toddle/config';
 import { toddleClient } from '@rm-toddle/integrations';
 import { isToddleStudentArchived } from '@rm-toddle/integrations';
-import { idMappingRepository } from '@rm-toddle/db';
+import {
+  abrirRun,
+  acumularLote,
+  avaliarDesvio,
+  fecharRunPorChave,
+  idMappingRepository,
+  ultimaContagemEmEscopo,
+} from '@rm-toddle/db';
 import {
   StudentSyncItem,
   StudentUpsertBatchJob,
@@ -18,7 +25,10 @@ import { getQueue } from '@rm-toddle/queues';
 import { QUEUE, STUDENT_JOB } from '@rm-toddle/queues';
 import { RmStudentContext } from '@rm-toddle/integrations';
 import { chunk } from '@rm-toddle/config';
-import { logger } from '@rm-toddle/config';
+import { heartbeat, logger } from '@rm-toddle/config';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * FLUXO 1 — Sincronização de Alunos (TOTVS RM -> Toddle), em duas fases:
@@ -36,6 +46,13 @@ import { logger } from '@rm-toddle/config';
  * -> upsert do mapeamento após cada operação. Reprocessar o mesmo job nunca
  * duplica aluno.
  */
+
+/**
+ * `tipo` da linha em `operation`. Constante porque a guarda de desvio consulta o
+ * último run bem-sucedido POR TIPO — errar a string aqui a deixaria sem histórico
+ * em silêncio, que é o mesmo defeito que ela existe para pegar.
+ */
+const RUN_TIPO_ALUNOS = 'students.sync';
 
 // ---------------------------------------------------------------------------
 // Fase 1: EXTRACT
@@ -116,6 +133,65 @@ export async function processStudentExtract(job: Job): Promise<{
   const versao = configVersion();
   log.info(configVersionDetalhe(), 'Configuração de escopo/destino deste run');
 
+  // A guarda é avaliada antes de gravar, mas o run tem de estar ABERTO para
+  // poder ser fechado como `failed` — senão o UPDATE não encontra a linha.
+  const desvio = avaliarDesvio(await ultimaContagemEmEscopo(RUN_TIPO_ALUNOS), items.length);
+
+  // O registro do run abre AQUI, já sabendo quantos lotes esperar: é o
+  // `lotesEsperados` que permite ao último lote fechar o run. A chave é o runId,
+  // não o jobId cru, porque é por ela que os lotes reencontram a linha.
+  await abrirRun({
+    tipo: RUN_TIPO_ALUNOS,
+    chave: runId,
+    configVersion: versao,
+    payload: {
+      trigger,
+      jobId: job.id,
+      lidasDoRm: totalContexts,
+      unicos: byStudentCode.size,
+      emEscopo: items.length,
+      lotesEsperados: batches.length,
+      desvio,
+      escopo: configVersionDetalhe(),
+    },
+    // `emEscopo` no resultado desde já: é o que a guarda de desvio do PRÓXIMO run
+    // vai ler. Se ficasse só no payload, a guarda nunca teria histórico.
+    resultadoInicial: { emEscopo: items.length, lotesConcluidos: 0 },
+  });
+
+  // ─── ROSTER VAZIO NÃO É SUCESSO ───────────────────────────────────────────
+  //
+  // Sem lotes, ninguém fecharia o run e ele ficaria preso em `executing` para
+  // sempre. E o caso merece alarme por si: 0 aluno em escopo com o RM
+  // respondendo significa Sentença mexida, `RM_CODFILIAL` errado ou base trocada.
+  // A guarda de desvio não pega isto no PRIMEIRO run, porque não há histórico.
+  if (batches.length === 0) {
+    const motivo =
+      'nenhum aluno em escopo — Sentença alterada, RM_CODFILIAL errado ou base trocada';
+    log.error({ lidasDoRm: totalContexts, unicos: byStudentCode.size }, `Run ABORTADO: ${motivo}`);
+    await fecharRunPorChave(runId, 'failed', { emEscopo: 0, motivo });
+    throw new Error(`${motivo}. Nada foi escrito no Toddle.`);
+  }
+
+  // ─── GUARDA DE DESVIO DE CONTAGEM ─────────────────────────────────────────
+  //
+  // ANTES de enfileirar qualquer escrita. O sync é completo: se o RM voltar a
+  // servir uma cópia antiga da base — que aconteceu em 13-15/08/2026 — daqui
+  // sairiam 255 upserts sobrescrevendo o Toddle com dado velho, `failed=0` e
+  // nenhum log de erro. Abortar é recuperável; sobrescrever não é.
+  if (desvio.aborta) {
+    log.error({ ...desvio }, 'Run ABORTADO pela guarda de desvio — nada foi escrito no Toddle');
+    await fecharRunPorChave(runId, 'failed', { emEscopo: items.length, motivo: desvio.motivo, desvio });
+    throw new Error(
+      `${desvio.motivo}. Nada foi escrito. Se o desvio é legítimo (matrícula em ` +
+        'lote, virada de ano), rode o sync à mão ou ajuste SYNC_DESVIO_MAX_PCT; ' +
+        'se não, confira se o RM não voltou com uma cópia antiga da base.',
+    );
+  }
+  if (desvio.desvioPct !== null) {
+    log.info({ ...desvio }, 'Guarda de desvio: contagem em escopo dentro do esperado');
+  }
+
   for (const [batchIndex, students] of batches.entries()) {
     const payload: StudentUpsertBatchJob = { runId, batchIndex, configVersion: versao, students };
     await queue.add(STUDENT_JOB.UPSERT_BATCH, payload, {
@@ -148,7 +224,7 @@ function isActiveContext(ctx: RmStudentContext): boolean {
   if (flag === 'S' || flag === 'T' || flag === '1') return true;
   if (flag === 'N' || flag === 'F' || flag === '0') return false;
 
-  const allowed = env.RM_ACTIVE_TERM_STATUSES
+  const allowed = cfg.rm.escopo.statusAtivos
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -285,10 +361,29 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
 
   if (failures.length > 0) {
     // Dispara a retentativa exponencial do BullMQ (3x) e, esgotada, a DLQ.
+    //
+    // NÃO acumula no run aqui, de propósito: a tentativa seguinte pode passar, e
+    // contar um lote que vai ser refeito inflaria `lotesConcluidos` e fecharia o
+    // run antes da hora. Se as 3 tentativas esgotarem, o lote nunca acumula e o
+    // run fica preso em `executing` — que é o sinal correto de "morreu no meio",
+    // e o monitor externo alerta por silêncio.
     throw new Error(
       `${failures.length}/${batch.students.length} alunos falharam no lote ${batch.batchIndex}: ` +
         failures.map((f) => `${f.studentCode} (${f.error})`).join('; '),
     );
+  }
+
+  // Lote OK: acumula no run. Só o ÚLTIMO recebe veredito de volta — e é aí que o
+  // heartbeat dispara, porque só então "o run foi bem" é uma afirmação honesta.
+  const run = await acumularLote(batch.runId, {
+    created,
+    updated,
+    unarchived,
+    failed: failures.length,
+  });
+  if (run?.completo) {
+    log.info({ estado: run.estado, ...run.resultado }, 'Run de alunos fechado');
+    await heartbeat.alunos(run.estado === 'succeeded' ? 'sucesso' : 'falha', run.resultado);
   }
 
   return { created, updated, unarchived, failed: 0 };

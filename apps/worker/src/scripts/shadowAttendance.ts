@@ -1,15 +1,37 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { configVersion, configVersionDetalhe, env, logger } from '@rm-toddle/config';
-import { idMappingRepository, pgPool } from '@rm-toddle/db';
-import { toddleClient } from '@rm-toddle/integrations';
+import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
 import {
+  carregarProveniencia,
+  chaveDoMapa,
+  idMappingRepository,
+  pgPool,
+  registrarPendencia,
+  contarProveniencia,
+  resumoPendencias,
+  type VereditoPendente,
+} from '@rm-toddle/db';
+import { toddleClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
+
+import {
+  chaveNaturalRm,
+  decidirEscrita,
+  estadoNoRmDeFalta,
+  fetchFrequenciaFromRm,
+  hashValor,
+  indexaFaltasPorChave,
   montaLotes,
   PeriodTimeIndex,
   projetaLote,
+  resumirDecisoes,
+  avaliarVolume,
   RmAttendanceTargets,
   POLITICA_PRESENCA,
   type ContextoProjecao,
+  type Decisao,
 } from '@rm-toddle/domain';
 
 /**
@@ -79,10 +101,10 @@ function parseArgs(): Args {
 
 /** Um único campus. "ALL" não vale: o contexto do wsDataServer exige um CODFILIAL. */
 function campusUnico(): string {
-  const campi = env.RM_CODFILIAL.split(',').map((c) => c.trim()).filter(Boolean);
-  if (env.RM_CODFILIAL.toUpperCase() === 'ALL' || campi.length !== 1) {
+  const campi = cfg.rm.escopo.filiais.split(',').map((c) => c.trim()).filter(Boolean);
+  if (cfg.rm.escopo.filiais.toUpperCase() === 'ALL' || campi.length !== 1) {
     throw new Error(
-      `RM_CODFILIAL="${env.RM_CODFILIAL}" não serve para o shadow mode: o contexto do ` +
+      `RM_CODFILIAL="${cfg.rm.escopo.filiais}" não serve para o shadow mode: o contexto do ` +
         'wsDataServer exige UM CODFILIAL. Rode um campus por vez.',
     );
   }
@@ -158,7 +180,7 @@ async function main(): Promise<void> {
   });
 
   const ctx: ContextoProjecao = {
-    codColigada: env.RM_CODCOLIGADA,
+    codColigada: cfg.rm.escopo.coligada,
     cursoParaTurmaDisc,
     alunoParaRa,
     alvos,
@@ -166,7 +188,127 @@ async function main(): Promise<void> {
   };
 
   const resumo = projetaLote(registros, ctx);
-  const lotes = montaLotes(resumo.projetados);
+  // O mesmo resolvedor que o writer usa: sem ele o shadow mostraria um XML sem
+  // AULASDADAS, que o RM recusa — ensaio bonito e mentiroso.
+  const lotes = montaLotes(resumo.projetados, (td, etapa) => alvos.aulasDadasDe(td, etapa));
+
+  // ─── DECISÃO DE ESCRITA ───────────────────────────────────────────────────
+  //
+  // Projetar responde "o RM aceitaria esta linha?". Decidir responde a pergunta
+  // que importa antes de escrever: "posso escrever sem apagar trabalho humano?".
+  //
+  // O RM tem 21.300 ausências lançadas à mão e o `SaveRecord` é upsert que não
+  // diz se inseriu ou atualizou. Então o shadow lê o estado ATUAL do RM na mesma
+  // janela e cruza com a proveniência do que nós já escrevemos.
+  //
+  // Isto roda no shadow, não só no writer, de propósito: o plano tem de ser
+  // visível ANTES de existir escrita. Ver docs/DECISOES.md D1.
+  const noRm = await fetchFrequenciaFromRm({ de: args.de, ate: args.ate });
+  const faltasPorChave = indexaFaltasPorChave(noRm.faltas);
+  const chavesProjetadas = resumo.projetados.map((pr) => pr.chaveRm);
+  const proveniencia = await carregarProveniencia('FREQUENCIA', chavesProjetadas);
+
+  const decisoes = new Map<string, Decisao>();
+  for (const pr of resumo.projetados) {
+    const chave = chaveNaturalRm(pr.linha);
+    const falta = faltasPorChave.get(chave);
+    decisoes.set(
+      pr.origemId,
+      decidirEscrita(
+        { chaveNatural: chave, valor: pr.linha.presenca },
+        falta ? estadoNoRmDeFalta(falta) : null,
+        proveniencia.get(chaveDoMapa(chave)) ?? null,
+      ),
+    );
+  }
+  const resumoDecisoes = resumirDecisoes([...decisoes.values()]);
+
+  // ─── PENDÊNCIAS: a única escrita que o shadow faz, e é no NOSSO banco ─────
+  //
+  // Registrar aqui, e não só no writer, é o que torna a fila útil antes de
+  // existir escrita no RM: dá para descobrir HOJE quantos conflitos a via de
+  // volta encontraria, e com a coordenação decidir a política antes de a primeira
+  // escrita acontecer.
+  //
+  // Não viola o "shadow não escreve": o contrato do shadow é não tocar RM nem
+  // Toddle. Anotar no nosso Postgres que alguém precisa olhar não muda dado de
+  // ninguém.
+  let pendenciasAbertas = 0;
+  for (const pr of resumo.projetados) {
+    const d = decisoes.get(pr.origemId);
+    if (!d?.pendencia) continue;
+    const chave = chaveNaturalRm(pr.linha);
+    const abriu = await registrarPendencia({
+      entidade: 'FREQUENCIA',
+      chaveNatural: chave,
+      veredito: d.veredito as VereditoPendente,
+      porque: d.porque,
+      valorDesejado: pr.linha.presenca,
+      valorNoRm: faltasPorChave.get(chave)?.presenca ?? null,
+      hashDesejado: hashValor(pr.linha.presenca),
+      origemId: pr.origemId,
+    });
+    if (abriu) pendenciasAbertas += 1;
+  }
+
+  // ─── 3b. CÓDIGO DE CHAMADA SEM POLÍTICA -> fila, agrupado por CÓDIGO ──────
+  //
+  // Recusa de projeção normalmente é defeito de dado e morre no relatório. Esta
+  // não: "o Toddle mandou 'Leave' e o RM não sabe o que é isso" é uma decisão de
+  // escola pendente, e enquanto ninguém decide o aluno fica SEM frequência no RM,
+  // em silêncio. Ver a migration 012 para o porquê de uma linha por código.
+  const porOpcao = new Map<string, { rotulo: string; n: number; exemplo: string }>();
+  for (const r of resumo.recusados) {
+    if (r.motivo !== 'OPCAO_SEM_POLITICA' || !r.opcao) continue;
+    const atual = porOpcao.get(r.opcao.abreviacao);
+    if (atual) atual.n += 1;
+    else porOpcao.set(r.opcao.abreviacao, { rotulo: r.opcao.rotulo, n: 1, exemplo: r.origemId });
+  }
+  for (const [abrev, info] of porOpcao) {
+    const abriu = await registrarPendencia({
+      entidade: 'FREQUENCIA',
+      chaveNatural: `OPCAO:${abrev}`,
+      veredito: 'OPCAO_SEM_POLITICA',
+      porque:
+        `O Toddle usa o código "${info.rotulo}" (${abrev}) e não há tradução para ` +
+        'PRESENCA no RM, então estes lançamentos NÃO chegam ao RM. Resolver aqui é ' +
+        'decidir a POLÍTICA (POLITICA_PRESENCA em attendanceProjection.ts), não ' +
+        'lançar falta à mão.',
+      valorDesejado: null,
+      valorNoRm: null,
+      // O hash é do CÓDIGO, não de um valor: reabrir só faz sentido se a escola
+      // renomear a opção, e é isso que este hash detecta.
+      hashDesejado: hashValor(`${abrev}|${info.rotulo}`),
+      origemId: info.exemplo,
+    });
+    if (abriu) pendenciasAbertas += 1;
+  }
+  const filaPendencias = await resumoPendencias();
+
+  // ─── TETO DE VOLUME ───────────────────────────────────────────────────────
+  //
+  // Avaliado no shadow, não só no writer: é aqui que se descobre, ANTES de haver
+  // escrita, se o plano de um dia normal já cairia no gate. Se cair, o limite
+  // está calibrado errado — e é muito melhor saber isso agora do que ver o
+  // primeiro run de produção parar esperando aprovação às 3h da manhã.
+  //
+  // `historico` vem da proveniência: quantas linhas a integração já escreveu.
+  // `null` enquanto nunca escreveu, e aí o veredito é sempre PRECISA_APROVACAO —
+  // de propósito, porque a primeira escrita da vida passa por humano.
+  const jaEscritas = await contarProveniencia();
+  const volume = avaliarVolume(
+    {
+      aEscrever: resumoDecisoes.aEscrever,
+      emEscopo: resumo.projetados.length,
+      historico: jaEscritas.FREQUENCIA ?? null,
+    },
+    {
+      tetoAbsoluto: env.WRITE_TETO_ABSOLUTO,
+      desvioMaxPct: env.WRITE_DESVIO_MAX_PCT,
+      tetoEscopoPct: env.WRITE_TETO_ESCOPO_PCT,
+      pisoSemAprovacao: env.WRITE_PISO_SEM_APROVACAO,
+    },
+  );
 
   // ─── relatório ────────────────────────────────────────────────────────────
   const linhas: string[] = [];
@@ -181,9 +323,9 @@ async function main(): Promise<void> {
   p('  SHADOW MODE — frequência Toddle -> RM.  NADA FOI ESCRITO.');
   p('══════════════════════════════════════════════════════════════════');
   p(`  janela         ${args.de} → ${args.ate}`);
-  p(`  campus         CODFILIAL=${codFilial}   coligada=${env.RM_CODCOLIGADA}`);
+  p(`  campus         CODFILIAL=${codFilial}   coligada=${cfg.rm.escopo.coligada}`);
   p(`  configVersion  ${versao}`);
-  p(`  organização    ${env.TODDLE_ORG_ID}`);
+  p(`  organização    ${cfg.toddle.organizationId}`);
   if (args.diagnostico) p('  modo           DIAGNÓSTICO (sem filtro de curso na origem)');
   p('');
   p('── escopo ────────────────────────────────────────────────────────');
@@ -215,6 +357,47 @@ async function main(): Promise<void> {
     p('    campus 2 nunca foi cadastrada lá. Enquanto isso, nenhum lançamento real');
     p('    do Toddle tem como apontar para uma aula do RM.');
   }
+  p('');
+  p('── decisão de escrita ────────────────────────────────────────────');
+  p(`  frequência já no RM nesta janela        ${noRm.faltas.length}`);
+  p(`  criadas pela integração                 ${noRm.criadasPelaIntegracao}`);
+  p(`  proveniência nossa encontrada           ${proveniencia.size}`);
+  p('');
+  for (const [veredito, n] of Object.entries(resumoDecisoes.porVeredito).sort((a, b) => b[1] - a[1])) {
+    const marca = veredito === 'CONFLITO_HUMANO' || veredito === 'EDITADO_POR_FORA' ? ' ⚠' : '';
+    p(`      ${veredito.padEnd(22)} ${String(n).padStart(5)}${marca}`);
+  }
+  p('');
+  p(`  ESCREVERIA                              ${resumoDecisoes.aEscrever}`);
+  p(`  PENDÊNCIA (precisa de humano)            ${resumoDecisoes.pendencias}`);
+  if (resumoDecisoes.pendencias > 0) {
+    p('');
+    p(`  ${pendenciasAbertas} pendência(s) ABERTA(S) nesta passada — nenhuma escrita automática.`);
+    const amostra = [...decisoes.entries()].filter(([, d]) => d.pendencia).slice(0, 5);
+    for (const [origemId, d] of amostra) {
+      p(`      ${d.veredito}  origem=${origemId}`);
+      p(`          ${d.porque}`);
+    }
+  }
+  p('');
+  p(`  teto de volume                          ${volume.veredito}`);
+  for (const m of volume.motivos) p(`      ${m}`);
+  if (volume.veredito === 'PRECISA_APROVACAO') {
+    p('      -> o writer pararia aqui e esperaria `npm run aprovar`');
+  }
+  if (volume.veredito === 'RECUSADO') {
+    p('      -> nem aprovação libera. O número é a evidência do defeito');
+  }
+  p('');
+  p(`  fila de pendências (total aberto)       ${filaPendencias.abertas}`);
+  if (filaPendencias.abertas > 0) {
+    p(`      por veredito: ${JSON.stringify(filaPendencias.porVeredito)}`);
+    if (filaPendencias.maisAntigaDias !== undefined) {
+      p(`      mais antiga: ${filaPendencias.maisAntigaDias} dia(s)`);
+    }
+    p('      -> npm run pendencias');
+  }
+
   p('');
   p('── origem ────────────────────────────────────────────────────────');
   p(`  registros lidos do Toddle               ${resumo.lidos}`);

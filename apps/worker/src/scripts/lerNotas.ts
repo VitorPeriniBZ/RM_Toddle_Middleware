@@ -1,7 +1,10 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { fetchNotasFromRm } from '@rm-toddle/domain';
 import { toddleClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Lê as notas do RM e relata o que iria para o `POST /term-grades`.
@@ -55,7 +58,7 @@ async function main(): Promise<void> {
   p('══════════════════════════════════════════════════════════════════');
   p('  Notas do RM — SOMENTE LEITURA. Nada foi escrito.');
   p('══════════════════════════════════════════════════════════════════');
-  p(`  sentença   ${env.RM_SENTENCA_NOTAS}`);
+  p(`  sentença   ${cfg.rm.sentencas.notas}`);
   p(`  currículo  ${curriculumProgramId}   ano ${academicYearId}`);
   p('');
   p('── o que o RM devolveu ───────────────────────────────────────────');

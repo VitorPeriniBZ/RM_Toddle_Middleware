@@ -161,6 +161,61 @@ const envSchema = z.object({
   REDIS_URL: z.string().default('redis://localhost:6379'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   NODE_ENV: z.string().default('development'),
+
+  // --- Alerta por AUSÊNCIA de sucesso (dead man's switch) ---
+  //
+  // URL de um monitor externo (Healthchecks.io, Uptime Kuma, ntfy com cron
+  // check...). O job dá um ping ao terminar; o SERVIÇO EXTERNO alerta quando o
+  // ping NÃO chega.
+  //
+  // A inversão é o ponto inteiro, e é o que faltava: entre 12 e 20/08/2026 a
+  // integração ficou 8 dias morta e ninguém soube. Um alerta construído DENTRO
+  // deste processo não teria disparado — o processo era justamente o que estava
+  // parado. Alerta por silêncio sobrevive a container morto, Redis fora, senha
+  // expirada e Sentença apagada.
+  //
+  // Vazias = desligado, sem quebrar nada. Ninguém é obrigado a ter monitor.
+  //
+  // LIMIAR, no monitor externo: o cron é 4x ao dia, mas os intervalos são
+  // DESIGUAIS — 03:00, 09:00, 12:00, 16:00 deixa uma janela de 11h entre 16:00 e
+  // 03:00. Limiar de 8h alertaria toda madrugada, e alerta que cria ruído é
+  // alerta que passa a ser ignorado. Use ~13h (ou "grace" de 1h sobre 12h).
+  HEARTBEAT_URL_ALUNOS: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  HEARTBEAT_URL_PROFESSORES: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  /** Timeout do ping. Curto de propósito: monitor lento não pode atrasar o job. */
+  HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+
+  /**
+   * Guarda de desvio de contagem, em pontos percentuais. O sync é completo: se o
+   * RM voltar a servir uma cópia ANTIGA da base — que já aconteceu em 13-15/08 —
+   * ele sobrescreveria os alunos no Toddle com dado velho e `failed=0`, sem um
+   * único log de erro. Esta é a única defesa contra isso.
+   *
+   * 0 = desligado.
+   */
+  SYNC_DESVIO_MAX_PCT: z.coerce.number().min(0).max(100).default(10),
+
+  // --- Teto de volume da ESCRITA no RM ---
+  //
+  // As guardas por registro (`decidirEscrita`) são cegas para "quantas?". Um
+  // JOIN errado no de-para virando produto cartesiano produz milhares de
+  // decisões individualmente CORRETAS — o erro só existe no agregado.
+  //
+  // Estes quatro números são a única guarda que olha o tamanho do plano.
+  /** Acima disto o run é RECUSADO: o número é a evidência do defeito. */
+  WRITE_TETO_ABSOLUTO: z.coerce.number().int().positive().default(5_000),
+  /** Percentual acima do histórico que exige aprovação humana. */
+  WRITE_DESVIO_MAX_PCT: z.coerce.number().min(0).default(50),
+  /** Percentual do escopo que, sozinho, exige aprovação. */
+  WRITE_TETO_ESCOPO_PCT: z.coerce.number().min(0).max(100).default(30),
+  /**
+   * Abaixo disto nunca pede aprovação.
+   *
+   * Percentual sobre número pequeno é ruído: 2 → 6 linhas é +200% e não
+   * significa nada. Sem o piso, correção miúda viraria pedido de aprovação — e
+   * aprovação que aparece por nada é aprovação que alguém passa a dar sem ler.
+   */
+  WRITE_PISO_SEM_APROVACAO: z.coerce.number().int().min(0).default(50),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -216,6 +271,13 @@ export const env = {
 };
 
 /** Fonte de dados do RM via SOAP (wsConsultaSQL) — usada no Fluxo 1. */
+/**
+ * @deprecated Use `rmSoapConfigurado(cfg)` de tenantConfig.ts.
+ *
+ * Esta constante é derivada do AMBIENTE, então responde "o wsConsultaSQL do
+ * DEPLOY está configurado?" — não "o da ESCOLA X está?". Continua aqui porque a
+ * validação cruzada logo abaixo a usa, e ali o ambiente é a pergunta certa.
+ */
 export const isRmSoapConfigured = Boolean(
   raw.RM_WS_BASEURL && raw.RM_WS_USER && raw.RM_WS_PASS,
 );

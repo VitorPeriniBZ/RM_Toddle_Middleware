@@ -12,3 +12,5 @@ export * from './rmAttendanceSource';
 export * from './rmGuardianSource';
 export * from './rmGradeSource';
 export * from './rmTeacherSource';
+export * from './rmWriteDecision';
+export * from './volumeGuard';

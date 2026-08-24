@@ -12,7 +12,20 @@ import {
 } from './studentSync.processor';
 import { processStaffSync } from './staffSync.processor';
 import { STAFF_JOB } from '@rm-toddle/queues';
-import { logger } from '@rm-toddle/config';
+import { heartbeat, logger } from '@rm-toddle/config';
+
+/**
+ * O job esgotou as tentativas? Só então a falha é definitiva.
+ *
+ * O evento `failed` do BullMQ dispara em CADA tentativa. Pingar `/fail` na
+ * primeira faria o monitor externo alertar por um erro de rede que a segunda
+ * tentativa resolveria sozinha — e alerta que grita por nada é alerta que passa a
+ * ser ignorado. Mesma condição que a DLQ usa para decidir se copia o job.
+ */
+function esgotouTentativas(job: Job | undefined): boolean {
+  if (!job) return false; // falha sem job associado (ex.: erro de conexão)
+  return job.attemptsMade >= (job.opts.attempts ?? 1);
+}
 
 /**
  * Worker da fila `rm-to-toddle.students`.
@@ -82,6 +95,7 @@ staffWorker.on('failed', (job, err) => {
     { jobId: job?.id, jobName: job?.name, attemptsMade: job?.attemptsMade, err: err.message },
     'Job de professor falhou',
   );
+  if (esgotouTentativas(job)) void heartbeat.professores('falha', { jobName: job?.name });
 });
 staffWorker.on('error', (err) => {
   logger.error({ err }, 'Erro no worker de professores');
@@ -102,6 +116,10 @@ worker.on('failed', (job, err) => {
     { jobId: job?.id, jobName: job?.name, attemptsMade: job?.attemptsMade, err: err.message },
     'Job falhou',
   );
+  // Cobre as duas fases: extract que não conseguiu ler o RM (foi o que ficou 8
+  // dias quebrado, calado) e lote que esgotou as tentativas na escrita. Por isso
+  // o ping vive aqui e não dentro de cada processador.
+  if (esgotouTentativas(job)) void heartbeat.alunos('falha', { jobName: job?.name });
 });
 
 worker.on('error', (err) => {

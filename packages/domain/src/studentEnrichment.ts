@@ -1,10 +1,20 @@
 import sql from 'mssql';
-import { env, isRmSqlConfigured } from '@rm-toddle/config';
+import { isRmSqlConfigured, tenantConfig } from '@rm-toddle/config';
 import { getRmSqlPool } from '@rm-toddle/integrations';
 import { StudentEnrichment } from '@rm-toddle/contracts';
 import { chunk } from '@rm-toddle/config';
 import { sanitizeEmail } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * A API /StudentContexts não traz e-mail, nascimento nem gênero. Esses dados
@@ -28,7 +38,7 @@ export async function enrichStudentsFromRmDatabase(
   // IN (...) parametrizado tem limite de parâmetros no SQL Server — chunks de 500.
   for (const group of chunk(studentCodes, 500)) {
     const request = pool.request();
-    request.input('codColigada', sql.Int, env.RM_CODCOLIGADA);
+    request.input('codColigada', sql.Int, cfg.rm.escopo.coligada);
 
     const placeholders = group.map((ra, i) => {
       request.input(`ra${i}`, sql.VarChar, ra);

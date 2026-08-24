@@ -6,14 +6,29 @@ import type { Projetado } from './attendanceProjection';
  * 04/08/2026 — ver docs/rm-dataservers/EduFrequenciaDiariaWSData.md e o XSD ao
  * lado dele.
  *
- * Esta função só produz string. Quem envia é outro módulo, que ainda não existe.
+ * Esta função só produz string. Quem envia é o `escreverFrequencia.ts`.
  *
- * Decisões deliberadas de omissão:
+ * ─── `AULASDADAS`: A OMISSÃO QUE O RM RECUSOU ───────────────────────────────
  *
- *  - `AULASDADAS` (opcional, minOccurs=0) NÃO é enviado. Ele é o denominador da
- *    frequência mínima de 75%; escrever valor errado ali não erra um registro de
- *    presença, altera cálculo de reprovação por falta. O middleware não tem por
- *    que administrar o número de aulas dadas.
+ * Esta doc dizia, até 21/08/2026, que `AULASDADAS` NÃO era enviado — o campo é
+ * `minOccurs=0` no XSD, é o denominador dos 75% de reprovação por falta, e
+ * administrar número de aulas dadas não é papel de integração. O raciocínio
+ * estava certo; a conclusão, errada.
+ *
+ * MEDIDO: o `SaveRecord` recusa o dataset sem o campo, com "O campo número de
+ * aulas dadas deve ser preenchido" (`EduFrequenciaDiariaObj.ValidaEtapa`).
+ * Opcional no XSD não é opcional na regra de negócio.
+ *
+ * A saída preserva a intenção original: o valor é **ecoado** do próprio RM, lido
+ * de `SEtapas.AULASDADAS` na mesma execução, e **nunca calculado**. A integração
+ * devolve ao RM o número que o RM já tinha, e por isso não muda quem reprova.
+ *
+ * Quando não há valor a ecoar, o lote sai com `aulasDadas: null` e quem escreve
+ * deve RECUSAR — omitir o campo só transferiria a recusa para o RM, mais tarde e
+ * com mensagem pior.
+ *
+ * Outras omissões, essas mantidas:
+ *
  *  - `CODSUBTURMA` (opcional) NÃO é enviado: não existe subturma na coligada.
  *  - `PlanoAulaFreq` inteiro NÃO é enviado: todos os campos são opcionais e nada
  *    do que precisamos está lá.
@@ -53,7 +68,23 @@ export interface LoteFrequencia {
   ras: string[];
   linhas: Projetado[];
   xml: string;
+  /**
+   * O `AULASDADAS` ecoado neste dataset, ou `null` quando não havia o que ecoar.
+   *
+   * `null` NÃO é "tudo bem, omitimos": é lote inescrevível. Quem envia checa
+   * isto antes do `SaveRecord`.
+   */
+  aulasDadas: string | null;
 }
+
+/**
+ * De onde vem o `AULASDADAS` a ecoar, por (IDTURMADISC, CODETAPA).
+ *
+ * É parâmetro, e não leitura feita aqui dentro, para esta função continuar pura
+ * — e para o shadow poder montar exatamente o mesmo XML que o writer enviaria.
+ * Shadow que mostra XML diferente do que seria enviado não é ensaio, é ficção.
+ */
+export type AulasDadasDe = (idTurmaDisc: string, codEtapa: string) => string | null;
 
 /**
  * Agrupa os projetados em lotes por (IDTURMADISC, CODETAPA) — que é o recorte do
@@ -65,7 +96,10 @@ export interface LoteFrequencia {
  * entre registros DIFERENTES do Toddle é separada, em `projetaLote`, e vai para
  * revisão em vez de ser resolvida aqui.
  */
-export function montaLotes(projetados: Projetado[]): LoteFrequencia[] {
+export function montaLotes(
+  projetados: Projetado[],
+  aulasDadasDe?: AulasDadasDe,
+): LoteFrequencia[] {
   const grupos = new Map<string, Projetado[]>();
 
   for (const p of projetados) {
@@ -91,6 +125,8 @@ export function montaLotes(projetados: Projetado[]): LoteFrequencia[] {
     const ras = [...new Set(unicas.map((u) => u.linha.ra))].sort();
     const codColigada = unicas[0].linha.codColigada;
 
+    const aulasDadas = aulasDadasDe?.(idTurmaDisc, codEtapa) ?? null;
+
     const partes: string[] = [
       '<?xml version="1.0" encoding="utf-8"?>',
       `<EduFrequenciaDiaria xmlns="${NS}">`,
@@ -98,6 +134,8 @@ export function montaLotes(projetados: Projetado[]): LoteFrequencia[] {
       `    <CODCOLIGADA>${codColigada}</CODCOLIGADA>`,
       `    <IDTURMADISC>${escapeXml(idTurmaDisc)}</IDTURMADISC>`,
       `    <CODETAPA>${escapeXml(codEtapa)}</CODETAPA>`,
+      // Ecoado do RM, nunca calculado. Ver o cabeçalho deste arquivo.
+      ...(aulasDadas ? [`    <AULASDADAS>${escapeXml(aulasDadas)}</AULASDADAS>`] : []),
       '  </PARAMS>',
     ];
 
@@ -139,6 +177,7 @@ export function montaLotes(projetados: Projetado[]): LoteFrequencia[] {
       ras,
       linhas: unicas,
       xml: partes.join('\n'),
+      aulasDadas,
     });
   }
 

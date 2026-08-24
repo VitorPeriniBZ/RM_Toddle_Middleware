@@ -1,9 +1,12 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { env, logger, configVersion, configVersionDetalhe } from '@rm-toddle/config';
+import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
 import { pgPool, idMappingRepository, ENTITY_TYPES, type EntityType } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
 import { autenticar } from './auth';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Plano de CONTROLE. Só leitura nesta primeira fatia — nenhuma rota escreve, nem
@@ -56,7 +59,7 @@ export function construirApp() {
     return {
       ok: deps.every((d) => d.ok),
       authMode: env.API_AUTH_MODE,
-      tenant: env.TENANT_SLUG,
+      tenant: cfg.slug,
       configVersion: configVersion(),
       dependencias: deps,
     };
@@ -87,10 +90,10 @@ export function construirApp() {
          JOIN tenant t ON t.id = m.tenant_id
         WHERE t.slug = $1
         GROUP BY 1, 2 ORDER BY 1, 2`,
-      [env.TENANT_SLUG],
+      [cfg.slug],
     );
     return {
-      tenant: env.TENANT_SLUG,
+      tenant: cfg.slug,
       itens: rows.map((r) => ({ entityType: r.entity_type, state: r.state, total: Number(r.total) })),
     };
   });

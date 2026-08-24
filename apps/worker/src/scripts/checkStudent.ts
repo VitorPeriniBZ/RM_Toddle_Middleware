@@ -1,4 +1,4 @@
-import { env } from '@rm-toddle/config';
+import { env, tenantConfig } from '@rm-toddle/config';
 import { toddleClient } from '@rm-toddle/integrations';
 import { fetchStudentsFromRm } from '@rm-toddle/domain';
 import { idMappingRepository } from '@rm-toddle/db';
@@ -6,6 +6,9 @@ import { toSyncItem, toCreatePayload } from '@rm-toddle/domain';
 import { buildSourceId } from '@rm-toddle/domain';
 import { resolveYearGroupId } from '@rm-toddle/domain';
 import { pgPool } from '@rm-toddle/db';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Diagnóstico ponta-a-ponta de UM aluno, sem escrever em lugar nenhum.
@@ -35,7 +38,7 @@ async function main(): Promise<void> {
   const ctx = contexts.find((c) => String(c.StudentCode).trim() === ra);
 
   if (!ctx) {
-    console.log(`\n1. RM ......... NAO ENCONTRADO na Sentenca ${env.RM_SENTENCA_STUDENTS}`);
+    console.log(`\n1. RM ......... NAO ENCONTRADO na Sentenca ${cfg.rm.sentencas.alunos}`);
     console.log(`   A Sentenca devolveu ${contexts.length} aluno(s) e este RA nao esta entre eles.`);
     console.log('   Causa provavel: o filtro da Sentenca (turma, status de matricula ou');
     console.log('   periodo letivo) exclui o aluno. E ajuste no RM, nao no middleware.');

@@ -1,5 +1,15 @@
-import { env, isRmSoapConfigured, logger, sanitizeEmail } from '@rm-toddle/config';
+import { logger, rmSoapConfigurado, sanitizeEmail, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, ConsultaRow } from '@rm-toddle/integrations';
+
+/**
+ * A config da escola que este processo atende.
+ *
+ * `tenantConfig` em vez de `env`: quando a origem virar a tabela
+ * `integration_connection`, nada aqui muda. Função NOVA deve receber
+ * `cfg: TenantConfig` como parâmetro em vez de usar esta constante — ver a nota
+ * em packages/config/src/tenantConfig.ts.
+ */
+const cfg = tenantConfig;
 
 /**
  * Fonte de PROFESSOR e de alocação turma-disciplina-docente, via a Sentença
@@ -70,44 +80,44 @@ export interface RmTeacherData {
 }
 
 export async function fetchTeachersFromRm(): Promise<RmTeacherData> {
-  if (!isRmSoapConfigured) {
+  if (!rmSoapConfigurado) {
     throw new Error('wsConsultaSQL não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS).');
   }
-  if (!env.RM_SENTENCA_TURMADISC) {
+  if (!cfg.rm.sentencas.turmaDisc) {
     throw new Error(
       'RM_SENTENCA_TURMADISC não definido — informe o código da Sentença de turma-disciplina-professor ' +
         '(ex.: TODDLE.TURMADISC). Ver docs/rm-sentencas/TODDLE.TURMADISC.ESPEC.md.',
     );
   }
-  if (!env.RM_CODPERLET) {
+  if (!cfg.rm.escopo.periodoLetivo) {
     throw new Error('RM_CODPERLET não definido — a Sentença exige o período letivo (ex.: 2026).');
   }
 
-  const rows = await wsConsultaSqlClient.realizarConsulta(env.RM_SENTENCA_TURMADISC, {
-    CODCOLIGADA: env.RM_CODCOLIGADA,
-    CODPERLET: env.RM_CODPERLET,
+  const rows = await wsConsultaSqlClient.realizarConsulta(cfg.rm.sentencas.turmaDisc, {
+    CODCOLIGADA: cfg.rm.escopo.coligada,
+    CODPERLET: cfg.rm.escopo.periodoLetivo,
   });
 
   // Escopo por campus, idêntico ao da Sentença de alunos. A Sentença NÃO filtra
   // campus de propósito (ver ESPEC §2), então o filtro vive aqui — e é o que
   // mantém a D4 (Pre-K a Grade 5 fora) valendo: das 648 linhas, 286 são campus 2.
-  const todosOsCampi = env.RM_CODFILIAL.trim().toUpperCase() === 'ALL';
+  const todosOsCampi = cfg.rm.escopo.filiais.trim().toUpperCase() === 'ALL';
   const permitidos = todosOsCampi
     ? []
-    : env.RM_CODFILIAL.split(',').map((s) => s.trim()).filter(Boolean);
+    : cfg.rm.escopo.filiais.split(',').map((s) => s.trim()).filter(Boolean);
   if (!todosOsCampi && permitidos.length === 0) {
-    throw new Error(`RM_CODFILIAL="${env.RM_CODFILIAL}" não produziu campus válido.`);
+    throw new Error(`RM_CODFILIAL="${cfg.rm.escopo.filiais}" não produziu campus válido.`);
   }
 
   // Regex de turma ignorada. Inválida NÃO degrada para "nada ignorado": isso
   // faria 16 falsos positivos voltarem em silêncio no relatório.
   let ignorar: RegExp | undefined;
-  if (env.RM_TURMAS_IGNORADAS?.trim()) {
+  if (cfg.rm.escopo.turmasIgnoradas?.trim()) {
     try {
-      ignorar = new RegExp(env.RM_TURMAS_IGNORADAS.trim());
+      ignorar = new RegExp(cfg.rm.escopo.turmasIgnoradas.trim());
     } catch (e) {
       throw new Error(
-        `RM_TURMAS_IGNORADAS="${env.RM_TURMAS_IGNORADAS}" não é regex válida: ${(e as Error).message}`,
+        `RM_TURMAS_IGNORADAS="${cfg.rm.escopo.turmasIgnoradas}" não é regex válida: ${(e as Error).message}`,
       );
     }
   }

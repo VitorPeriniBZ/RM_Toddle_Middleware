@@ -1,5 +1,8 @@
 import { pgPool } from './pool';
-import { env } from '@rm-toddle/config';
+import { env, tenantConfig } from '@rm-toddle/config';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 export const ENTITY_TYPES = [
   'STUDENT',
@@ -39,7 +42,7 @@ export interface IdMapping {
   rmCode: string;
   rmInternalId: string | null;
   toddleId: string;
-  /** Organização Toddle a que este mapeamento pertence (env.TODDLE_ORG_ID). */
+  /** Organização Toddle a que este mapeamento pertence (cfg.toddle.organizationId). */
   targetInstanceKey: string;
   state: MappingState;
   archivedAt: Date | null;
@@ -94,11 +97,11 @@ async function tenantId(): Promise<string> {
   if (tenantIdCache) return tenantIdCache;
   const { rows } = await pgPool.query<{ id: string }>(
     "SELECT id FROM tenant WHERE slug = $1 AND status = 'active'",
-    [env.TENANT_SLUG],
+    [cfg.slug],
   );
   if (!rows[0]) {
     throw new Error(
-      `TENANT_SLUG="${env.TENANT_SLUG}" não existe (ou está suspenso) na tabela tenant. ` +
+      `TENANT_SLUG="${cfg.slug}" não existe (ou está suspenso) na tabela tenant. ` +
         'Abortando: sem tenant resolvido, uma consulta devolveria dado de outra escola.',
     );
   }
@@ -135,7 +138,7 @@ export const idMappingRepository = {
       `SELECT * FROM id_mapping
         WHERE tenant_id = $4 AND entity_type = $1 AND rm_code = $2
           AND target_instance_key = $3`,
-      [entityType, rmCode, env.TODDLE_ORG_ID, await tenantId()],
+      [entityType, rmCode, cfg.toddle.organizationId, await tenantId()],
     );
     return rows[0] ? mapRow(rows[0]) : null;
   },
@@ -153,7 +156,7 @@ export const idMappingRepository = {
       `SELECT * FROM id_mapping
         WHERE tenant_id = $4 AND entity_type = $1 AND rm_code = ANY($2)
           AND target_instance_key = $3`,
-      [entityType, rmCodes, env.TODDLE_ORG_ID, await tenantId()],
+      [entityType, rmCodes, cfg.toddle.organizationId, await tenantId()],
     );
     for (const row of rows) result.set(row.rm_code, mapRow(row));
     return result;
@@ -164,7 +167,7 @@ export const idMappingRepository = {
       `SELECT * FROM id_mapping
         WHERE tenant_id = $4 AND entity_type = $1 AND toddle_id = $2
           AND target_instance_key = $3`,
-      [entityType, toddleId, env.TODDLE_ORG_ID, await tenantId()],
+      [entityType, toddleId, cfg.toddle.organizationId, await tenantId()],
     );
     return rows[0] ? mapRow(rows[0]) : null;
   },
@@ -204,7 +207,7 @@ export const idMappingRepository = {
         input.rmCode,
         input.rmInternalId ?? null,
         input.toddleId,
-        env.TODDLE_ORG_ID,
+        cfg.toddle.organizationId,
         input.curriculumId ?? null,
         await tenantId(),
       ],
@@ -230,7 +233,7 @@ export const idMappingRepository = {
         WHERE tenant_id = $5 AND entity_type = $1 AND rm_code = $2
           AND target_instance_key = $3
         RETURNING *`,
-      [entityType, rmCode, env.TODDLE_ORG_ID, reason, await tenantId()],
+      [entityType, rmCode, cfg.toddle.organizationId, reason, await tenantId()],
     );
     return rows[0] ? mapRow(rows[0]) : null;
   },
@@ -250,7 +253,7 @@ export const idMappingRepository = {
           AND state = 'active'
           AND NOT (rm_code = ANY($3))
         ORDER BY rm_code`,
-      [entityType, env.TODDLE_ORG_ID, rmCodesInScope, await tenantId()],
+      [entityType, cfg.toddle.organizationId, rmCodesInScope, await tenantId()],
     );
     return rows.map(mapRow);
   },
@@ -264,7 +267,7 @@ export const idMappingRepository = {
           AND target_instance_key = $2
           AND ($3::text IS NULL OR state = $3)
         ORDER BY rm_code`,
-      [entityType, env.TODDLE_ORG_ID, state ?? null, await tenantId()],
+      [entityType, cfg.toddle.organizationId, state ?? null, await tenantId()],
     );
     return rows.map(mapRow);
   },

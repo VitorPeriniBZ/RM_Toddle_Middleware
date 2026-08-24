@@ -1,7 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { XMLParser } from 'fast-xml-parser';
-import { env, isRmSoapConfigured } from '@rm-toddle/config';
-import { logger } from '@rm-toddle/config';
+import { logger, rmSoapConfigurado, tenantConfig, type TenantConfig } from '@rm-toddle/config';
 
 /**
  * Cliente do TOTVS RM wsConsultaSQL (SOAP 1.1, document/literal).
@@ -64,10 +63,19 @@ class WsConsultaSqlClient {
     } as unknown as boolean,
   });
 
-  constructor() {
+  /**
+   * A config da escola, e não o ambiente, é a fonte da conexão.
+   *
+   * O default mantém os chamadores existentes funcionando sem mudança — mas todo
+   * código NOVO deve passar a config, para nascer capaz de atender mais de uma
+   * escola. Sem isto, cada fluxo novo (turma, plano de aula, frequência de
+   * volta, nota de volta) seria mais um a refatorar depois.
+   */
+  constructor(private readonly cfg: TenantConfig = tenantConfig) {
+    const configurado = rmSoapConfigurado(cfg);
     // baseURL só é montada se o SOAP estiver configurado — assim o módulo pode
     // ser importado mesmo em ambientes que não usam o RM (ex.: testes do Toddle).
-    const baseURL = isRmSoapConfigured ? `${env.RM_WS_BASEURL}${SERVICE_PATH}` : undefined;
+    const baseURL = configurado ? `${cfg.rm.conexao.baseUrl}${SERVICE_PATH}` : undefined;
     this.http = axios.create({
       baseURL,
       timeout: 120_000, // Sentenças pesadas (roster inteiro) podem demorar
@@ -75,8 +83,8 @@ class WsConsultaSqlClient {
         'Content-Type': 'text/xml; charset=utf-8',
         SOAPAction: SOAP_ACTION,
       },
-      auth: isRmSoapConfigured
-        ? { username: env.RM_WS_USER as string, password: env.RM_WS_PASS as string }
+      auth: configurado
+        ? { username: cfg.rm.conexao.usuario as string, password: cfg.rm.conexao.senha as string }
         : undefined,
     });
   }
@@ -90,7 +98,7 @@ class WsConsultaSqlClient {
     codSentenca: string,
     params: Record<string, string | number> = {},
   ): Promise<ConsultaRow[]> {
-    if (!isRmSoapConfigured) {
+    if (!rmSoapConfigurado(this.cfg)) {
       throw new Error(
         'wsConsultaSQL não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS no .env).',
       );
@@ -125,8 +133,8 @@ class WsConsultaSqlClient {
       '<soap:Body>' +
       '<tot:RealizarConsultaSQL>' +
       `<tot:codSentenca>${escapeXml(codSentenca)}</tot:codSentenca>` +
-      `<tot:codColigada>${env.RM_CODCOLIGADA}</tot:codColigada>` +
-      `<tot:codSistema>${escapeXml(env.RM_WS_SISTEMA)}</tot:codSistema>` +
+      `<tot:codColigada>${this.cfg.rm.escopo.coligada}</tot:codColigada>` +
+      `<tot:codSistema>${escapeXml(this.cfg.rm.conexao.sistema)}</tot:codSistema>` +
       `<tot:parameters>${escapeXml(parameters)}</tot:parameters>` +
       '</tot:RealizarConsultaSQL>' +
       '</soap:Body>' +
@@ -178,4 +186,11 @@ class WsConsultaSqlClient {
   }
 }
 
+/**
+ * Instância padrão, ligada à escola que este processo atende.
+ *
+ * Ponte para os chamadores existentes. Quando houver mais de uma escola no mesmo
+ * processo, construa `new WsConsultaSqlClient(cfg)` por tenant em vez de usar
+ * esta — ela continuará servindo o tenant do ambiente.
+ */
 export const wsConsultaSqlClient = new WsConsultaSqlClient();

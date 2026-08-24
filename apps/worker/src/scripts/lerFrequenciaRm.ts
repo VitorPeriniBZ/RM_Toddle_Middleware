@@ -1,6 +1,9 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { fetchFrequenciaFromRm, type RmFalta } from '@rm-toddle/domain';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Lê a frequência do RM e relata o que é projetável para o Toddle. SOMENTE
@@ -64,8 +67,8 @@ async function main(): Promise<void> {
   p('  Frequência do RM — SOMENTE LEITURA. Nada foi escrito.');
   p('══════════════════════════════════════════════════════════════════');
   p(`  janela     ${de} → ${ate}`);
-  p(`  sentença   ${env.RM_SENTENCA_FREQUENCIA}`);
-  p(`  campus     RM_CODFILIAL=${env.RM_CODFILIAL}   coligada=${env.RM_CODCOLIGADA}`);
+  p(`  sentença   ${cfg.rm.sentencas.frequencia}`);
+  p(`  campus     RM_CODFILIAL=${cfg.rm.escopo.filiais}   coligada=${cfg.rm.escopo.coligada}`);
   p('');
   p('── o que o RM devolveu ───────────────────────────────────────────');
   p(`  linhas                       ${resumo.linhas}`);

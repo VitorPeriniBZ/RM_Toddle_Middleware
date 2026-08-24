@@ -9,7 +9,16 @@ services:
       - redis-data:/data
 
   postgres:
-    image: postgres:16-alpine
+    # MESMA MAJOR QUE A PRODUÇÃO. Medido em 21/08/2026: produção roda PostgreSQL
+    # 18.4, e os dumps do backup diário carregam `SET transaction_timeout` (PG17+)
+    # e `\restrict` (PG18). Com `postgres:16-alpine` aqui, NENHUM dos 12 dumps
+    # diários restaurava — o caminho de recuperação de desastre nunca tinha sido
+    # exercitado, e falharia justamente no dia em que fosse necessário.
+    #
+    # Ao subir a major, o volume antigo não abre (o Postgres recusa data dir de
+    # outra major). Em dev isso é indolor: `docker compose down -v` e migrate.
+    # Confira com `npm run testar:restore`.
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: middleware
       POSTGRES_PASSWORD: middleware
@@ -17,7 +26,11 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - pg-data:/var/lib/postgresql/data
+      # PG18 mudou a convenção: o mount vai em /var/lib/postgresql, e o Postgres
+      # cria o data dir num subdiretório. Montar direto em .../data faz a imagem
+      # 18 recusar subir, com a mensagem sobre pg_upgrade — que engana, porque
+      # aqui não há upgrade nenhum, é volume novo.
+      - pg-data:/var/lib/postgresql
 
 volumes:
   redis-data:

@@ -8,6 +8,9 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "test:integracao": "TENANT_SLUG=integracao-teste vitest run --project integration",
     "db:migrate": "tsx packages/db/src/migrate.ts",
     "worker:students": "tsx apps/worker/src/workers/rm-to-toddle/studentSync.worker.ts",
     "enqueue:students": "tsx apps/worker/src/scripts/enqueueStudentSync.ts",
@@ -31,7 +34,14 @@
     "criar:1714": "tsx apps/worker/src/scripts/criarTurma1714.ts",
     "reconciliar:professores": "tsx apps/worker/src/scripts/reconciliarProfessores.ts",
     "sync:professores": "tsx apps/worker/src/scripts/syncProfessores.ts",
-    "preflight": "tsx apps/worker/src/scripts/preflight.ts"
+    "preflight": "tsx apps/worker/src/scripts/preflight.ts",
+    "checar:config": "./scripts/checar-camada-de-config.sh",
+    "testar:restore": "./scripts/testar-restore.sh",
+    "runs": "tsx apps/worker/src/scripts/runs.ts",
+    "pendencias": "tsx apps/worker/src/scripts/pendencias.ts",
+    "aprovar": "tsx apps/worker/src/scripts/aprovar.ts",
+    "lancar:falta": "tsx apps/worker/src/scripts/lancarUmaFalta.ts",
+    "escrever:frequencia": "tsx apps/worker/src/scripts/escreverFrequencia.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
@@ -50,7 +60,8 @@
     "@types/pg": "^8.11.10",
     "pino-pretty": "^13.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9"
   },
   "workspaces": [
     "apps/*",

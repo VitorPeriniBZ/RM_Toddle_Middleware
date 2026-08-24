@@ -1,7 +1,10 @@
-import { env, logger } from '@rm-toddle/config';
+import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
 import { fetchNotasFromRm } from '@rm-toddle/domain';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
+
+/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+const cfg = tenantConfig;
 
 /**
  * Cria a turma-disciplina 1714 no Toddle — a lacuna que a reconciliação achou.
@@ -34,16 +37,16 @@ async function main(): Promise<void> {
   // ─── o que o RM diz ───────────────────────────────────────────────────────
   const doRm = await wsDataServerClient.readView(
     'EduTurmaDiscData',
-    `STurmaDisc.IDTURMADISC=${ID_TURMADISC} AND STurmaDisc.CODCOLIGADA=${env.RM_CODCOLIGADA}`,
+    `STurmaDisc.IDTURMADISC=${ID_TURMADISC} AND STurmaDisc.CODCOLIGADA=${cfg.rm.escopo.coligada}`,
     'STURMADISC',
-    env.RM_CODFILIAL,
+    cfg.rm.escopo.filiais,
   );
   const td = doRm[0];
   if (!td) throw new Error(`IDTURMADISC ${ID_TURMADISC} não encontrada no RM.`);
   if ((td.ATIVA ?? '').toUpperCase() !== 'S') {
     throw new Error(`IDTURMADISC ${ID_TURMADISC} está ATIVA='${td.ATIVA}' no RM — não criar.`);
   }
-  if (td.CODFILIAL !== env.RM_CODFILIAL) {
+  if (td.CODFILIAL !== cfg.rm.escopo.filiais) {
     throw new Error(`IDTURMADISC ${ID_TURMADISC} é do campus ${td.CODFILIAL}, fora do escopo.`);
   }
 
@@ -76,7 +79,7 @@ async function main(): Promise<void> {
   // "Math Higher Level — 10th grade A - 1ª série" -> sufixo após o travessão
   const sufixo = String(irma.title ?? '').split('—').slice(1).join('—').trim();
   const titulo = `${td.NOMEDISC} — ${sufixo}`;
-  const sourceId = `rm:${env.RM_CODFILIAL}:td:${ID_TURMADISC}`;
+  const sourceId = `rm:${cfg.rm.escopo.filiais}:td:${ID_TURMADISC}`;
 
   const curriculumProgramId = String(irma.curriculumId ?? '');
   const anos = await toddleClient.listAcademicYears();
