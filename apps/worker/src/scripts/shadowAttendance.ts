@@ -188,7 +188,9 @@ async function main(): Promise<void> {
   };
 
   const resumo = projetaLote(registros, ctx);
-  const lotes = montaLotes(resumo.projetados);
+  // O mesmo resolvedor que o writer usa: sem ele o shadow mostraria um XML sem
+  // AULASDADAS, que o RM recusa — ensaio bonito e mentiroso.
+  const lotes = montaLotes(resumo.projetados, (td, etapa) => alvos.aulasDadasDe(td, etapa));
 
   // ─── DECISÃO DE ESCRITA ───────────────────────────────────────────────────
   //
@@ -245,6 +247,39 @@ async function main(): Promise<void> {
       valorNoRm: faltasPorChave.get(chave)?.presenca ?? null,
       hashDesejado: hashValor(pr.linha.presenca),
       origemId: pr.origemId,
+    });
+    if (abriu) pendenciasAbertas += 1;
+  }
+
+  // ─── 3b. CÓDIGO DE CHAMADA SEM POLÍTICA -> fila, agrupado por CÓDIGO ──────
+  //
+  // Recusa de projeção normalmente é defeito de dado e morre no relatório. Esta
+  // não: "o Toddle mandou 'Leave' e o RM não sabe o que é isso" é uma decisão de
+  // escola pendente, e enquanto ninguém decide o aluno fica SEM frequência no RM,
+  // em silêncio. Ver a migration 012 para o porquê de uma linha por código.
+  const porOpcao = new Map<string, { rotulo: string; n: number; exemplo: string }>();
+  for (const r of resumo.recusados) {
+    if (r.motivo !== 'OPCAO_SEM_POLITICA' || !r.opcao) continue;
+    const atual = porOpcao.get(r.opcao.abreviacao);
+    if (atual) atual.n += 1;
+    else porOpcao.set(r.opcao.abreviacao, { rotulo: r.opcao.rotulo, n: 1, exemplo: r.origemId });
+  }
+  for (const [abrev, info] of porOpcao) {
+    const abriu = await registrarPendencia({
+      entidade: 'FREQUENCIA',
+      chaveNatural: `OPCAO:${abrev}`,
+      veredito: 'OPCAO_SEM_POLITICA',
+      porque:
+        `O Toddle usa o código "${info.rotulo}" (${abrev}) e não há tradução para ` +
+        'PRESENCA no RM, então estes lançamentos NÃO chegam ao RM. Resolver aqui é ' +
+        'decidir a POLÍTICA (POLITICA_PRESENCA em attendanceProjection.ts), não ' +
+        'lançar falta à mão.',
+      valorDesejado: null,
+      valorNoRm: null,
+      // O hash é do CÓDIGO, não de um valor: reabrir só faz sentido se a escola
+      // renomear a opção, e é isso que este hash detecta.
+      hashDesejado: hashValor(`${abrev}|${info.rotulo}`),
+      origemId: info.exemplo,
     });
     if (abriu) pendenciasAbertas += 1;
   }
