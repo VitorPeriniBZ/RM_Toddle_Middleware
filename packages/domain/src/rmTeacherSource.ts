@@ -98,6 +98,45 @@ export async function fetchTeachersFromRm(): Promise<RmTeacherData> {
     CODPERLET: cfg.rm.escopo.periodoLetivo,
   });
 
+  // ─── A SENTENÇA REGISTRADA É A QUE ESPERAMOS? ────────────────────────────
+  //
+  // Medido em 25/08/2026: a `TODDLE.TURMADISC` registrada no RM era uma versão
+  // ANTIGA, sem NENHUMA coluna de e-mail. O efeito não foi um erro — foi pior:
+  // todo professor apareceu como "sem e-mail", a secretaria cadastrou dois
+  // e-mails de verdade, e nada mudou, porque a pergunta nunca era feita. Levou
+  // uma investigação inteira para descobrir que o defeito estava na consulta e
+  // não no dado. (Já tinha acontecido com a TODDLE.RESP, pelo mesmo motivo.)
+  //
+  // Divergência entre o `.sql` do repositório e a Sentença registrada é invisível
+  // por natureza: o SELECT roda, devolve linhas, e as colunas que faltam viram
+  // `undefined` — indistinguível de "o RM não tem esse dado".
+  //
+  // Aviso, e não exceção: sem as colunas de e-mail o sync ainda faz o resto do
+  // trabalho (turmas, vínculos de quem já está mapeado), e derrubá-lo tiraria
+  // mais do que devolve. Mas o aviso nomeia exatamente o que falta e o que fazer.
+  const colunasVistas = new Set(Object.keys(rows[0] ?? {}).map((k) => k.toUpperCase()));
+  const esperadas = [
+    'EMAIL_PROFESSOR',
+    'EMAIL_PROF_PESSOAL',
+    'EMAIL_PROF_USUARIO',
+    'AULAS_SEMANAIS',
+  ];
+  const ausentes = esperadas.filter((c) => !colunasVistas.has(c));
+  if (rows.length > 0 && ausentes.length > 0) {
+    logger.warn(
+      {
+        sentenca: cfg.rm.sentencas.turmaDisc,
+        colunasAusentes: ausentes,
+        colunasRecebidas: [...colunasVistas].sort(),
+      },
+      'A Sentença registrada no RM está DESATUALIZADA em relação a ' +
+        'docs/rm-sentencas/TODDLE.TURMADISC.sql — as colunas acima não vêm na ' +
+        'resposta. Enquanto isso, todo professor será tratado como "sem e-mail" ' +
+        'e nenhum será criado no Toddle, mesmo que o cadastro do RM esteja certo. ' +
+        'Recadastre a Sentença com o conteúdo do arquivo.',
+    );
+  }
+
   // Escopo por campus, idêntico ao da Sentença de alunos. A Sentença NÃO filtra
   // campus de propósito (ver ESPEC §2), então o filtro vive aqui — e é o que
   // mantém a D4 (Pre-K a Grade 5 fora) valendo: das 648 linhas, 286 são campus 2.
@@ -171,9 +210,21 @@ export async function fetchTeachersFromRm(): Promise<RmTeacherData> {
         // Institucional tem precedência. Sem nenhum dos dois, o professor NÃO
         // pode ser criado: o Toddle exige e-mail e o usa como IDENTIDADE —
         // e-mail errado gera conta inacessível, que só pode ser arquivada.
+        // Três lugares, nesta ordem, porque o RM espalha e-mail de professor por
+        // tabelas diferentes conforme a tela em que a escola cadastra:
+        //   PPESSOA.EMAIL         ficha da pessoa, campo "E-Mail"
+        //   PPESSOA.EMAILPESSOAL  ficha da pessoa, campo "E-Mail pessoal"
+        //   GUSUARIO.EMAIL        conta de usuário do RM (PPESSOA.CODUSUARIO)
+        //
+        // O terceiro foi acrescentado em 25/08/2026: a secretaria cadastrou dois
+        // professores e a Sentença continuou devolvendo nulo, porque o valor foi
+        // parar na conta de usuário e não na ficha. Sem esse caminho, o sync
+        // reportaria "sem e-mail" para alguém que TEM e-mail no RM — e a pessoa
+        // ficaria sem turma no Toddle sem que ninguém entendesse por quê.
         email:
           sanitizeEmail(pick(row, 'EMAIL_PROFESSOR')) ??
-          sanitizeEmail(pick(row, 'EMAIL_PROF_PESSOAL')),
+          sanitizeEmail(pick(row, 'EMAIL_PROF_PESSOAL')) ??
+          sanitizeEmail(pick(row, 'EMAIL_PROF_USUARIO')),
         turmaDiscIds: [],
       });
     }
