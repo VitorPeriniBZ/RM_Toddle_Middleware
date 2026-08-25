@@ -37,3 +37,15 @@ export const STUDENT_JOB = {
 export const STAFF_JOB = {
   SYNC: 'staff.sync',
 } as const;
+
+/**
+ * Job da via de volta: frequência lançada no Toddle -> falta no RM.
+ *
+ * Sem fan-out, pelo mesmo motivo do professor: o writer já agrupa por
+ * (IDTURMADISC, CODETAPA) e envia um dataset por grupo. Fatiar aqui duplicaria
+ * o agrupamento e tiraria do writer a visão do AGREGADO — que é justamente o
+ * que o teto de volume precisa enxergar para pegar de-para corrompido.
+ */
+export const ATTENDANCE_JOB = {
+  WRITE: 'attendance.write',
+} as const;

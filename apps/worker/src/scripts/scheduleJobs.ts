@@ -1,5 +1,10 @@
 import { closeAllQueues, redisConnection } from '@rm-toddle/queues';
-import { upsertStudentsNightly, upsertStaffNightly, SCHEDULER } from '@rm-toddle/queues';
+import {
+  upsertStudentsNightly,
+  upsertStaffNightly,
+  upsertAttendanceWriteDaily,
+  SCHEDULER,
+} from '@rm-toddle/queues';
 import { env, cronDoProfessorEfetivo } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 
@@ -21,11 +26,17 @@ import { logger } from '@rm-toddle/config';
 async function main(): Promise<void> {
   await upsertStudentsNightly();
   await upsertStaffNightly();
+  await upsertAttendanceWriteDaily();
 
   logger.info(
     {
       alunos: { scheduler: SCHEDULER.STUDENTS_NIGHTLY, cron: env.STUDENTS_SYNC_CRON },
       professores: { scheduler: SCHEDULER.STAFF_NIGHTLY, cron: cronDoProfessorEfetivo() },
+      frequencia: {
+        scheduler: SCHEDULER.ATTENDANCE_WRITE,
+        cron: env.ATTENDANCE_WRITE_CRON,
+        janelaDias: env.ATTENDANCE_WRITE_DIAS,
+      },
       tz: 'America/Sao_Paulo',
     },
     'Agendamentos de sincronização registrados',

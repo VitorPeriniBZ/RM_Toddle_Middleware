@@ -1,6 +1,6 @@
 import { env, logger, cronDoProfessorEfetivo } from '@rm-toddle/config';
 import { getQueue } from './queues';
-import { QUEUE, STAFF_JOB, STUDENT_JOB } from './names';
+import { ATTENDANCE_JOB, QUEUE, STAFF_JOB, STUDENT_JOB } from './names';
 import { redisConnection } from './connection';
 
 /**
@@ -14,6 +14,7 @@ import { redisConnection } from './connection';
 export const SCHEDULER = {
   STUDENTS_NIGHTLY: 'students-sync-nightly',
   STAFF_NIGHTLY: 'staff-sync-nightly',
+  ATTENDANCE_WRITE: 'attendance-write-daily',
 } as const;
 
 /**
@@ -38,6 +39,23 @@ export async function upsertStaffNightly(): Promise<void> {
     SCHEDULER.STAFF_NIGHTLY,
     { pattern: cronDoProfessorEfetivo(), tz: 'America/Sao_Paulo' },
     { name: STAFF_JOB.SYNC, data: { trigger: 'cron' } },
+  );
+}
+
+/**
+ * Registra (upsert) a escrita diária de frequência — a via de volta.
+ *
+ * A janela NÃO vai no `data` do scheduler: ela é calculada na hora, pelo
+ * processador, a partir de `ATTENDANCE_WRITE_DIAS`. Congelar datas aqui faria o
+ * scheduler carregar para sempre a janela do dia em que foi registrado — e como
+ * o upsert é idempotente por id, ninguém perceberia.
+ */
+export async function upsertAttendanceWriteDaily(): Promise<void> {
+  const queue = getQueue(QUEUE.TODDLE_TO_RM_ATTENDANCE);
+  await queue.upsertJobScheduler(
+    SCHEDULER.ATTENDANCE_WRITE,
+    { pattern: env.ATTENDANCE_WRITE_CRON, tz: 'America/Sao_Paulo' },
+    { name: ATTENDANCE_JOB.WRITE, data: { trigger: 'cron' } },
   );
 }
 
@@ -73,9 +91,14 @@ export function manterAgendamentoDeAlunos(): void {
       // silenciosa se ficasse de fora daqui.
       await upsertStudentsNightly();
       await upsertStaffNightly();
+      await upsertAttendanceWriteDaily();
       logger.info(
         {
-          scheduler: [SCHEDULER.STUDENTS_NIGHTLY, SCHEDULER.STAFF_NIGHTLY],
+          scheduler: [
+            SCHEDULER.STUDENTS_NIGHTLY,
+            SCHEDULER.STAFF_NIGHTLY,
+            SCHEDULER.ATTENDANCE_WRITE,
+          ],
           cronAlunos: env.STUDENTS_SYNC_CRON,
           cronProfessores: cronDoProfessorEfetivo(),
           tz: 'America/Sao_Paulo',

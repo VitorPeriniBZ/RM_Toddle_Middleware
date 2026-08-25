@@ -180,6 +180,27 @@ function checar(): Checagem[] {
     fatal: false,
   });
 
+  /**
+   * A via de volta virou job agendado em 25/08/2026, e ela escreve no registro
+   * acadêmico. Duas coisas precisam estar ditas, e nenhuma o Zod alcança:
+   * a Sentença de frequência (opcional no schema, obrigatória para este job) e
+   * o horário — porque se o gate de volume pedir aprovação o run PARA, e às 3h
+   * não há quem decida.
+   */
+  const cronDaFreq = env.ATTENDANCE_WRITE_CRON;
+  const horaDaFreq = Number(cronDaFreq.split(' ')[1]);
+  const madrugada = Number.isFinite(horaDaFreq) && (horaDaFreq < 7 || horaDaFreq >= 22);
+  c.push({
+    nome: `Escrita de frequência (cron "${cronDaFreq}", janela ${env.ATTENDANCE_WRITE_DIAS}d)`,
+    ok: !madrugada,
+    detalhe: madrugada
+      ? `agendada para ${horaDaFreq}h. Se o teto de volume pedir aprovação, o run ` +
+        'para e espera um humano que não está acordado — a frequência do dia não ' +
+        'chega ao RM e ninguém sabe até de manhã'
+      : `${env.ATTENDANCE_WRITE_DIAS} dias para trás, reprocessamento idempotente`,
+    fatal: false,
+  });
+
   c.push({
     nome: 'TODDLE_DEFAULT_YEAR_GROUP_ID',
     ok: Boolean(cfg.toddle.yearGroupPadrao),

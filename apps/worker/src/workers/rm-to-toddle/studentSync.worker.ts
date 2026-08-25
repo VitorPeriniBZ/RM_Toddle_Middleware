@@ -11,7 +11,8 @@ import {
   processStudentUpsertBatch,
 } from './studentSync.processor';
 import { processStaffSync } from './staffSync.processor';
-import { STAFF_JOB } from '@rm-toddle/queues';
+import { processAttendanceWrite } from '../toddle-to-rm/attendanceWrite.processor';
+import { ATTENDANCE_JOB, STAFF_JOB } from '@rm-toddle/queues';
 import { heartbeat, logger } from '@rm-toddle/config';
 
 /**
@@ -101,6 +102,44 @@ staffWorker.on('error', (err) => {
   logger.error({ err }, 'Erro no worker de professores');
 });
 
+/**
+ * Worker da fila `toddle-to-rm.attendance` — a VIA DE VOLTA.
+ *
+ * Mesmo processo, terceira fila. Não ganha container próprio pelo mesmo motivo do
+ * de professor: é um job por dia útil, e um segundo serviço traria supervisão,
+ * deploy e log duplicados para nada.
+ *
+ * `concurrency: 1` e sem limiter, e aqui isso não é economia — é segurança. Dois
+ * runs simultâneos leriam o RM antes de o outro escrever, e ambos veriam a mesma
+ * linha como ausente. A decisão de escrita depende do estado ATUAL do RM;
+ * paralelismo a transforma em leitura suja.
+ */
+const attendanceWorker = new Worker(
+  QUEUE.TODDLE_TO_RM_ATTENDANCE,
+  async (job: Job) => {
+    switch (job.name) {
+      case ATTENDANCE_JOB.WRITE:
+        return processAttendanceWrite(job);
+      default:
+        throw new Error(`Job desconhecido na fila de frequência: ${job.name}`);
+    }
+  },
+  { connection: redisConnection, concurrency: 1 },
+);
+
+attendanceWorker.on('completed', (job, result) => {
+  logger.info({ jobId: job.id, jobName: job.name, result }, 'Escrita de frequência concluída');
+});
+attendanceWorker.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, jobName: job?.name, attemptsMade: job?.attemptsMade, err: err.message },
+    'Escrita de frequência falhou',
+  );
+});
+attendanceWorker.on('error', (err) => {
+  logger.error({ err }, 'Erro no worker de frequência');
+});
+
 // O agendamento noturno vive só no Redis. Se o Redis reiniciar sem persistir, o
 // scheduler desaparece e NADA dá erro — o worker fica de pé consumindo uma fila
 // que nunca mais recebe nada. Isto o re-registra no boot e em cada reconexão ao
@@ -126,15 +165,26 @@ worker.on('error', (err) => {
   logger.error({ err }, 'Erro no worker');
 });
 
-logger.info({ queue: QUEUE.RM_TO_TODDLE_STUDENTS }, 'Worker de alunos iniciado');
+logger.info(
+  {
+    filas: [
+      QUEUE.RM_TO_TODDLE_STUDENTS,
+      QUEUE.RM_TO_TODDLE_STAFF,
+      QUEUE.TODDLE_TO_RM_ATTENDANCE,
+    ],
+  },
+  'Workers iniciados',
+);
 
 /** Encerramento gracioso: termina o job em andamento antes de sair. */
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Encerrando worker...');
   try {
-    // Os DOIS workers: sem fechar o de professor, o SIGTERM mataria um job em
-    // andamento no meio de uma escrita no Toddle.
-    await Promise.all([worker.close(), staffWorker.close()]);
+    // Os TRÊS workers. Faltar um significa SIGTERM matando um job no meio de uma
+    // escrita — e no caso da frequência isso é pior que perder o job: o
+    // `SaveRecord` já saiu, a resposta não voltou, e a linha fica num estado que
+    // só a releitura desempata (SENT_UNKNOWN, §9.4 do EduFrequenciaDiariaWSData).
+    await Promise.all([worker.close(), staffWorker.close(), attendanceWorker.close()]);
     await closeAllQueues();
     await closeRmSqlPool();
     await pgPool.end();

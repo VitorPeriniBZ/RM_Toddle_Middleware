@@ -112,6 +112,26 @@ const envSchema = z.object({
   SYNC_BATCH_SIZE: z.coerce.number().int().positive().max(200).default(50),
   STUDENTS_SYNC_CRON: z.string().default('0 3 * * *'),
 
+  // --- Via de volta: frequência Toddle -> RM ---
+  /**
+   * Quando a frequência lançada no Toddle é escrita no RM.
+   *
+   * Default 18:00: depois da última aula (a grade do campus 2 termina 15:50) e
+   * antes do jantar de quem opera. Rodar de madrugada seria pior aqui do que nos
+   * jobs de cadastro — se o teto de volume pedir aprovação, o run PARA e espera
+   * um humano, e às 3h não há humano.
+   */
+  ATTENDANCE_WRITE_CRON: z.string().default('0 18 * * 1-5'),
+  /**
+   * Quantos dias para trás a passada agendada reprocessa.
+   *
+   * Não é 1. Professor corrige chamada dias depois, e a decisão de escrita é
+   * idempotente por desenho — reprocessar uma janela já escrita devolve
+   * NADA_A_FAZER e não gasta chamada. O custo de olhar 7 dias é uma leitura a
+   * mais; o custo de olhar 1 é perder toda correção retroativa.
+   */
+  ATTENDANCE_WRITE_DIAS: z.coerce.number().int().positive().max(60).default(7),
+
   // --- Multi-tenant ---
   /**
    * Escola (tenant) que este processo atende. OBRIGATÓRIA.
