@@ -143,7 +143,18 @@ export async function sincronizarProfessores(
 
     for (const codProf of td.codProfs) {
       const prof = professores.get(codProf);
-      if (!prof?.email) continue;
+      if (!prof) continue;
+
+      // E-mail é requisito para CRIAR staff no Toddle (é a identidade lá), não
+      // para VINCULAR quem já existe. A versão anterior barrava aqui também, e
+      // o efeito era silencioso e errado: um professor já criado e mapeado —
+      // CODPROF 165, 166 e 169 são exatamente esse caso — nunca teria uma turma
+      // nova vinculada, porque o cadastro dele no RM está sem e-mail. A lacuna
+      // só apareceria na reconciliação, como "VINCULO_FALTANDO" que o sync se
+      // recusava a fechar sem dizer por quê.
+      //
+      // Quem não tem e-mail E não tem staff mapeado continua fora: cai em
+      // `semEmail` acima e não chega a ter `staffId`.
 
       const staffId =
         staffPorCodProf.get(codProf) ??
