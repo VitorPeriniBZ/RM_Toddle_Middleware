@@ -215,7 +215,14 @@ async function main(): Promise<void> {
     decisoes.set(
       pr.origemId,
       decidirEscrita(
-        { chaveNatural: chave, valor: pr.linha.presenca },
+        {
+          chaveNatural: chave,
+          valor: pr.linha.presenca,
+          // "Presente" na SFREQUENCIA é a AUSÊNCIA de linha: escrever 'P' não
+          // cria nada, remove. Sem dizer isto, toda presença voltaria como
+          // ESCREVER_NOVO em todo run. Ver a nota em `Desejado`.
+          equivaleAAusenciaDeLinha: pr.linha.presenca === POLITICA_PRESENCA.P?.presenca,
+        },
         falta ? estadoNoRmDeFalta(falta) : null,
         proveniencia.get(chaveDoMapa(chave)) ?? null,
       ),

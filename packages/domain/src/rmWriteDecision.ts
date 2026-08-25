@@ -75,6 +75,31 @@ export interface Desejado {
    * (professor removeu no Toddle).
    */
   valor: string | null;
+  /**
+   * O valor desejado significa "nenhuma linha no RM"?
+   *
+   * ─── POR QUE ISTO PRECISA SER DITO ──────────────────────────────────────
+   *
+   * A `SFREQUENCIA` guarda AUSÊNCIA, não presença. Escrever `PRESENCA='P'` não
+   * cria linha nenhuma — remove, se houver. Então, para frequência, "aluno
+   * presente" e "não existe linha no RM" são O MESMO ESTADO, dito de duas
+   * formas.
+   *
+   * Sem esta flag a regra 2 lia o SUCESSO da nossa própria escrita como
+   * evidência de que alguém tinha apagado a linha, e devolvia ESCREVER_NOVO
+   * para sempre. Medido em 25/08/2026: a mesma aula reapareceu com 22 presenças
+   * "novas" no dia seguinte à escrita. Num job agendado sobre 186
+   * turmas-disciplina isso seria milhares de `SaveRecord` inúteis por dia contra
+   * um SOAP lento — e, pior, `A ESCREVER` nunca chegaria a zero, então o número
+   * pararia de distinguir "nada mudou" de "algo mudou".
+   *
+   * NÃO é o mesmo que `valor: null`. `null` significa "a origem apagou o
+   * registro", e leva a REMOCAO_PEDE_HUMANO quando o RM ainda tem a linha. Aqui
+   * a origem tem uma afirmação positiva ("presente") que por acaso se representa
+   * como ausência de linha — e se o RM tiver uma falta, ela precisa passar pela
+   * decisão inteira (pode ser de professor).
+   */
+  equivaleAAusenciaDeLinha?: boolean;
 }
 
 /**
@@ -157,8 +182,20 @@ export function decidirEscrita(
 
   const hashDesejado = hashValor(desejado.valor);
 
-  // 2. Não existe no RM: caminho normal.
+  // 2. Não existe no RM.
   if (!existeNoRm) {
+    // 2a. O desejado JÁ É "sem linha". Estados idênticos, nada a fazer — e
+    //     escrever seria um no-op garantido contra um SOAP lento.
+    if (desejado.equivaleAAusenciaDeLinha) {
+      return {
+        veredito: 'NADA_A_FAZER',
+        porque:
+          'o valor desejado significa "sem registro no RM", e o RM já está assim. ' +
+          'Escrever não mudaria nada',
+        podeEscrever: false,
+        pendencia: false,
+      };
+    }
     return {
       veredito: 'ESCREVER_NOVO',
       porque: proveniencia

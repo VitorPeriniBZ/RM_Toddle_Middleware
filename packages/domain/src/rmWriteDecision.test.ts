@@ -207,3 +207,68 @@ describe('resumirDecisoes', () => {
     });
   });
 });
+
+/**
+ * "Presente" na SFREQUENCIA é a AUSÊNCIA de linha.
+ *
+ * Esta é a assimetria mais fácil de errar do projeto inteiro, e ela já foi
+ * errada uma vez: sem a flag, a regra 2 lia o sucesso da nossa própria escrita
+ * de `PRESENCA='P'` como "alguém apagou a linha" e devolvia ESCREVER_NOVO para
+ * sempre. Medido em 25/08/2026 — a mesma aula reapareceu com 22 presenças
+ * "novas" no dia seguinte.
+ *
+ * O que estes testes travam é a fronteira: a simplificação vale SÓ quando o RM
+ * está vazio. Se existe falta lá, ela pode ser de professor, e tem de passar
+ * pela decisão inteira.
+ */
+describe('valor que equivale a "sem linha no RM" (PRESENCA=P)', () => {
+  const decideP = (
+    noRm: EstadoNoRm | null,
+    prov: Proveniencia | null = null,
+  ): Veredito =>
+    decidirEscrita(
+      { chaveNatural: 'k', valor: 'P', equivaleAAusenciaDeLinha: true },
+      noRm,
+      prov,
+    ).veredito;
+
+  it('RM vazio e nunca escrevemos: nada a fazer, não escreve no-op', () => {
+    expect(decideP(null)).toBe('NADA_A_FAZER');
+  });
+
+  it('RM vazio e JÁ escrevemos: continua nada a fazer — não é "alguém apagou"', () => {
+    // Sem isto, todo run reescreveria toda presença, para sempre.
+    expect(decideP(null, nosso('P'))).toBe('NADA_A_FAZER');
+  });
+
+  it('não gasta chamada: podeEscrever é false', () => {
+    const d = decidirEscrita(
+      { chaveNatural: 'k', valor: 'P', equivaleAAusenciaDeLinha: true },
+      null,
+      nosso('P'),
+    );
+    expect(d.podeEscrever).toBe(false);
+    expect(d.pendencia).toBe(false);
+  });
+
+  it('FRONTEIRA: falta de HUMANO no RM não vira remoção silenciosa', () => {
+    // O professor corrigiu para presente no Toddle, mas a falta no RM é de
+    // alguém. Apagar seria exatamente o defeito que este módulo existe para
+    // impedir.
+    expect(decideP(deHumano('A'))).toBe('CONFLITO_HUMANO');
+  });
+
+  it('FRONTEIRA: falta NOSSA e intacta pode ser removida', () => {
+    // Correção legítima: nós escrevemos a falta, o professor corrigiu na origem.
+    expect(decideP(daIntegracao('A'), nosso('A'))).toBe('ATUALIZAR_NOSSO');
+  });
+
+  it('FRONTEIRA: falta nossa EDITADA depois vira pendência', () => {
+    expect(decideP(daIntegracao('A', true))).toBe('EDITADO_POR_FORA');
+  });
+
+  it('sem a flag, o comportamento antigo é preservado', () => {
+    // Quem não declara a equivalência (nota, plano de aula) não é afetado.
+    expect(decide('P', null, nosso('P'))).toBe('ESCREVER_NOVO');
+  });
+});
