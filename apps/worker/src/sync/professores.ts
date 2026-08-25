@@ -34,6 +34,24 @@ const dorme = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 /** Papel com que o professor entra na turma. Resolvido por NOME, não fixo. */
 const PAPEL_PROFESSOR = 'Class Teacher';
 
+/**
+ * Papel de ESCOLA com que o professor é criado — outro eixo, não o da turma.
+ *
+ * O Toddle tem quatro níveis (ACCOUNT, SCHOOL, COURSE, CLASS) e "professor"
+ * existe em dois deles:
+ *
+ *   CLASS  "Class Teacher"  amarra a pessoa a UMA turma. É o que o sync já fazia.
+ *   SCHOOL "Teacher"        é o papel dela no programa.
+ *
+ * Medido em 25/08/2026: de 40 staff, só UM tinha SCHOOL/Teacher — justamente o
+ * professor piloto, o único de quem sabemos com certeza que consegue lançar
+ * chamada. Os outros 33 tinham apenas ACCOUNT/"Non Admin User", que significa
+ * "não é administrador", não "é professor". Ninguém escolheu essa divisão; ela
+ * apareceu porque o sync nunca disse nada sobre papel de escola e deixou o
+ * default do Toddle decidir.
+ */
+const PAPEL_ESCOLA = 'Teacher';
+
 export interface OpcoesSyncProfessores {
   /** `false` = ensaio: monta o plano, loga e não escreve nada. */
   executar: boolean;
@@ -80,6 +98,21 @@ export async function sincronizarProfessores(
     throw new Error(
       `Papel "${PAPEL_PROFESSOR}" (roleLevel=CLASS) não existe nesta organização. ` +
         `Disponíveis: ${papeis.filter((p) => p.roleLevel === 'CLASS').map((p) => p.roleName).join(', ')}`,
+    );
+  }
+
+  // Idem, por nome. AUSENTE NÃO É ERRO FATAL: sem o papel de escola a pessoa
+  // ainda é criada e ainda entra nas turmas. Derrubar o sync inteiro por causa
+  // de um papel que talvez nem seja obrigatório trocaria um problema pequeno por
+  // um grande.
+  const papelEscola = papeis.find(
+    (p) => p.roleLevel === 'SCHOOL' && p.roleName.trim().toLowerCase() === PAPEL_ESCOLA.toLowerCase(),
+  );
+  if (!papelEscola) {
+    logger.warn(
+      { disponiveis: papeis.filter((p) => p.roleLevel === 'SCHOOL').map((p) => p.roleName) },
+      `Papel "${PAPEL_ESCOLA}" (roleLevel=SCHOOL) não existe nesta organização — ` +
+        'os professores serão criados com o papel padrão do Toddle',
     );
   }
 
@@ -181,6 +214,7 @@ export async function sincronizarProfessores(
       turmasGerenciadas: turmasGerenciadas.length,
       turmasNaoMapeadas: turmasNaoMapeadas.length,
       papel: papel.roleName,
+      papelEscola: papelEscola?.roleName ?? '(nenhum — padrão do Toddle)',
       modo: executar ? 'EXECUTAR' : 'ensaio (nada será escrito)',
     },
     'Plano do sync de professores',
@@ -237,15 +271,40 @@ export async function sincronizarProfessores(
   for (const prof of criarStaff.slice(0, limite)) {
     const [primeiro, ...resto] = prof.nome.split(/\s+/);
     try {
+      const base = {
+        firstName: primeiro ?? prof.nome,
+        lastName: resto.join(' ') || primeiro || prof.nome,
+        email: prof.email,
+        sourceId: prof.codProf,
+      };
+
+      // `systemRoleId` é o papel de ESCOLA. A doc do Toddle o lista como campo
+      // aceito no POST /staff, mas NÃO documenta que espera um id de `org-roles`
+      // — isso é inferência a partir dos ids que aparecem em
+      // `curriculumProgramRoles`, e não está medido.
+      //
+      // Por isso o fallback: se o POST falhar COM o campo, tenta de novo SEM.
+      // A ordem de preferência é papel certo > pessoa existir; a ordem de
+      // prioridade é o contrário. Um professor sem papel de escola ainda dá aula;
+      // um professor que não existe no Toddle não lança chamada nenhuma.
+      //
       // `createStaff` já extrai e valida o id (a resposta o aninha em `staff`).
-      const staffId = await comPaciencia(() =>
-        toddleClient.createStaff({
-          firstName: primeiro ?? prof.nome,
-          lastName: resto.join(' ') || primeiro || prof.nome,
-          email: prof.email,
-          sourceId: prof.codProf,
-        }),
-      );
+      let staffId: string;
+      try {
+        staffId = await comPaciencia(() =>
+          toddleClient.createStaff(
+            papelEscola ? { ...base, systemRoleId: papelEscola.roleId } : base,
+          ),
+        );
+      } catch (err) {
+        if (!papelEscola) throw err;
+        logger.warn(
+          { codProf: prof.codProf, erro: (err as Error).message },
+          'POST /staff recusou com systemRoleId — recriando SEM o papel de escola. ' +
+            'A pessoa entra, mas alguém precisa dar o papel "Teacher" na tela do Toddle',
+        );
+        staffId = await comPaciencia(() => toddleClient.createStaff(base));
+      }
       await idMappingRepository.upsert({ entityType: 'STAFF', rmCode: prof.codProf, toddleId: staffId });
       resumo.criados += 1;
       staffPorCodProf.set(prof.codProf, staffId);
