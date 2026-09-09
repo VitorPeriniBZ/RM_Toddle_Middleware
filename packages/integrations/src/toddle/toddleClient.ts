@@ -2,6 +2,8 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import { chunk, logger, tenantConfig, type TenantConfig } from '@rm-toddle/config';
 import {
   ToddleAttendance,
+  ToddleGradeScale,
+  ToddleGradeScalesResponse,
   ToddleGradingPeriod,
   ToddleParent,
   ToddleRoutine,
@@ -15,6 +17,8 @@ import {
   ToddleStudent,
   ToddleStudentResponse,
   ToddleStudentsListResponse,
+  ToddleTermGradeStudent,
+  ToddleTermGradesResponse,
   ToddleYearGroup,
   ToddleYearGroupsResponse,
 } from './types';
@@ -45,6 +49,9 @@ const SOURCE_IDS_PER_REQUEST = 50;
 
 /** Tamanho de página do GET /attendance (paginação por cursor). */
 const ATTENDANCE_PAGE_SIZE = 400;
+
+/** Tamanho de página do GET /term-grades. O default da API é 100. */
+const TERM_GRADES_PAGE_SIZE = 100;
 
 /**
  * Status que merecem nova tentativa: 429 é rate limit (os limites do Toddle NÃO
@@ -993,6 +1000,106 @@ export class ToddleClient {
       }),
     );
     return data?.response ?? [];
+  }
+
+  /**
+   * Notas de etapa lançadas no Toddle — a ORIGEM da via de nota Toddle -> RM.
+   *
+   * `curriculumProgramId` é OBRIGATÓRIO (a API recusa sem ele), e por isso o
+   * parâmetro não é opcional aqui: default silencioso viraria "de qual currículo
+   * mesmo?" em produção. Paginação por cursor, como o /attendance.
+   *
+   * ─── A RESPOSTA É ANINHADA, E ISSO MUDA A CONTAGEM ──────────────────────────
+   *
+   * `edges[]` são ALUNOS, não notas: 257 edges com `ratings: []` são 257 alunos e
+   * ZERO notas. Este método devolve os alunos como vêm, e quem achata é o
+   * `toddleGradeSource`. Contar `edges.length` como "notas lidas" foi o erro que
+   * o teto de volume pegaria tarde.
+   *
+   * ─── `criteriaType` NÃO É COSMÉTICO ─────────────────────────────────────────
+   *
+   * Sem ele a API devolve o critério default do currículo. Passar
+   * `FINAL_SCORE` pede a nota geral da etapa (numérica), que é a única que casa
+   * com o `NOTAFALTA` do RM sem régua de conversão. Ver a nota em
+   * `ToddleTermGradeRating`.
+   */
+  async listTermGrades(filtros: {
+    curriculumProgramId: string;
+    academicYearId?: string;
+    gradingPeriodId?: string;
+    criteriaType?: string;
+    studentId?: string;
+    /** Teto de segurança: aborta se a origem devolver mais alunos que isto. */
+    maxRecords?: number;
+  }): Promise<ToddleTermGradeStudent[]> {
+    if (!filtros.curriculumProgramId) {
+      throw new ToddleApiError(
+        'listTermGrades exige curriculumProgramId — a API do Toddle recusa sem ele.',
+      );
+    }
+
+    const alunos: ToddleTermGradeStudent[] = [];
+    const teto = filtros.maxRecords ?? Infinity;
+    let cursor: string | undefined;
+
+    for (;;) {
+      const params: Record<string, string | number> = {
+        curriculumProgramId: filtros.curriculumProgramId,
+        count: TERM_GRADES_PAGE_SIZE,
+      };
+      if (cursor) params.cursor = cursor;
+      if (filtros.academicYearId) params.academicYearId = filtros.academicYearId;
+      if (filtros.gradingPeriodId) params.gradingPeriodId = filtros.gradingPeriodId;
+      if (filtros.criteriaType) params.criteriaType = filtros.criteriaType;
+      if (filtros.studentId) params.studentId = filtros.studentId;
+
+      const { data } = await this.withRetry('GET /term-grades', () =>
+        this.http.get<ToddleTermGradesResponse>('/public/v2/term-grades', { params }),
+      );
+
+      const pagina = data?.response?.edges ?? [];
+      alunos.push(...pagina);
+      logger.debug(
+        {
+          alunosNaPagina: pagina.length,
+          acumulado: alunos.length,
+          comNota: pagina.filter((a) => (a.ratings ?? []).length > 0).length,
+          totalCount: data?.response?.totalCount,
+        },
+        'Toddle GET /term-grades página lida',
+      );
+
+      if (alunos.length > teto) {
+        throw new ToddleApiError(
+          `GET /term-grades devolveu mais de ${teto} alunos — abortando antes de processar. ` +
+            'Estreite por grading period ou por aluno.',
+        );
+      }
+
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info?.endCursor) break;
+      cursor = info.endCursor;
+    }
+
+    return alunos;
+  }
+
+  /**
+   * Escalas de nota cadastradas. Serve para UMA pergunta: a nota que o professor
+   * lança é numérica ou alfabética?
+   *
+   * Medido em 09/09/2026 nesta organização: as duas escalas são
+   * `valueType: "ALPHA"` (EXEM/EXC/EXH/EVL/EMER/NA e A-E). O RM guarda numérico
+   * e a tabela de conceito dele está vazia, então não existe régua oficial de
+   * letra para número — a projeção recusa em vez de converter por conta própria.
+   */
+  async listGradeScales(curriculumProgramId: string): Promise<ToddleGradeScale[]> {
+    const { data } = await this.withRetry('GET /grade-scale', () =>
+      this.http.get<ToddleGradeScalesResponse>('/public/v2/grade-scale', {
+        params: { curriculumProgramId },
+      }),
+    );
+    return data?.response?.gradeScales ?? [];
   }
 
   /**
