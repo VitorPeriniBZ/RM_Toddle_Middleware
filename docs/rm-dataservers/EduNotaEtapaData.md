@@ -208,3 +208,58 @@ com mensagem parecida, é uma linha para ligar.
 Quando ligar, o valor é **ecoado** do próprio RM, nunca calculado — é o
 denominador dos 75% de reprovação por falta, e administrá-lo mudaria quem
 reprova.
+
+---
+
+## 10. A incógnita da escala, fechada criando o dado (09/09/2026)
+
+Não havia UMA nota no Toddle — 257 alunos, `ratings: []` em todos —, então a
+forma da resposta foi medida **criando** uma nota de verdade no sandbox, o mesmo
+método usado no levantamento de plano de aula.
+
+Alvo: `IDTURMADISC 1541` (Geografia — 12th grade A), RA `202600053`, no T1.
+
+```
+POST postedGrade "6.5"  ->  HTTP 400
+                            "For FINAL_SCORE, postedGrade must be an integer value."
+POST postedGrade "6"    ->  HTTP 200, value: "6"
+GET  criteriaType=FINAL_SCORE
+                        ->  score: "6.0",  academicCriteriaSetType: "FINAL_SCORE",
+                            criteriaValueLabel: null, isOverridden: true
+```
+
+**Três conclusões.**
+
+1. **A nota geral do Toddle é INTEIRA.** O RM guarda 4 decimais e usa: a própria
+   aluna deste teste tem `6,5000` lançado à mão. Não existe forma de o professor
+   expressar 6,5 como nota geral no Toddle. Isso não é limitação da integração —
+   é do produto —, e o que fazer com as casas decimais é decisão da escola.
+2. **O read não devolve o que o write aceita**: escreve-se `"6"` e lê-se `"6.0"`.
+   Comparação de nota é numérica neste projeto, nunca de string; comparar texto
+   veria `"6.0"` diferente de `"6.0000"` e reescreveria a mesma nota para sempre.
+3. **`FINAL_SCORE` põe o valor em `score`**, com `criteriaValueLabel: null` — o
+   que confirma o discriminador que `toddleGradeSource` usa.
+
+E a resposta trouxe três campos que a doc do Toddle não lista: `isOverridden`,
+`categoryId` e `categoryName`. `isOverridden` veio `true` na nota posta por API;
+se ele distingue nota digitada de nota calculada pelo gradebook é hipótese — não
+foi medido com nota calculada.
+
+### O que o pipeline fez com ela
+
+O ensaio (`npm run escrever:notas -- --etapa 1 --data-ref 2026-03-10`) leu a nota,
+projetou, e o guarda 2 respondeu:
+
+```
+CONFLITO_HUMANO   chave 1|1|N|1541|202600053   Toddle 6   RM 6.5000
+"o RM tem valor diferente e a autoria não é da integração.
+ Sobrescrever apagaria lançamento humano"
+```
+
+É a defesa inteira funcionando sobre dado real, e a primeira nota que o sistema
+viu já era um caso de conflito.
+
+> **Dado de teste no sandbox.** Aquela nota `6` no T1 de `IDTURMADISC 1541`
+> continua lá: o `POST /term-grades` é upsert e a API não expõe remoção. Ela é
+> inofensiva para a via de nota (T1 mapeia para a etapa 1, cuja janela fechou em
+> 15/05), mas se atrapalhar alguma medição, quem apaga é o portal.

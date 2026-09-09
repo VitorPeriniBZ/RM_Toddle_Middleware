@@ -297,6 +297,32 @@ export interface ToddleGradingPeriod {
  * de conceito do RM está vazia. Nota que chegar por `GRADE_SCALE` não tem régua
  * oficial para virar número, e a projeção RECUSA em vez de inventar conversão.
  *
+ * ─── O READ E O WRITE NÃO USAM O MESMO FORMATO ──────────────────────────────
+ *
+ * Medido criando uma nota de verdade no sandbox em 09/09/2026:
+ *
+ *   POST postedGrade "6"    -> aceito, resposta `value: "6"`
+ *   POST postedGrade "6.5"  -> HTTP 400: "For FINAL_SCORE, postedGrade must be
+ *                              an integer value."
+ *   GET  devolve            -> `score: "6.0"`
+ *
+ * Duas consequências. A primeira é de parsing: o read acrescenta `.0`, então
+ * comparar STRING com o valor do RM ("6.0000") veria diferença onde não há e
+ * reescreveria a mesma nota para sempre — a comparação é numérica.
+ *
+ * A segunda é de escopo, e é maior: **`FINAL_SCORE` só aceita inteiro.** O RM
+ * guarda a nota com 4 decimais e usa: a primeira aluna real que este projeto
+ * consultou tem `6,5000` lançado à mão no RM, e não existe forma de o professor
+ * expressar 6,5 como nota geral no Toddle. Quem decide o que fazer com as casas
+ * decimais é a escola — está na tabela de pendências de docs/DECISOES.md.
+ *
+ * ─── CAMPOS QUE A DOC DO TODDLE NÃO LISTA ───────────────────────────────────
+ *
+ * A resposta real trouxe `isOverridden`, `categoryId` e `categoryName`. O
+ * `isOverridden: true` apareceu na nota postada por API — o que sugere que ele
+ * distingue nota digitada/sobreposta de nota calculada pelo gradebook. NÃO foi
+ * medido com nota calculada, então é hipótese, não afirmação.
+ *
  * ─── `courseIds` É UM ARRAY ─────────────────────────────────────────────────
  *
  * Um teacher course pode ter várias turmas (`courseIds: [{id, name}, …]`), e o
@@ -311,7 +337,10 @@ export interface ToddleTermGradeRating {
   teacherCourseTitle?: string | null;
   courseIds?: Array<{ id?: string | number; name?: string }> | null;
   gradingPeriodId?: string | null;
-  /** Valor quando o critério é `FINAL_SCORE`. String, não número. */
+  /**
+   * Valor quando o critério é `FINAL_SCORE`. String, não número — e o read
+   * devolve com `.0` ("6.0") mesmo tendo aceitado "6" na escrita.
+   */
   score?: string | number | null;
   academicCriteriaSetLabel?: string | null;
   academicCriteriaSetId?: string | null;
@@ -362,3 +391,8 @@ export interface ToddleGradeScale {
 export interface ToddleGradeScalesResponse {
   response?: { gradeScales?: ToddleGradeScale[] };
 }
+
+/**
+ * Sinaliza nota sobreposta manualmente, em vez de calculada pelo gradebook.
+ * Observado como `true` na nota criada por API; não medido com nota calculada.
+ */
