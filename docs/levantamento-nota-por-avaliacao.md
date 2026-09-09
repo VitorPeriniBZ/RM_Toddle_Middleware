@@ -58,40 +58,90 @@ professor lança no Toddle  ->  SNotas (por CODPROVA)  ->  fórmula 01_ETAPA  ->
 
 ---
 
-## 3. O lado do Toddle muda junto
+## 3. O lado do Toddle — medido em 09/09/2026
 
 Se o destino é nota **por avaliação**, a origem deixa de ser `GET /term-grades`
 (nota fechada de etapa) e passa a ser o par:
 
-| Toddle | RM | medido |
+| Toddle | RM | funciona? |
 |---|---|---|
-| `GET /public/v2/assignments` | `SProvas` | **223 assignments** no sandbox |
-| `GET /public/v2/student-assignments` | `SNotas` | funciona; traz `assignmentId`, `studentId`, `evaluatedAt`, `academicTermId` |
+| `GET /public/v2/assignments` | `SProvas` | sim — 223 no ano corrente |
+| `GET /public/v2/student-assignments` | `SNotas` | sim — 2.085 resultados |
 
-E aqui está a boa notícia que faltava: **existe valor numérico**. O campo
-`assessmentToolData` vem em três formas:
+Campos que o assignment traz: `id`, `title`, `state`, `assessmentType`,
+`subAssessmentType`, `teacherCourseId`, `classId`, `className`, `categoryId`,
+`createdBy`, `publishedAt`, `dueDate`. O resultado por aluno traz `assignmentId`,
+`studentId`, `evaluatedAt`, `evaluationSharedAt`, **`academicTermId`** (o
+grading period, que dá o `CODETAPA`) e `assessmentToolData`.
 
-```jsonc
-{ "score":  [{ "value": "62", "maxScore": "66" }] }              // numérico
-{ "rubric": [{ "value": "Exemplary…", "criteriaLabel": "…" }] }  // alfabético
-{ "score":  [...], "rubric": [...] }                             // os dois
+### Existe valor numérico — e a escala é POR AVALIAÇÃO
+
+`assessmentToolData` vem em quatro formas, medidas nos 2.085 resultados:
+
+| forma | quantos |
+|---|---|
+| `(vazio)` — criado, não avaliado | **1.484** |
+| `score` | 251 |
+| `score+rubric` | 190 |
+| `rubric` só | 160 |
+
+**441 têm score numérico**, no formato `{ "value": "62", "maxScore": "66" }`. E os
+`maxScore` são muitos — 80, 50, 100, 30, 20, 66, 77, 60, 70, 87, 10, 15…
+
+Isso é bom: **`maxScore` casa com `SProvas.VALOR`** (o campo é `VALOR`, não
+`NOTAMAXIMA`), então a conversão para a escala do RM é por avaliação, com o
+denominador vindo do próprio dado — não uma regra global inventada.
+
+Os 160 `rubric`-só continuam sem número, e reencontram o impasse de letra→número
+agora por avaliação.
+
+### Duas armadilhas de API, medidas
+
+- **Nenhum dos dois endpoints tem `modifiedSince`.** Igual ao `/term-grades`. Sync
+  incremental por filtro é impossível: cada passada lê tudo, e é o guarda de
+  decisão que a torna barata.
+- **`classIds` e `teacherCourseIds` vão em CSV**, não como array JSON — ao
+  contrário de `sourceIds` e `courseIds` em outros endpoints, que exigem JSON. A
+  mesma API usa as duas convenções.
+
+---
+
+## 3b. ⛔ O VOLUME PARA A EAV É ZERO
+
+O funil, calculado sobre os 441 resultados numéricos:
+
+```
+  com score numérico            441
+  - turma sem de-para COURSE    441
+  - aluno sem de-para STUDENT     0
+  - term sem de-para GRADING      0
+  = PROJETÁVEIS                   0
 ```
 
-O `score` casa com `SNotas.NOTA` e o `maxScore` com `SProvas.NOTAMAXIMA`. O
-`rubric` reencontra o problema de letra→número, agora por avaliação.
+**Todos os 441 são dado de demonstração.** Dos 223 assignments, **222 pertencem a
+turmas que não são da EAV** — são 49 turmas de seed do Toddle: "Y10 Math B",
+"Y8 English A", "Year 3 Jupiter", "Year 10 - Accounting A"…
 
-Os 223 assignments por tipo:
+Das **186 turmas-disciplina mapeadas, exatamente 1** tem algum assignment:
 
-| `assessmentType/subAssessmentType` | quantos |
-|---|---|
-| `learning_engagement/le` | 111 |
-| `assessment/fmt` | 38 |
-| `learning_engagement/` | 30 |
-| `assessment/pt` | 16 |
-| `ai_tutor/ai_tutor` | 12 |
-| `worksheet/worksheet` | 6 |
-| `assessment/pri` | 6 |
-| `assessment/` | 4 |
+> `"Teste integracao RM - Formacao do relevo brasileiro"`
+> Geografia — 11th grade A, criado em 25/08/2026, tipo `learning_engagement/le`
+> **26 alunos, ZERO avaliados**, `assessmentToolData: {}` em todos
+
+### O que isso significa
+
+O bloqueio deixou de ser técnico. O caminho está provado nas duas pontas —
+`EduNotasData` grava e persiste, `student-assignments` lê e traz número — e **não
+há nada para carregar**: os professores não estão avaliando no Toddle.
+
+Construir o pipeline agora seria construir para zero dado. E as decisões de
+desenho que faltam (quais tipos de assignment viram nota, como converter escala,
+o que fazer com rubrica) **não têm resposta sem observar o professor usando**. São
+perguntas sobre comportamento, e a amostra é vazia.
+
+**Recomendação:** antes de mais código, uma turma-piloto lançando nota de verdade
+no Toddle por algumas semanas. Com dado real na mão, o de-para se escreve sozinho
+e as quatro perguntas da escola ganham resposta empírica em vez de opinião.
 
 ---
 
@@ -167,7 +217,8 @@ O que muda quando a pergunta 6 for respondida: o **montador de XML** (dois
 datasets em vez de um), o **de-para de avaliação** (novo tipo na `id_mapping`) e
 o **leitor do Toddle** (`student-assignments` em vez de `term-grades`).
 
-> ⚠️ **Rastro deixado por este levantamento no sandbox**
+> ⚠️ **Rastro deixado por este levantamento no sandbox** (a medição do lado
+> Toddle foi só leitura e não acrescentou nada a esta lista)
 >
 > - `SNOTAETAPA` chave `1|1|N|1250|202600199`: linha criada por mim, valor
 >   `0.0000`. Não existia antes. Indistinguível das outras 21 daquela turma, que
