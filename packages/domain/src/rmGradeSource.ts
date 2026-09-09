@@ -1,5 +1,6 @@
 import { logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
+import type { EstadoNoRm } from './rmWriteDecision';
 
 /**
  * A config da escola que este processo atende.
@@ -246,4 +247,47 @@ function pick(row: ConsultaRow, ...names: string[]): string | undefined {
     if (v != null && v !== '') return v;
   }
   return undefined;
+}
+
+// ============================================================
+//  A via de volta: o que o RM TEM hoje, para a decisão de escrita.
+//  Ver rmWriteDecision.ts — a segunda das três evidências.
+// ============================================================
+
+/**
+ * Traduz a nota lida do RM no `EstadoNoRm` que `decidirEscrita` consome.
+ *
+ * A autoria vem DERIVADA, nunca crua: `RECCREATEDBY` no RM traz CPF de
+ * professor, e `rmGradeSource` já reduziu isso a um booleano na leitura. Este
+ * módulo não é a porta por onde o CPF volta a circular.
+ */
+export function estadoNoRmDeNota(n: RmNota): EstadoNoRm {
+  return {
+    valor: n.nota,
+    autoriaEhIntegracao: n.criadoPelaIntegracao,
+    // `SNOTAETAPA` guarda RECCREATEDON e RECMODIFIEDON; a Sentença traz os dois.
+    // Alterada depois de criada = alguém editou dentro do RM, e o veredito
+    // `EDITADO_POR_FORA` existe justamente para não sobrescrever isso.
+    tocadaDepoisDeCriada:
+      Boolean(n.alteradoEm && n.criadoEm && n.alteradoEm > n.criadoEm),
+  };
+}
+
+/**
+ * Chave natural da nota do RM, na ORDEM do `xs:unique Constraint1` do XSD:
+ * CODCOLIGADA, CODETAPA, TIPOETAPA, IDTURMADISC, RA.
+ *
+ * A Sentença TODDLE.NOTAS filtra `TIPOETAPA='N'`, então o tipo é constante aqui.
+ * Precisa casar EXATAMENTE com `chaveNaturalNota` da projeção — duas convenções
+ * de ordem fariam toda linha parecer nova, e `NADA_A_FAZER` viraria reescrita
+ * perpétua.
+ */
+export const chaveNaturalDeNota = (n: RmNota): string =>
+  `${n.codColigada}|${n.codEtapa}|N|${n.idTurmaDisc}|${n.ra}`;
+
+/** Índice das notas do RM por chave natural, para o cruzamento em lote. */
+export function indexaNotasPorChave(notas: RmNota[]): Map<string, RmNota> {
+  const m = new Map<string, RmNota>();
+  for (const n of notas) m.set(chaveNaturalDeNota(n), n);
+  return m;
 }

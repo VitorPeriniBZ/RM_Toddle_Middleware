@@ -42,7 +42,15 @@ export type VereditoPendente =
   | 'REMOCAO_PEDE_HUMANO'
   | 'OPCAO_SEM_POLITICA'
   /** O RM recusou ESTA linha. Só se descobre tentando — ver a migration 013. */
-  | 'RM_RECUSOU';
+  | 'RM_RECUSOU'
+  /**
+   * As três da via de NOTA — recusas de projeção que são decisão de gente, não
+   * defeito de dado. Ver a migration 014 para o porquê de cada uma e para a
+   * convenção de chave sintética.
+   */
+  | 'JANELA_INCOMPATIVEL'
+  | 'VALOR_NAO_NUMERICO'
+  | 'ETAPA_NAO_LIBERADA';
 export type EstadoPendencia = 'aberta' | 'resolvida' | 'ignorada';
 
 export interface RegistrarPendenciaArgs {

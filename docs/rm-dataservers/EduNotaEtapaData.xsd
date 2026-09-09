@@ -1,0 +1,85 @@
+<EduNotaEtapa>
+  <xs:schema id="EduNotaEtapa" xmlns="" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xs:element name="EduNotaEtapa" msdata:IsDataSet="true" msdata:UseCurrentLocale="true" msdata:EnforceConstraints="False">
+      <xs:complexType>
+        <xs:choice minOccurs="0" maxOccurs="unbounded">
+          <xs:element name="SNotaEtapa">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="CODCOLIGADA" msdata:Caption="Coligada" type="xs:short" default="1" />
+                <xs:element name="CODETAPA" msdata:Caption="Etapa" type="xs:short" />
+                <xs:element name="TIPOETAPA" msdata:Caption="Tipo da etapa">
+                  <xs:simpleType>
+                    <xs:restriction base="xs:string">
+                      <xs:maxLength value="1" />
+                    </xs:restriction>
+                  </xs:simpleType>
+                </xs:element>
+                <xs:element name="IDTURMADISC" msdata:Caption="Turma disciplina" type="xs:int" />
+                <xs:element name="RA" msdata:Caption="R.A.">
+                  <xs:simpleType>
+                    <xs:restriction base="xs:string">
+                      <xs:maxLength value="20" />
+                    </xs:restriction>
+                  </xs:simpleType>
+                </xs:element>
+                <xs:element name="IDGRUPO" msdata:Caption="Grupo de conceitos" type="xs:short" minOccurs="0" />
+                <xs:element name="CODCONCEITO" msdata:Caption="Conceito" minOccurs="0">
+                  <xs:simpleType>
+                    <xs:restriction base="xs:string">
+                      <xs:maxLength value="10" />
+                    </xs:restriction>
+                  </xs:simpleType>
+                </xs:element>
+                <xs:element name="NOTAFALTA" msdata:Caption="Nota/Falta" type="xs:decimal" minOccurs="0" />
+                <xs:element name="AULASDADAS" msdata:Caption="Número de aulas dadas" type="xs:short" minOccurs="0" />
+                <xs:element name="CONCEITOECTS" msdata:Caption="Classif. ECTS" minOccurs="0">
+                  <xs:simpleType>
+                    <xs:restriction base="xs:string">
+                      <xs:maxLength value="10" />
+                    </xs:restriction>
+                  </xs:simpleType>
+                </xs:element>
+              </xs:sequence>
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="SNotaEtapaComentario">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="CODCOLIGADA" type="xs:short" default="1" />
+                <xs:element name="CODPROVA" type="xs:short" />
+                <xs:element name="CODETAPA" type="xs:short" />
+                <xs:element name="TIPOETAPA" type="xs:string" />
+                <xs:element name="IDTURMADISC" type="xs:int" />
+                <xs:element name="RA" type="xs:string" />
+                <xs:element name="COMENTARIO" type="xs:string" minOccurs="0" />
+              </xs:sequence>
+            </xs:complexType>
+          </xs:element>
+        </xs:choice>
+      </xs:complexType>
+      <xs:unique name="Constraint1" msdata:PrimaryKey="true">
+        <xs:selector xpath=".//SNotaEtapa" />
+        <xs:field xpath="CODCOLIGADA" />
+        <xs:field xpath="CODETAPA" />
+        <xs:field xpath="TIPOETAPA" />
+        <xs:field xpath="IDTURMADISC" />
+        <xs:field xpath="RA" />
+      </xs:unique>
+      <xs:unique name="SNotasComentarioKey1">
+        <xs:selector xpath=".//SNotaEtapaComentario" />
+        <xs:field xpath="CODCOLIGADA" />
+        <xs:field xpath="CODPROVA" />
+        <xs:field xpath="CODETAPA" />
+        <xs:field xpath="TIPOETAPA" />
+        <xs:field xpath="IDTURMADISC" />
+        <xs:field xpath="RA" />
+      </xs:unique>
+    </xs:element>
+    <xs:annotation>
+      <xs:appinfo>
+        <msdata:Relationship name="SNotaEtapa_SNotasComentario" msdata:parent="SNotaEtapa" msdata:child="SNotaEtapaComentario" msdata:parentkey="CODCOLIGADA CODETAPA TIPOETAPA IDTURMADISC RA" msdata:childkey="CODCOLIGADA CODETAPA TIPOETAPA IDTURMADISC RA" />
+      </xs:appinfo>
+    </xs:annotation>
+  </xs:schema>
+</EduNotaEtapa>

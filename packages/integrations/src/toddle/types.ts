@@ -273,3 +273,126 @@ export interface ToddleGradingPeriod {
   isCurrentAcademicYear?: boolean;
   [key: string]: unknown;
 }
+
+/**
+ * Uma nota de etapa como o `GET /public/v2/term-grades` devolve.
+ *
+ * A resposta é ANINHADA: `edges[]` é uma lista de ALUNOS, e cada aluno traz
+ * `ratings[]` com uma entrada por (teacher course × grading period × critério).
+ * Aluno sem nota lançada vem com `ratings: []` — medido em 09/09/2026: 257 de
+ * 257 alunos do currículo UBD vinham vazios, porque ninguém lançou nota no
+ * Toddle ainda.
+ *
+ * ─── ONDE ESTÁ O VALOR, E POR QUE SÃO DOIS LUGARES ──────────────────────────
+ *
+ * `academicCriteriaSetType` discrimina:
+ *
+ *   `FINAL_SCORE`  → o valor está em `score`, string numérica ("33")
+ *   `GRADE_SCALE`  → o valor está em `criteriaValueLabel`/`criteriaValueId`,
+ *                    e é a ABREVIAÇÃO da escala ("A", "EXEM")
+ *
+ * Isso importa porque o RM guarda `NOTAFALTA` numérico. Medido em 09/09/2026,
+ * as duas escalas desta organização são `valueType: "ALPHA"` (EXEM/EXC/EXH/EVL/
+ * EMER/NA e A–E) — não existe escala numérica cadastrada no Toddle, e a tabela
+ * de conceito do RM está vazia. Nota que chegar por `GRADE_SCALE` não tem régua
+ * oficial para virar número, e a projeção RECUSA em vez de inventar conversão.
+ *
+ * ─── O READ E O WRITE NÃO USAM O MESMO FORMATO ──────────────────────────────
+ *
+ * Medido criando uma nota de verdade no sandbox em 09/09/2026:
+ *
+ *   POST postedGrade "6"    -> aceito, resposta `value: "6"`
+ *   POST postedGrade "6.5"  -> HTTP 400: "For FINAL_SCORE, postedGrade must be
+ *                              an integer value."
+ *   GET  devolve            -> `score: "6.0"`
+ *
+ * Duas consequências. A primeira é de parsing: o read acrescenta `.0`, então
+ * comparar STRING com o valor do RM ("6.0000") veria diferença onde não há e
+ * reescreveria a mesma nota para sempre — a comparação é numérica.
+ *
+ * A segunda é de escopo, e é maior: **`FINAL_SCORE` só aceita inteiro.** O RM
+ * guarda a nota com 4 decimais e usa: a primeira aluna real que este projeto
+ * consultou tem `6,5000` lançado à mão no RM, e não existe forma de o professor
+ * expressar 6,5 como nota geral no Toddle. Quem decide o que fazer com as casas
+ * decimais é a escola — está na tabela de pendências de docs/DECISOES.md.
+ *
+ * ─── CAMPOS QUE A DOC DO TODDLE NÃO LISTA ───────────────────────────────────
+ *
+ * A resposta real trouxe `isOverridden`, `categoryId` e `categoryName`. O
+ * `isOverridden: true` apareceu na nota postada por API — o que sugere que ele
+ * distingue nota digitada/sobreposta de nota calculada pelo gradebook. NÃO foi
+ * medido com nota calculada, então é hipótese, não afirmação.
+ *
+ * ─── `courseIds` É UM ARRAY ─────────────────────────────────────────────────
+ *
+ * Um teacher course pode ter várias turmas (`courseIds: [{id, name}, …]`), e o
+ * de-para `COURSE` mapeia IDTURMADISC → courseId. Uma nota, portanto, pode
+ * apontar para mais de um IDTURMADISC — o aluno está em UMA delas, e quem
+ * desempata é a matrícula. Escrever nas duas duplicaria a nota.
+ */
+export interface ToddleTermGradeRating {
+  subjectId?: string | null;
+  subjectName?: string | null;
+  teacherCourseId?: string | null;
+  teacherCourseTitle?: string | null;
+  courseIds?: Array<{ id?: string | number; name?: string }> | null;
+  gradingPeriodId?: string | null;
+  /**
+   * Valor quando o critério é `FINAL_SCORE`. String, não número — e o read
+   * devolve com `.0` ("6.0") mesmo tendo aceitado "6" na escrita.
+   */
+  score?: string | number | null;
+  academicCriteriaSetLabel?: string | null;
+  academicCriteriaSetId?: string | null;
+  /** `FINAL_SCORE` | `FINAL_GRADE` | `GRADE_SCALE` | `LOCAL_GRADE` | `IB_DEFINED`. */
+  academicCriteriaSetType?: string | null;
+  criteriaLabel?: string | null;
+  gradeLevelId?: string | null;
+  criteriaValueId?: string | null;
+  /** Valor quando o critério é de escala: a abreviação ("A", "EXEM"). */
+  criteriaValueLabel?: string | null;
+  [key: string]: unknown;
+}
+
+/** Um aluno na resposta do `GET /term-grades`, com as notas dele. */
+export interface ToddleTermGradeStudent {
+  id: string | number;
+  name?: string;
+  yearGroup?: string;
+  ratings?: ToddleTermGradeRating[];
+  [key: string]: unknown;
+}
+
+export interface ToddleTermGradesResponse {
+  response?: {
+    totalCount?: number;
+    edges?: ToddleTermGradeStudent[];
+    pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+  };
+}
+
+/**
+ * Uma escala de notas do `GET /public/v2/grade-scale`.
+ *
+ * `valueType` é o campo decisivo: `ALPHA` significa que a nota trafega como
+ * letra/abreviação, e não há conversão automática para o numérico do RM.
+ */
+export interface ToddleGradeScale {
+  gradeScaleId: string;
+  gradeScaleLabel?: string;
+  scaleType?: string;
+  /** `ALPHA` ou numérico. Medido na EAV: as duas escalas são `ALPHA`. */
+  valueType?: string;
+  criteriaType?: string;
+  values?: Array<{ gradeValueId?: string; abbreviation?: string; label?: string }>;
+  [key: string]: unknown;
+}
+
+export interface ToddleGradeScalesResponse {
+  response?: { gradeScales?: ToddleGradeScale[] };
+}
+
+/**
+ * Sinaliza nota sobreposta manualmente, em vez de calculada pelo gradebook.
+ * Observado como `true` na nota criada por API; não medido com nota calculada.
+ */

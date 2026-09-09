@@ -41,7 +41,8 @@
     "pendencias": "tsx apps/worker/src/scripts/pendencias.ts",
     "aprovar": "tsx apps/worker/src/scripts/aprovar.ts",
     "lancar:falta": "tsx apps/worker/src/scripts/lancarUmaFalta.ts",
-    "escrever:frequencia": "tsx apps/worker/src/scripts/escreverFrequencia.ts"
+    "escrever:frequencia": "tsx apps/worker/src/scripts/escreverFrequencia.ts",
+    "escrever:notas": "tsx apps/worker/src/scripts/escreverNotas.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",
