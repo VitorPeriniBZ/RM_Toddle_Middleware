@@ -109,24 +109,50 @@ Os 223 assignments por tipo:
 
 ---
 
-## 5. O próximo passo, e ele é barato
+## 5. O TESTE FOI FEITO — 09/09/2026
 
-A pergunta **6** é a que destrava tudo, e dá para responder sozinho no sandbox
-sem tocar em dado de ninguém:
+Executado na `IDTURMADISC 1250` (zero provas, zero notas, etapa toda `0.0000`,
+nenhum trabalho humano em risco). Três passos, com releitura em cada um.
 
-1. Na `IDTURMADISC 1250` — que tem **zero** provas e **zero** notas, então não há
-   trabalho humano em risco — criar UMA prova via `EduProvasData`.
-2. Lançar UMA nota nela via `EduNotasData`.
-3. Reler `SNOTAETAPA` e ver se a etapa deixou de ser `0.0000`.
+| passo | resultado |
+|---|---|
+| `SaveRecord EduProvasData` — criar avaliação (`CODPROVA=1`, `VALOR=7`) | **`ok=true`, e persistiu**: releitura devolve `VALOR=7.0000` |
+| `SaveRecord EduNotasData` — lançar `NOTA=7` para o RA 202600199 | **`ok=true`, e persistiu**: releitura devolve `NOTA=7.0000` |
+| reler `SNOTAETAPA` da chave `1\|1\|N\|1250\|202600199` | **`0.0000`** — não recalculou |
 
-Se a etapa recalcular, o desenho está provado e o resto é de-para. Se não
-recalcular, a pergunta vira "como se dispara o recálculo?" — e aí é ticket na
-TOTVS antes de qualquer código.
+Depois tentei forçar o recálculo por três caminhos, todos `ok=true` e todos sem
+efeito:
 
-**Este teste escreve estrutura no RM (uma prova). Não foi executado: precisa de
-autorização.**
+- tocar o `SNotaEtapa` só com a chave (sem `NOTAFALTA`) → `0.0000`
+- tocar mandando `NOTAFALTA=7`, **agora com avaliação de valor 7 e nota 7
+  existindo** → `0.0000`
+- reler 15 segundos depois, caso o recálculo fosse assíncrono → `0.0000`
 
----
+### As três conclusões
+
+**1. A nota TEM caminho de escrita, e ele funciona.** `EduNotasData` grava e
+**o valor persiste** — exatamente o que o `EduNotaEtapaData` não faz. A hipótese
+de que o `EduNotaEtapaData` "recalculava em vez de descartar" está **descartada**:
+com avaliação e nota presentes, ele continua devolvendo zero.
+
+**2. Fechar a etapa NÃO é nosso.** O recálculo do `SNOTAETAPA` acontece em algum
+processo do RM que nenhum destes DataServers dispara — provavelmente a tela de
+digitação ou uma rotina de "cálculo da nota da etapa". Que ele EXISTE está
+provado pela 1541: 32 notas de `7.0000` e etapa `6.5000`, ou seja, alguma fórmula
+rodou lá e ponderou.
+
+**3. E isso talvez seja o desenho correto.** A integração entrega **a nota que o
+professor lançou**, no nível em que ele a lançou (avaliação). Fechar trimestre é
+ato pedagógico, com data-limite de digitação (`DTLIMITEDIGITACAO=2026-06-19` na
+etapa 1) e conferência — não deveria acontecer por cron de meia em meia hora.
+
+### O que isso muda nas perguntas em aberto
+
+A pergunta 6 está **respondida**. Nasce uma no lugar:
+
+| # | pergunta | quem responde |
+|---|---|---|
+| 8 | **Como a escola fecha a etapa hoje?** Alguém abre a tela e salva, ou existe uma rotina? Se for manual, a integração entrega a nota da avaliação e a coordenação fecha — e isso precisa estar acordado, não suposto. | escola + TOTVS |
 
 ## 6. O que está pronto e continua servindo
 
@@ -149,3 +175,8 @@ o **leitor do Toddle** (`student-assignments` em vez de `term-grades`).
 > - Toddle: duas notas de teste no T1 — `6` para o RA 202600053 (Geografia) e `5`
 >   para o RA 202600199 (Orientação de Estudos). O `POST` é upsert e a API não
 >   expõe remoção.
+> - **`SProvas` da `IDTURMADISC 1250`: uma avaliação criada por mim**, `CODPROVA=1`,
+>   `VALOR=7.0000`, descrição `"TESTE INTEGRACAO - avaliacao criada para medir
+>   recalculo"`. Está nomeada para ser encontrada.
+> - **`SNotas` dessa avaliação: `NOTA=7.0000` para o RA 202600199.** Não achei
+>   caminho de `DELETE` por DataServer — se precisar sair, é pela tela do RM.
