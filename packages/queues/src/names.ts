@@ -37,3 +37,12 @@ export const STUDENT_JOB = {
 export const STAFF_JOB = {
   SYNC: 'staff.sync',
 } as const;
+
+/**
+ * Job da via de NOTA (Toddle -> RM). Sem fan-out: uma passada lê tudo e o
+ * guarda de decisão resolve o que mudou, porque o `GET /term-grades` do Toddle
+ * não tem filtro `modifiedSince`.
+ */
+export const TERM_GRADE_JOB = {
+  SYNC: 'term-grades.sync',
+} as const;

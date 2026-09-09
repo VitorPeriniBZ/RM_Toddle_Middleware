@@ -479,6 +479,7 @@ worker BullMQ.
 | Datas dos grading periods no portal (requisito da D2) — **mede-se hoje: 0 de 558 combinações escrevíveis; a via de nota só abre em 23/09** | admin do Toddle |
 | ~~Ano corrente é editável?~~ **NÃO** — resolvido 06/08; ver acima. Em produção, calendário certo na criação | — |
 | Nota do RM tem 4 decimais e o `FINAL_SCORE` do Toddle **só aceita inteiro** (medido 09/09: `postedGrade "6.5"` devolve HTTP 400). A primeira aluna consultada tem `6,5000` no RM. O que acontece com as casas decimais? | escola |
+| **`EduNotaEtapaData` não escreve a nota** (medido 09/09: `ok=true` e o campo é descartado; `SETAPAS.CODFORMULANOTA=01_ETAPA`, nota calculada por fórmula). A via de nota precisa de OUTRO destino — avaliação (`SNOTAAVALIACAO`/`SPROVA`), e `EduProvaData` não existe nesta instalação | levantamento + TOTVS |
 | Política de atraso / falta justificada | escola |
 | Política de homeroom (49% sem `courseId`) | escola |
 | `JUSTIFICADA` vazio em 21.300 linhas — ninguém justifica? | secretaria |

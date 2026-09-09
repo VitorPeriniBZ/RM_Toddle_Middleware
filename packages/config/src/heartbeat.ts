@@ -75,4 +75,6 @@ export const heartbeat = {
     pingHeartbeat(env.HEARTBEAT_URL_ALUNOS, resultado, { job: 'alunos', ...contexto }),
   professores: (resultado: ResultadoRun, contexto?: Record<string, unknown>) =>
     pingHeartbeat(env.HEARTBEAT_URL_PROFESSORES, resultado, { job: 'professores', ...contexto }),
+  notas: (resultado: ResultadoRun, contexto?: Record<string, unknown>) =>
+    pingHeartbeat(env.HEARTBEAT_URL_NOTAS, resultado, { job: 'notas', ...contexto }),
 };

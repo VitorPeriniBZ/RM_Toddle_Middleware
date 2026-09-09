@@ -1,6 +1,6 @@
 import { env, logger, cronDoProfessorEfetivo } from '@rm-toddle/config';
 import { getQueue } from './queues';
-import { QUEUE, STAFF_JOB, STUDENT_JOB } from './names';
+import { QUEUE, STAFF_JOB, STUDENT_JOB, TERM_GRADE_JOB } from './names';
 import { redisConnection } from './connection';
 
 /**
@@ -14,6 +14,7 @@ import { redisConnection } from './connection';
 export const SCHEDULER = {
   STUDENTS_NIGHTLY: 'students-sync-nightly',
   STAFF_NIGHTLY: 'staff-sync-nightly',
+  TERM_GRADES_POLL: 'term-grades-poll',
 } as const;
 
 /**
@@ -38,6 +39,41 @@ export async function upsertStaffNightly(): Promise<void> {
     SCHEDULER.STAFF_NIGHTLY,
     { pattern: cronDoProfessorEfetivo(), tz: 'America/Sao_Paulo' },
     { name: STAFF_JOB.SYNC, data: { trigger: 'cron' } },
+  );
+}
+
+/**
+ * Registra (ou REMOVE) o poll da via de nota, conforme `NOTA_SYNC_ATIVO`.
+ *
+ * ─── POR QUE REMOVER TAMBÉM ─────────────────────────────────────────────────
+ *
+ * O scheduler vive no Redis, não no código. Desligar `NOTA_SYNC_ATIVO` e só
+ * "deixar de registrar" NÃO para nada: o registro anterior continua lá e o cron
+ * segue disparando. O processador ainda recusaria por conta própria, mas a
+ * escola veria job rodando de meia em meia hora depois de pedir para desligar —
+ * e desconfiaria, com razão, de tudo o mais que dissemos estar desligado.
+ *
+ * Por isso o interruptor é de duas vias: liga registrando, desliga removendo.
+ *
+ * ─── POR QUE NÃO É "NOTURNO" ────────────────────────────────────────────────
+ *
+ * Aluno e professor rodam 4x ao dia porque cadastro muda devagar. Nota muda
+ * quando o professor digita, e o pedido é que chegue ao RM perto disso. A API do
+ * Toddle não tem webhook (verificado na referência inteira em 09/09/2026), então
+ * o mais próximo possível é um poll curto na janela em que gente trabalha.
+ */
+export async function upsertTermGradesPoll(): Promise<void> {
+  const queue = getQueue(QUEUE.TODDLE_TO_RM_TERM_GRADES);
+
+  if (!env.NOTA_SYNC_ATIVO) {
+    await queue.removeJobScheduler(SCHEDULER.TERM_GRADES_POLL).catch(() => undefined);
+    return;
+  }
+
+  await queue.upsertJobScheduler(
+    SCHEDULER.TERM_GRADES_POLL,
+    { pattern: env.NOTA_SYNC_CRON, tz: 'America/Sao_Paulo' },
+    { name: TERM_GRADE_JOB.SYNC, data: { trigger: 'cron' } },
   );
 }
 
@@ -73,15 +109,22 @@ export function manterAgendamentoDeAlunos(): void {
       // silenciosa se ficasse de fora daqui.
       await upsertStudentsNightly();
       await upsertStaffNightly();
+      // A via de nota entra aqui pelo mesmo motivo que professor: o registro
+      // dela vive só no Redis e teria o mesmo modo de falha silenciosa se
+      // ficasse de fora. Esta chamada também REMOVE o scheduler quando
+      // NOTA_SYNC_ATIVO estiver desligado — ver upsertTermGradesPoll.
+      await upsertTermGradesPoll();
       logger.info(
         {
           scheduler: [SCHEDULER.STUDENTS_NIGHTLY, SCHEDULER.STAFF_NIGHTLY],
           cronAlunos: env.STUDENTS_SYNC_CRON,
           cronProfessores: cronDoProfessorEfetivo(),
+          notaSyncAtivo: env.NOTA_SYNC_ATIVO,
+          cronNotas: env.NOTA_SYNC_ATIVO ? env.NOTA_SYNC_CRON : null,
           tz: 'America/Sao_Paulo',
           motivo,
         },
-        'Agendamentos noturnos garantidos',
+        'Agendamentos garantidos',
       );
     } catch (error) {
       logger.error(
