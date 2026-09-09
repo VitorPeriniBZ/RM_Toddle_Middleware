@@ -106,42 +106,78 @@ agora por avaliação.
 
 ---
 
-## 3b. ⛔ O VOLUME PARA A EAV É ZERO
+## 3b. O volume era zero — e agora existe dado real
 
-O funil, calculado sobre os 441 resultados numéricos:
+Na primeira medição, o funil deu **zero projetáveis**: dos 223 assignments, 222
+pertenciam a turmas de demonstração do Toddle (49 turmas de seed — "Y10 Math B",
+"Year 3 Jupiter", "Year 10 - Accounting A"…), e das 186 turmas-disciplina
+mapeadas **uma só** tinha assignment — o `"Teste integracao RM"` de 25/08, com 26
+alunos e zero avaliados.
 
-```
-  com score numérico            441
-  - turma sem de-para COURSE    441
-  - aluno sem de-para STUDENT     0
-  - term sem de-para GRADING      0
-  = PROJETÁVEIS                   0
-```
+Ou seja: o mecanismo estava provado, e não havia nada para carregar. Os
+professores não estavam avaliando no Toddle.
 
-**Todos os 441 são dado de demonstração.** Dos 223 assignments, **222 pertencem a
-turmas que não são da EAV** — são 49 turmas de seed do Toddle: "Y10 Math B",
-"Y8 English A", "Year 3 Jupiter", "Year 10 - Accounting A"…
+### O lançamento de 09/09, feito pela INTERFACE
 
-Das **186 turmas-disciplina mapeadas, exatamente 1** tem algum assignment:
+Para desbloquear a medição, criei uma avaliação **pela tela do professor** (não
+por API, de propósito: o que interessa é o que a ação do professor produz) na
+turma **Geografia — 11th grade A - 2ª série**:
 
-> `"Teste integracao RM - Formacao do relevo brasileiro"`
-> Geografia — 11th grade A, criado em 25/08/2026, tipo `learning_engagement/le`
-> **26 alunos, ZERO avaliados**, `assessmentToolData: {}` em todos
+- tipo **Avaliação** → a API classifica como `assessment/pt`
+- ferramenta **Pontuação**, máximo **10**
+- período **Term 2**
+- **Visibilidade: "Visível apenas para os professores"**
 
-### O que isso significa
+> **Por que a visibilidade importa e não é detalhe.** Os 26 alunos da turma têm
+> e-mail REAL (`nome@escolaamericana.com.br`) e as famílias têm e-mail pessoal
+> real (Gmail). O diálogo de atribuição avisa em texto: *"O exercício ficará
+> imediatamente visível para os alunos"*. Com "Visível apenas para os
+> professores" o aviso muda para *"No momento, o exercício está visível apenas
+> para o professor"*, a atribuição aparece como **"Atribuído de forma privada"**,
+> e nenhum aluno ou responsável é exposto. Toda medição futura deve usar isso.
+>
+> Trocar os e-mails para endereços de teste **não** funcionaria: o `students.sync`
+> roda 4x ao dia e reescreve os 255 alunos, então os e-mails reais voltariam em
+> horas.
 
-O bloqueio deixou de ser técnico. O caminho está provado nas duas pontas —
-`EduNotasData` grava e persiste, `student-assignments` lê e traz número — e **não
-há nada para carregar**: os professores não estão avaliando no Toddle.
+Cinco alunos avaliados, com decimais de propósito. O que a API devolve:
 
-Construir o pipeline agora seria construir para zero dado. E as decisões de
-desenho que faltam (quais tipos de assignment viram nota, como converter escala,
-o que fazer com rubrica) **não têm resposta sem observar o professor usando**. São
-perguntas sobre comportamento, e a amostra é vazia.
+| aluno | RA (de-para STUDENT) | score | term → etapa | compartilhado |
+|---|---|---|---|---|
+| Arthur Henrique Vieira Possoli | 202600109 | **8.5**/10 | Term 2 → **2** | não |
+| Bernardo Vinand dos Santos | 202100113 | 7/10 | Term 2 → 2 | não |
+| Dante Saretta Devens | 202500060 | 10/10 | Term 2 → 2 | não |
+| Davi Zanchetta Aguiar | 202100137 | **6.25**/10 | Term 2 → 2 | não |
+| Eduardo Brasil Scárdua | 202600098 | 9/10 | Term 2 → 2 | não |
 
-**Recomendação:** antes de mais código, uma turma-piloto lançando nota de verdade
-no Toddle por algumas semanas. Com dado real na mão, o de-para se escreve sozinho
-e as quatro perguntas da escola ganham resposta empírica em vez de opinião.
+E o assignment resolve para o RM: `classId=411141587884600725` → **`IDTURMADISC
+1266`**, que tem de-para `COURSE` ativo.
+
+### As cinco coisas que este lançamento provou
+
+1. **A cadeia de de-para fecha inteira**: assignment → `IDTURMADISC`, aluno →
+   `RA`, `academicTermId` → `CODETAPA`. Nenhuma ponta solta.
+2. **Decimais sobrevivem.** `8.5` e `6.25` voltam exatos. É a diferença que
+   importa: o `FINAL_SCORE` do term-grades **só aceita inteiro**, e a nota do RM
+   tem 4 casas. Pelo caminho da avaliação, a precisão se mantém.
+3. **`maxScore` vem por avaliação** (`10` aqui), então o denominador da conversão
+   sai do próprio dado e casa com `SProvas.VALOR`.
+4. **"Avaliado" é distinguível de "não avaliado"** sem ambiguidade:
+   `{"score":[{"value":"8.5","maxScore":"10"}]}` contra `{"score":[]}`.
+5. **A escolha do professor na criação define o tipo**: escolher "Avaliação" na
+   interface produz `assessment/pt`. É por aqui que a pergunta 2 (quais tipos
+   viram nota) se responde — observando o que o professor escolhe.
+
+### O que ainda falta observar
+
+Cinco notas de uma turma, criadas por mim. Isso prova o encanamento; **não**
+responde o comportamento: se o professor usa Pontuação ou Rubrica, se usa
+`assessment` ou `learning_engagement`, que escala escolhe, quantas avaliações por
+etapa. Para isso continua valendo a turma-piloto — mas agora com o caminho todo
+medido, o piloto vira observação, não exploração.
+
+E a conversão fica concreta: **8,5 de 10 no Toddle, com o RM guardando 0 a 7.**
+Regra de três dá 5,95. Se é isso que a escola quer, alguém precisa dizer.
 
 ---
 
@@ -231,3 +267,7 @@ o **leitor do Toddle** (`student-assignments` em vez de `term-grades`).
 >   recalculo"`. Está nomeada para ser encontrada.
 > - **`SNotas` dessa avaliação: `NOTA=7.0000` para o RA 202600199.** Não achei
 >   caminho de `DELETE` por DataServer — se precisar sair, é pela tela do RM.
+> - **Toddle, turma Geografia — 11th grade A**: avaliação `"Prova 1 - Relevo
+>   brasileiro (dado de teste)"`, criada por mim em 09/09 com **visibilidade
+>   apenas para professores**, e 5 alunos avaliados (8.5, 7, 10, 6.25, 9 de 10).
+>   Nenhuma nota foi compartilhada com aluno ou responsável.
