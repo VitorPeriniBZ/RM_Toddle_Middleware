@@ -83,6 +83,48 @@ certa e a tela mostrava uma janela estranha ao lado.
 **requisito**, não melhoria. Enquanto não for corrigido, a via de nota
 Toddle → RM não deve ser ligada.
 
+### MEDIDO CONTRA O DADO REAL EM 09/09/2026
+
+A tabela de janelas acima foi escrita a partir de UMA vigência por etapa. O RM
+tem mais de uma. Medido nas 186 turmas-disciplina do campus 2, com
+`RmGradeTargets` (1.302 etapas de nota digitáveis):
+
+| etapa | vigência | em quantas turmas-disciplina |
+|---|---|---|
+| 1 | 2026-02-03 → 2026-05-15 | 183 |
+| 1 | 2026-02-03 → **2026-07-09** | 1 |
+| 1 | 2026-02-03 → **2026-08-03** | 2 |
+| 2 | 2026-05-18 → 2026-09-04 | 186 |
+| 3 | 2026-09-09 → 2026-12-11 | 186 |
+
+As três turmas com etapa 1 esticada sobrepõem a etapa 2 — o caso do
+`IDTURMADISC 1256` que já estava na lista de pendências da coordenação é **mais
+amplo do que uma turma**. Por isso o teste de janela é por **(turma-disciplina,
+etapa)** e não por etapa: a mesma etapa 1 é segura em 183 turmas e ambígua em 3.
+
+Os grading periods do Toddle, lidos no mesmo dia:
+
+```
+T1  404045911547736040   2025-11-21 → 2026-06-22   REPORTING
+T2  404045911547736039   2026-06-23 → 2026-09-22   REPORTING
+T3  404045911547736038   2026-09-23 → 2026-11-20   REPORTING
+```
+
+**Em 09/09/2026, ZERO das 558 combinações mapeadas é escrevível.** Não é defeito
+do código — é o calendário: nessa data nenhuma etapa do RM está dentro da
+sobreposição com o período do Toddle que o ordinal lhe atribui. Cruzando as
+sobreposições, a janela em que a via de nota pode escrever é:
+
+```
+23/09/2026 → 20/11/2026     etapa 3  ∩  T3      <- a única aberta no resto de 2026
+21/11 → 11/12               nada                <- dezembro sem cobertura
+```
+
+Ou seja: a via de nota fica muda até **23/09/2026** e volta a ficar muda em
+**21/11/2026**. A guarda `JANELA_INCOMPATIVEL` recusa por (turma-disciplina,
+etapa) em vez de bloquear tudo, e cada recusa vira pendência com dono (migration
+014) em vez de morrer no stdout.
+
 ---
 
 ## D3 — Só o responsável acadêmico vira parent no Toddle
@@ -433,8 +475,8 @@ worker BullMQ.
 | item | quem resolve |
 |---|---|
 | Data de corte da D1 | escola |
-| `ETAPA_LIBERADA='N'` em 100% — a flag é gerenciada ou morta? 3.630 notas presas | escola |
-| Datas dos grading periods no portal (requisito da D2) | admin do Toddle |
+| `ETAPA_LIBERADA='N'` em 100% — a flag é gerenciada ou morta? 4.275 notas presas no campus 2 (medido 09/09) | escola |
+| Datas dos grading periods no portal (requisito da D2) — **mede-se hoje: 0 de 558 combinações escrevíveis; a via de nota só abre em 23/09** | admin do Toddle |
 | ~~Ano corrente é editável?~~ **NÃO** — resolvido 06/08; ver acima. Em produção, calendário certo na criação | — |
 | Política de atraso / falta justificada | escola |
 | Política de homeroom (49% sem `courseId`) | escola |

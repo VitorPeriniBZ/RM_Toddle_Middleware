@@ -55,19 +55,33 @@ discriminado pelo tipo.
 grava um total de faltas no lugar da nota — e o total de faltas alimenta o cálculo
 de reprovação por frequência.
 
-## 3. NÃO há chave primária declarada no XSD
+## 3. A chave é DECLARADA, e não é APLICADA
 
-Diferente do `EduFrequenciaDiariaWSData`, que declara
-`msdata:PrimaryKey` com os cinco campos da chave natural, **este schema não declara
-nenhuma**.
+> **Corrigido em 09/09/2026.** Esta seção afirmava "não há chave primária
+> declarada no XSD". Um `GetSchema` novo mostra que há — o que não havia era
+> `msdata:PrimaryKey`, e o schema usa `xs:unique`:
+>
+> ```xml
+> <xs:unique name="Constraint1" msdata:PrimaryKey="true">
+>   <xs:selector xpath=".//SNotaEtapa" />
+>   <xs:field xpath="CODCOLIGADA" /> <xs:field xpath="CODETAPA" />
+>   <xs:field xpath="TIPOETAPA" />   <xs:field xpath="IDTURMADISC" />
+>   <xs:field xpath="RA" />
+> </xs:unique>
+> ```
 
-A chave natural aparente é `CODCOLIGADA + CODETAPA + TIPOETAPA + IDTURMADISC + RA`
-— e ela **é única no dado real**: medido em `TODDLE.NOTAS`, 3.876 chaves para 3.876
-linhas.
+A chave natural é, portanto, `CODCOLIGADA + CODETAPA + TIPOETAPA + IDTURMADISC +
+RA`, **nesta ordem** — e é a ordem que `chaveNaturalNota` usa, porque a mesma
+string é comparada com a que a leitura do RM produz.
 
-Mas sem declaração no schema, **a deduplicação é inteiramente nossa**, e não há
-garantia de que o RM rejeite duplicata. Mesma classe de problema do
-`EnforceConstraints="False"` da frequência, um grau pior.
+Ela **é única no dado real**: medido em `TODDLE.NOTAS`, 7.268 chaves para 7.268
+linhas (3.876 na medição de 05/08, antes do 2º trimestre entrar).
+
+**A conclusão prática não muda, e o motivo é outro:** o dataset declara
+`msdata:EnforceConstraints="False"`, exatamente como o da frequência. A restrição
+está escrita e está desligada, então o RM **não** rejeita duplicata e a
+deduplicação continua sendo inteiramente nossa (`montaLotesNotas` deduplica pela
+chave antes de montar o XML).
 
 ## 4. `AULASDADAS` aparece aqui também
 
@@ -107,9 +121,26 @@ A view devolve mais que a tabela: `NOMEALUNO`, `DISCIPLINA`, `ETAPA`, `NOTA`,
 
 ## 7. Antes do primeiro `SaveRecord`
 
-Nada foi escrito por aqui ainda. O cliente do `wsDataServer`
-(`packages/integrations/src/rm-soap/wsDataServerClient.ts`) **não tem método de
-escrita, de propósito** — ver o comentário no topo dele.
+**Nada foi escrito por aqui ainda** — mas o caminho existe desde 09/09/2026, e o
+`saveRecord` do cliente passou a existir em 21/08/2026 (ver o comentário no topo
+de `wsDataServerClient.ts`).
+
+O que está construído, e onde:
+
+| passo | onde | estado |
+|---|---|---|
+| leitura da origem | `toddleClient.listTermGrades` + `toddleGradeSource` | pronto |
+| alvos no RM (etapas) | `RmGradeTargets` (`SETAPAS`, `TIPOETAPA='N'`) | pronto |
+| projeção com 10 recusas | `gradeProjection` | pronto, 19 testes |
+| XML do dataset | `notaXml` | pronto, 12 testes |
+| decisão de escrita | `decidirEscrita` + `estadoNoRmDeNota` | pronto (reusado) |
+| fila de pendências | migration 014 | pronto |
+| teto + gate | `avaliarVolume` (reusado) | pronto |
+| writer | `npm run escrever:notas` (ensaio por default) | pronto, **nunca executado com `--executar`** |
+| agendamento | — | **NÃO feito, de propósito** |
+
+O agendamento fica de fora até a escola responder o `ETAPA_LIBERADA` e o admin do
+Toddle corrigir as datas dos grading periods.
 
 Checklist, na ordem:
 
@@ -132,3 +163,48 @@ Checklist, na ordem:
   (fuso da data, HTTP 200 com erro, case misto do elemento-linha)
 - `../rm-sentencas/TODDLE.NOTAS` (a Sentença) — a leitura com `CODFILIAL`
 - `../DECISOES.md` — D1 (direção Toddle → RM) e D2 (ordinal das etapas)
+
+---
+
+## 8. O dataset é `EduNotaEtapa`, e ele NÃO tem namespace
+
+Medido por `GetSchema` em 09/09/2026 — o XSD está versionado ao lado deste
+arquivo, em `EduNotaEtapaData.xsd`.
+
+```xml
+<xs:schema id="EduNotaEtapa" xmlns="" ...>
+  <xs:element name="EduNotaEtapa" msdata:IsDataSet="true"
+              msdata:EnforceConstraints="False">
+```
+
+**`xmlns=""`, e nenhum `targetNamespace`.** O da frequência tem:
+
+```
+EduFrequenciaDiaria   targetNamespace="http://tempuri.org/EduFrequenciaDiaria.xsd"
+EduNotaEtapa          nenhum
+```
+
+É a diferença que mais facilmente passaria batida, porque o caminho natural é
+copiar o XML da frequência e trocar o nome do elemento — o que produziria um
+dataset com namespace que este DataServer não declara. E o RM responde **HTTP 200
+mesmo quando recusa**, então o sintoma seria "escreveu e não apareceu".
+
+Duas ausências a mais, na mesma linha: `EduNotaEtapa` **não tem `PARAMS`** (o
+recorte turma-disciplina + etapa do dataset de frequência) e **não tem tabela de
+alunos** (`AlunosFreq`). Cada linha `SNotaEtapa` carrega a chave completa.
+
+## 9. `AULASDADAS`: omitido, com o eco pronto — e a pergunta aberta
+
+O XSD marca `minOccurs="0"`, e a §4 deste documento concluía "omitir". A
+frequência ensinou, em 21/08/2026, que **opcional no XSD não é opcional na regra
+de negócio**: o `SaveRecord` dela RECUSA sem o campo, com "O campo número de
+aulas dadas deve ser preenchido" (`EduFrequenciaDiariaObj.ValidaEtapa`).
+
+Não se sabe se `EduNotaEtapaObj` valida igual — só o primeiro `SaveRecord` real
+responde. O writer sai com o campo **omitido** (é o que o XSD permite) e a
+capacidade de ecoar está pronta em `RmGradeTargets.aulasDadasDe`: se o RM recusar
+com mensagem parecida, é uma linha para ligar.
+
+Quando ligar, o valor é **ecoado** do próprio RM, nunca calculado — é o
+denominador dos 75% de reprovação por falta, e administrá-lo mudaria quem
+reprova.
