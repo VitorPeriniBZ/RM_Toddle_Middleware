@@ -1,4 +1,28 @@
-# Levantamento — a nota do Toddle tem de virar NOTA DE AVALIAÇÃO no RM
+# A nota do Toddle chega ao RM como NOTA DE AVALIAÇÃO
+
+> ## ✅ FUNCIONANDO — 10/09/2026
+>
+> As cinco notas que um professor lançou no Toddle estão no TOTVS RM, conferidas
+> por releitura:
+>
+> ```
+> SProvas 1266 etapa 2
+>   CODPROVA=6  VALOR=10,0000  "Prova 1 - Relevo brasileiro (dado de teste)"
+>
+> SNotas dessa avaliação
+>   RA=202600109  NOTA=8,5000   Arthur Henrique Vieira Possoli
+>   RA=202100113  NOTA=7,0000   Bernardo Vinand dos Santos
+>   RA=202500060  NOTA=10,0000  Dante Saretta Devens
+>   RA=202100137  NOTA=6,2500   Davi Zanchetta Aguiar
+>   RA=202600098  NOTA=9,0000   Eduardo Brasil Scárdua
+>
+> de-para ASSESSMENT: 1266:2:6  <->  assignment 424549056069519502
+> ```
+>
+> **Decimais preservados** (`8,5000`, `6,2500`). `npm run escrever:avaliacoes`,
+> ensaio por default. O que NÃO acontece: a nota da ETAPA não recalcula — ver §5.
+
+## Levantamento — como se chegou aqui
 
 **Aberto em 09/09/2026**, depois de o writer de nota de etapa falhar em produção
 de um jeito silencioso. Tudo abaixo foi **medido**, não suposto. O que não foi
@@ -271,3 +295,80 @@ o **leitor do Toddle** (`student-assignments` em vez de `term-grades`).
 >   brasileiro (dado de teste)"`, criada por mim em 09/09 com **visibilidade
 >   apenas para professores**, e 5 alunos avaliados (8.5, 7, 10, 6.25, 9 de 10).
 >   Nenhuma nota foi compartilhada com aluno ou responsável.
+
+---
+
+## 7. A escrita, e a armadilha que custou uma recusa
+
+`npm run escrever:avaliacoes` faz o caminho em duas fases, porque os destinos são
+dois e a ordem importa: sem a avaliação, a nota não tem endereço.
+
+```
+fase A   SaveRecord EduProvasData   cria SProvas   -> registra de-para ASSESSMENT
+fase B   SaveRecord EduNotasData    cria SNotas    -> confere por releitura
+```
+
+Se a fase A falhar para uma avaliação, a fase B **pula** as notas dela em vez de
+escrever nota órfã.
+
+### ⚠️ O separador decimal é VÍRGULA, e o erro não parece o que é
+
+Primeira tentativa, enviando `<NOTA>6.25</NOTA>` numa prova de `VALOR=10`. O RM
+recusou o dataset inteiro:
+
+```
+Aluno: 202100137 - Davi Zanchetta Aguiar
+A nota informada excede o valor máximo permitido para esta prova,
+que é de 10,0000 pontos
+```
+
+**6,25 não excede 10.** O RM leu `6.25` como **625** — ponto é separador de
+MILHAR no locale pt-BR do servidor, e o dataset declara
+`msdata:UseCurrentLocale="true"`. A própria mensagem entrega a convenção ao
+escrever o máximo como `10,0000`.
+
+**Por que isso é perigoso e não só chato:** só estourou porque o máximo era 10.
+Numa prova valendo 1.000 pontos, `6.25` viraria 625 sem estourar nada — e a nota
+do aluno ficaria cem vezes maior, **aceita em silêncio**. O erro apareceu por
+sorte, não por proteção. O separador vive em `decimalParaRm` e em nenhum outro
+lugar, com teste que reproduz a mensagem acima.
+
+### O de-para ASSESSMENT (migração 015)
+
+`rm_code = IDTURMADISC:CODETAPA:CODPROVA`, `toddle_id = id do assignment`.
+
+A chave é composta porque `CODPROVA` é sequencial **por (turma-disciplina,
+etapa)** — existe uma "prova 1" em cada uma das 186 turmas-disciplina. Só o
+número colidiria na `id_mapping_rm_uq` na segunda turma com avaliação, e o
+de-para passaria a apontar para a prova da turma errada em silêncio.
+
+Alocação: `max(CODPROVA) + 1` na etapa. Antes de criar, procura por
+**descrição** — se um humano já criou uma prova com o mesmo título, adotamos a
+dele em vez de pôr uma segunda ao lado. E se o de-para aponta para uma turma
+diferente da atual, é recusa: o vínculo mudou e precisa de revisão humana.
+
+### ⚠️ A escala ficou inconsistente, de propósito e à vista
+
+Na etapa 2 da turma 1266 agora convivem:
+
+| CODPROVA | VALOR | descrição |
+|---|---|---|
+| 4 | 7,0000 | Midterm |
+| 5 | 7,0000 | Midterm |
+| **6** | **10,0000** | Prova 1 - Relevo brasileiro (dado de teste) |
+
+As provas da escola valem 7; a que veio do Toddle vale 10, porque é o `maxScore`
+que o professor escolheu lá. **Preservei o máximo do Toddle em vez de converter**
+— converter (8,5 de 10 → 5,95) é decisão pedagógica, não de integração, e
+converter em silêncio esconderia a pergunta.
+
+A consequência tem de estar clara: **se alguém rodar o recálculo da etapa com
+escalas misturadas, o resultado depende de como a fórmula `01_ETAPA` pondera** —
+e isso ninguém mediu. Se a escola quiser tudo em 7, o lugar de decidir é o
+`SProvas.VALOR`, e a conversão passa a ser explícita e revisável.
+
+### O que continua fora do alcance da integração
+
+Fechar a etapa. Escrever `SNotas` **não** recalcula `SNOTAETAPA` — medido, e
+retestado depois de existir avaliação e nota. O boletim segue sendo processo do
+RM e ato humano, com data-limite de digitação e conferência.

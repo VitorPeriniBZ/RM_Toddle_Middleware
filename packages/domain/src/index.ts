@@ -14,6 +14,18 @@ export * from './rmGradeSource';
 export * from './toddleGradeSource';
 export * from './gradeProjection';
 export * from './rmGradeTargets';
+export * from './toddleAssessmentSource';
+export {
+  decimalParaRm,
+  montaXmlProva,
+  montaLotesNotasAvaliacao,
+  chaveNaturalNotaAvaliacao,
+  type ProvaParaCriar,
+  type NotaParaEscrever,
+  type LoteNotasAvaliacao,
+} from './provaXml';
+export * from './rmAssessmentTargets';
+export * from './assessmentProjection';
 export * from './notaXml';
 export * from './rmTeacherSource';
 export * from './rmWriteDecision';

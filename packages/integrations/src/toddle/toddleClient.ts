@@ -13,9 +13,13 @@ import {
   ToddleBellScheduleResponse,
   ToddleAttendanceCode,
   ToddleAttendanceCodesResponse,
+  ToddleAssignment,
+  ToddleAssignmentsResponse,
   ToddleAttendanceListResponse,
   ToddleStudent,
   ToddleStudentResponse,
+  ToddleStudentAssignment,
+  ToddleStudentAssignmentsResponse,
   ToddleStudentsListResponse,
   ToddleTermGradeStudent,
   ToddleTermGradesResponse,
@@ -52,6 +56,9 @@ const ATTENDANCE_PAGE_SIZE = 400;
 
 /** Tamanho de página do GET /term-grades. O default da API é 100. */
 const TERM_GRADES_PAGE_SIZE = 100;
+
+/** /assignments e /student-assignments aceitam 400 a 1000. */
+const ASSIGNMENTS_PAGE_SIZE = 400;
 
 /**
  * Status que merecem nova tentativa: 429 é rate limit (os limites do Toddle NÃO
@@ -1082,6 +1089,112 @@ export class ToddleClient {
     }
 
     return alunos;
+  }
+
+  /**
+   * Assignments — as "avaliações" que o professor cria. Correspondem a `SProvas`.
+   *
+   * ─── DUAS ARMADILHAS DE PARÂMETRO, MEDIDAS ─────────────────────────────────
+   *
+   * 1. `classIds` e `teacherCourseIds` vão em **CSV**, não como array JSON. A
+   *    MESMA API usa JSON em `sourceIds` (GET /students) e em `courseIds`
+   *    (GET /attendance). Passar JSON aqui não filtra.
+   * 2. Não existe `modifiedSince`. Igual ao /term-grades e diferente do
+   *    /attendance: cada passada lê tudo, e é o guarda de decisão que a torna
+   *    barata.
+   *
+   * `count` aceita 400 a 1000 nesta rota (o /term-grades usa 100).
+   */
+  async listAssignments(filtros: {
+    curriculumProgramId: string;
+    academicYearId?: string;
+    classIds?: string[];
+    teacherCourseIds?: string[];
+    assignmentId?: string;
+    maxRecords?: number;
+  }): Promise<ToddleAssignment[]> {
+    if (!filtros.curriculumProgramId) {
+      throw new ToddleApiError('listAssignments exige curriculumProgramId.');
+    }
+    const todos: ToddleAssignment[] = [];
+    const teto = filtros.maxRecords ?? Infinity;
+    let cursor: string | undefined;
+
+    for (;;) {
+      const params: Record<string, string | number> = {
+        curriculumProgramId: filtros.curriculumProgramId,
+        count: ASSIGNMENTS_PAGE_SIZE,
+      };
+      if (cursor) params.cursor = cursor;
+      if (filtros.academicYearId) params.academicYearId = filtros.academicYearId;
+      if (filtros.assignmentId) params.assignmentId = filtros.assignmentId;
+      // CSV, não JSON — ver a nota acima.
+      if (filtros.classIds?.length) params.classIds = filtros.classIds.join(',');
+      if (filtros.teacherCourseIds?.length) params.teacherCourseIds = filtros.teacherCourseIds.join(',');
+
+      const { data } = await this.withRetry('GET /assignments', () =>
+        this.http.get<ToddleAssignmentsResponse>('/public/v2/assignments', { params }),
+      );
+      const pagina = data?.response?.edges ?? [];
+      todos.push(...pagina);
+      if (todos.length > teto) {
+        throw new ToddleApiError(
+          `GET /assignments devolveu mais de ${teto} registros — abortando. Estreite por turma.`,
+        );
+      }
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info?.endCursor) break;
+      cursor = info.endCursor;
+    }
+    return todos;
+  }
+
+  /**
+   * Resultados por aluno — correspondem a `SNotas`.
+   *
+   * `assignmentIds` e `studentIds` também vão em **CSV**. Sem `modifiedSince`.
+   *
+   * Devolve TODOS os alunos atribuídos, avaliados ou não: quem não foi avaliado
+   * vem com `assessmentToolData.score` vazio. Contar `edges.length` como "notas
+   * lidas" infla o número em ~4x — medido: 2.085 resultados para 441 notas.
+   */
+  async listStudentAssignments(filtros: {
+    curriculumProgramId: string;
+    assignmentIds?: string[];
+    studentIds?: string[];
+    maxRecords?: number;
+  }): Promise<ToddleStudentAssignment[]> {
+    if (!filtros.curriculumProgramId) {
+      throw new ToddleApiError('listStudentAssignments exige curriculumProgramId.');
+    }
+    const todos: ToddleStudentAssignment[] = [];
+    const teto = filtros.maxRecords ?? Infinity;
+    let cursor: string | undefined;
+
+    for (;;) {
+      const params: Record<string, string | number> = {
+        curriculumProgramId: filtros.curriculumProgramId,
+        count: ASSIGNMENTS_PAGE_SIZE,
+      };
+      if (cursor) params.cursor = cursor;
+      if (filtros.assignmentIds?.length) params.assignmentIds = filtros.assignmentIds.join(',');
+      if (filtros.studentIds?.length) params.studentIds = filtros.studentIds.join(',');
+
+      const { data } = await this.withRetry('GET /student-assignments', () =>
+        this.http.get<ToddleStudentAssignmentsResponse>('/public/v2/student-assignments', { params }),
+      );
+      const pagina = data?.response?.edges ?? [];
+      todos.push(...pagina);
+      if (todos.length > teto) {
+        throw new ToddleApiError(
+          `GET /student-assignments devolveu mais de ${teto} registros — abortando.`,
+        );
+      }
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info?.endCursor) break;
+      cursor = info.endCursor;
+    }
+    return todos;
   }
 
   /**

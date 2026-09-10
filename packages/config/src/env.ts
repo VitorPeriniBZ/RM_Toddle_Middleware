@@ -261,6 +261,20 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  /**
+   * Quais `assessmentType` do Toddle viram nota no RM. CSV de prefixos.
+   *
+   * Medido em 09/09/2026, os 223 assignments do sandbox se dividem em oito
+   * tipos: `learning_engagement/le` (111), `assessment/fmt` (38),
+   * `learning_engagement/` (30), `assessment/pt` (16), `ai_tutor/ai_tutor` (12),
+   * `worksheet/worksheet` (6), `assessment/pri` (6) e `assessment/` (4).
+   *
+   * O default é `assessment` — o que o professor cria clicando "Avaliação" na
+   * interface. Nem toda tarefa é prova: `learning_engagement` e `ai_tutor`
+   * viram nota no boletim ou não? É decisão da escola, e por isso é
+   * configuração e não constante.
+   */
+  NOTA_TIPOS_ELEGIVEIS: z.string().default('assessment'),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -30,6 +30,17 @@ export const ENTITY_TYPES = [
    * divergem porque o ano acadêmico de lá é nov→nov. Ver migração 008.
    */
   'GRADING_PERIOD',
+  /**
+   * Avaliação (prova): rm_code = `IDTURMADISC:CODETAPA:CODPROVA`, toddle_id =
+   * id do assignment.
+   *
+   * A chave é COMPOSTA porque `CODPROVA` é sequencial por (turma-disciplina,
+   * etapa) — existe uma "prova 1" em cada uma das 186 turmas-disciplina. Um
+   * rm_code só com o número colidiria na `id_mapping_rm_uq` na segunda turma que
+   * tivesse avaliação, e o de-para passaria a apontar para a prova da turma
+   * errada em silêncio. Ver migração 015.
+   */
+  'ASSESSMENT',
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
