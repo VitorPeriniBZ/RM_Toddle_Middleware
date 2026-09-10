@@ -11,8 +11,9 @@ import {
   processStudentUpsertBatch,
 } from './studentSync.processor';
 import { processStaffSync } from './staffSync.processor';
-import { STAFF_JOB } from '@rm-toddle/queues';
-import { heartbeat, logger } from '@rm-toddle/config';
+import { processTermGradesSync } from '../toddle-to-rm/termGrades.processor';
+import { STAFF_JOB, TERM_GRADE_JOB } from '@rm-toddle/queues';
+import { env, heartbeat, logger } from '@rm-toddle/config';
 
 /**
  * O job esgotou as tentativas? Só então a falha é definitiva.
@@ -83,9 +84,52 @@ const staffWorker = new Worker(
   { connection: redisConnection, concurrency: 1 },
 );
 
+/**
+ * Worker da fila `toddle-to-rm.term-grades` — a VIA DE VOLTA da nota.
+ *
+ * Mesmo processo, terceira fila. Fica aqui pelo mesmo motivo que o de professor:
+ * o volume é pequeno (uma passada por meia hora, lendo ~250 alunos) e um
+ * container próprio traria supervisão, deploy e log duplicados para nada.
+ *
+ * `concurrency: 1` e sem limiter, e aqui isso NÃO é economia: duas passadas
+ * simultâneas leriam o mesmo estado do RM, decidiriam em cima dele e escreveriam
+ * as mesmas chaves — o guarda de proveniência veria "não é nosso" nas duas e o
+ * resultado dependeria da ordem. A serialização é parte da correção, não do
+ * desempenho.
+ */
+const termGradesWorker = new Worker(
+  QUEUE.TODDLE_TO_RM_TERM_GRADES,
+  async (job: Job) => {
+    switch (job.name) {
+      case TERM_GRADE_JOB.SYNC:
+        return processTermGradesSync(job);
+      default:
+        throw new Error(`Job desconhecido na fila de notas: ${job.name}`);
+    }
+  },
+  { connection: redisConnection, concurrency: 1 },
+);
+
 // Jobs que esgotarem as 3 tentativas vão para a fila 'dead-letter'.
 wireDeadLetterQueue(worker, QUEUE.RM_TO_TODDLE_STUDENTS);
 wireDeadLetterQueue(staffWorker, QUEUE.RM_TO_TODDLE_STAFF);
+wireDeadLetterQueue(termGradesWorker, QUEUE.TODDLE_TO_RM_TERM_GRADES);
+
+termGradesWorker.on('completed', (job, result) => {
+  logger.info({ jobId: job.id, jobName: job.name, result }, 'Job de nota concluído');
+});
+termGradesWorker.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, jobName: job?.name, attemptsMade: job?.attemptsMade, err: err.message },
+    'Job de nota falhou',
+  );
+  // Só exceção chega aqui: divergência de integridade NÃO lança, para não
+  // reenviar escrita que pode ter sido aplicada — ver termGrades.processor.ts.
+  if (esgotouTentativas(job)) void heartbeat.notas('falha', { jobName: job?.name });
+});
+termGradesWorker.on('error', (err) => {
+  logger.error({ err }, 'Erro no worker de notas');
+});
 
 staffWorker.on('completed', (job, result) => {
   logger.info({ jobId: job.id, jobName: job.name, result }, 'Job de professor concluído');
@@ -126,7 +170,13 @@ worker.on('error', (err) => {
   logger.error({ err }, 'Erro no worker');
 });
 
-logger.info({ queue: QUEUE.RM_TO_TODDLE_STUDENTS }, 'Worker de alunos iniciado');
+logger.info(
+  {
+    filas: [QUEUE.RM_TO_TODDLE_STUDENTS, QUEUE.RM_TO_TODDLE_STAFF, QUEUE.TODDLE_TO_RM_TERM_GRADES],
+    notaSyncAtivo: env.NOTA_SYNC_ATIVO,
+  },
+  'Worker iniciado',
+);
 
 /** Encerramento gracioso: termina o job em andamento antes de sair. */
 async function shutdown(signal: string): Promise<void> {
@@ -134,7 +184,7 @@ async function shutdown(signal: string): Promise<void> {
   try {
     // Os DOIS workers: sem fechar o de professor, o SIGTERM mataria um job em
     // andamento no meio de uma escrita no Toddle.
-    await Promise.all([worker.close(), staffWorker.close()]);
+    await Promise.all([worker.close(), staffWorker.close(), termGradesWorker.close()]);
     await closeAllQueues();
     await closeRmSqlPool();
     await pgPool.end();

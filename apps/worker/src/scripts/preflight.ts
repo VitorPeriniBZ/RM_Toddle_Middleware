@@ -180,6 +180,49 @@ function checar(): Checagem[] {
     fatal: false,
   });
 
+  // ─── A via de NOTA, se estiver ligada ─────────────────────────────────────
+  //
+  // É a única escrita AGENDADA no RM. Quando ligada, ela merece dizer o próprio
+  // nome no log do deploy: quem lê "preflight aprovado" precisa saber que este
+  // ambiente vai escrever nota sozinho.
+  if (env.NOTA_SYNC_ATIVO) {
+    c.push({
+      nome: 'NOTA_SYNC_ATIVO (escrita AGENDADA de nota no RM)',
+      ok: true,
+      detalhe:
+        `LIGADA — cron "${env.NOTA_SYNC_CRON}", exigirEtapaLiberada=` +
+        `${env.NOTA_EXIGIR_ETAPA_LIBERADA}. Este ambiente escreve nota no RM sem ` +
+        'intervenção humana, atrás dos quatro guardas.',
+      fatal: false,
+    });
+
+    // A Sentença de nota é `.optional()` no schema, porque tenant que não
+    // sincroniza nota não precisa dela. Com o job agendado, ela vira
+    // obrigatória — é a MESMA lacuna que quebrou o staff.sync em 10/08.
+    c.push({
+      nome: 'RM_SENTENCA_NOTAS (exigida por NOTA_SYNC_ATIVO)',
+      ok: Boolean(cfg.rm.sentencas.notas),
+      detalhe: cfg.rm.sentencas.notas
+        ? String(cfg.rm.sentencas.notas)
+        : 'AUSENTE com a via de nota LIGADA — o job vai falhar em toda passada e ' +
+          'encher a DLQ. Configure a Sentença ou desligue NOTA_SYNC_ATIVO.',
+      fatal: true,
+    });
+
+    // Sem monitor, uma escrita automática que para de rodar é invisível. Para o
+    // cadastro isso já é ruim; para nota é pior, porque a escola passa a
+    // acreditar que o boletim está sincronizado.
+    c.push({
+      nome: 'HEARTBEAT_URL_NOTAS (alerta da via de nota)',
+      ok: Boolean(env.HEARTBEAT_URL_NOTAS),
+      detalhe: env.HEARTBEAT_URL_NOTAS
+        ? 'configurado'
+        : 'vazio — se a via de nota parar, ninguém é avisado. A escola vai supor ' +
+          'que o boletim está sincronizado enquanto não está',
+      fatal: false,
+    });
+  }
+
   c.push({
     nome: 'TODDLE_DEFAULT_YEAR_GROUP_ID',
     ok: Boolean(cfg.toddle.yearGroupPadrao),

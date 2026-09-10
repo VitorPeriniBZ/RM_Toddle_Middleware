@@ -1,5 +1,47 @@
 # `EduNotaEtapaData` — leitura e escrita da nota de etapa no RM
 
+> # ⛔ MEDIDO EM 09/09/2026: ESTE DATASERVER NÃO ESCREVE A NOTA
+>
+> O `SaveRecord` **aceita o dataset, cria a linha e DESCARTA o `NOTAFALTA`.**
+> Responde `ok=true` — nenhum erro, nenhum aviso — e a releitura devolve
+> `0.0000`.
+>
+> Testado na chave `1|1|N|1250|202600199` (slot que estava vazio), seis formatos:
+>
+> | enviado | resposta | o RM lê |
+> |---|---|---|
+> | `<NOTAFALTA>7</NOTAFALTA>` | ok=true | `0.0000` |
+> | `<NOTAFALTA>6.5</NOTAFALTA>` | ok=true | `0.0000` |
+> | `<NOTAFALTA>6,5</NOTAFALTA>` | ok=true | `0.0000` |
+> | `<NOTAFALTA>4.0000</NOTAFALTA>` | ok=true | `0.0000` |
+> | `+ <AULASDADAS>0</AULASDADAS>` | ok=true | `0.0000` |
+> | `+ <IDGRUPO>4</IDGRUPO>` | ok=true | `0.0000` |
+>
+> **A causa está em `SETAPAS`: `CODFORMULANOTA=01_ETAPA`.** A nota da etapa é
+> CALCULADA por fórmula a partir das avaliações, não digitada. Escrever direto no
+> campo é ignorado — e o RM não avisa.
+>
+> As duas turmas-disciplina comparadas (1250, que tem todas as notas em zero, e
+> 1541, que tem `6,5000` lançado à mão) têm configuração de etapa **idêntica** —
+> `CODFORMULANOTA`, `IDGRUPO`, `PERMITEDIGITACAO`, `PERMITIRCADASTRARAVALIACAO`.
+> Não é peculiaridade de turma.
+>
+> ### Consequência
+>
+> **A via de nota Toddle → RM NÃO pode ser entregue por este DataServer.** Um job
+> agendado escrevendo por aqui criaria linhas com nota **0** no histórico escolar,
+> silenciosamente — pior que não escrever, porque zero é um valor plausível.
+>
+> O destino correto é a **nota de avaliação** (`SNOTAAVALIACAO` + `SPROVA`), com o
+> RM recalculando a etapa pela fórmula. Isso exige: descobrir o DataServer de
+> avaliação (`EduProvaData` **não existe** nesta instalação — medido), decidir a
+> qual avaliação a nota do Toddle corresponde, e o de-para dessa avaliação. É
+> trabalho de levantamento, não de implementação.
+>
+> Tudo abaixo desta seção segue válido para **LEITURA**. A parte de escrita está
+> mantida por registro histórico, não como guia.
+
+
 O DataServer da **nota do trimestre** (`SNOTAETAPA`). Com a decisão D1 — nota vem
 do Toddle para o TOTVS — é por ele que a nota será gravada.
 

@@ -396,3 +396,92 @@ export interface ToddleGradeScalesResponse {
  * Sinaliza nota sobreposta manualmente, em vez de calculada pelo gradebook.
  * Observado como `true` na nota criada por API; não medido com nota calculada.
  */
+
+/**
+ * Um assignment do Toddle — a "avaliação" que o professor cria. Corresponde a
+ * `SProvas` no RM.
+ *
+ * `assessmentType`/`subAssessmentType` classificam o que o professor escolheu na
+ * interface. Medido em 09/09/2026: escolher "Avaliação" produz `assessment/pt`;
+ * os 223 do sandbox se dividem em `learning_engagement/le` (111),
+ * `assessment/fmt` (38), `learning_engagement/` (30), `assessment/pt` (16),
+ * `ai_tutor/ai_tutor` (12), `worksheet/worksheet` (6), `assessment/pri` (6) e
+ * `assessment/` (4). QUAIS desses viram nota no RM é decisão da escola.
+ *
+ * `classId` é o que casa com o de-para `COURSE` (IDTURMADISC). `teacherCourseId`
+ * é o agrupador e pode cobrir VÁRIAS turmas — por isso o de-para usa o classId.
+ */
+export interface ToddleAssignment {
+  id: string | number;
+  title?: string;
+  state?: string;
+  assessmentType?: string | null;
+  subAssessmentType?: string | null;
+  teacherCourseId?: string | null;
+  teacherCourseName?: string | null;
+  classId?: string | null;
+  className?: string | null;
+  curriculumProgramId?: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  dueDate?: string | null;
+  publishedAt?: string | null;
+  createdAt?: string | null;
+  createdBy?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ToddleAssignmentsResponse {
+  response?: {
+    totalCount?: number;
+    edges?: ToddleAssignment[];
+    pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+  };
+}
+
+/**
+ * O resultado de UM aluno em UM assignment — corresponde a `SNotas` no RM.
+ *
+ * ─── ONDE ESTÁ A NOTA, E COMO SABER SE FOI AVALIADO ─────────────────────────
+ *
+ * `assessmentToolData.score[0]` traz `{ value, maxScore }`. Medido lançando nota
+ * pela tela do professor em 09/09/2026:
+ *
+ *   avaliado      -> {"score":[{"id":"…","value":"8.5","maxScore":"10"}]}
+ *   NÃO avaliado  -> {"score":[]}
+ *
+ * A distinção é o array vazio, e `evaluatedAt` confirma. **Decimais sobrevivem**
+ * (`8.5`, `6.25` voltam exatos) — ao contrário do `FINAL_SCORE` do
+ * `/term-grades`, que só aceita inteiro.
+ *
+ * `academicTermId` é o grading period, e é por ele que sai o `CODETAPA`.
+ *
+ * `evaluationSharedAt` diz se a nota já foi compartilhada com o aluno. Nulo
+ * significa que só o professor a vê — o estado em que uma nota de teste deve
+ * ficar.
+ */
+export interface ToddleStudentAssignment {
+  assignmentId: string | number;
+  assignmentTitle?: string;
+  assignmentType?: string | null;
+  studentId: string | number;
+  studentName?: string;
+  evaluatedAt?: string | null;
+  evaluationSharedAt?: string | null;
+  academicTermId?: string | null;
+  academicTermName?: string | null;
+  assessmentToolData?: {
+    score?: Array<{ id?: string; value?: string | number; maxScore?: string | number }>;
+    rubric?: Array<Record<string, unknown>>;
+    remark?: Array<Record<string, unknown>>;
+  } | null;
+  [key: string]: unknown;
+}
+
+export interface ToddleStudentAssignmentsResponse {
+  response?: {
+    totalCount?: number;
+    edges?: ToddleStudentAssignment[];
+    pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+  };
+}

@@ -470,6 +470,74 @@ Três coisas que decorrem, e valem para qualquer script novo:
 Script solto **não** passa pelo limiter de 2 req/s: aquele vive na configuração do
 worker BullMQ.
 
+## D7 — A escola NÃO vai usar habilidade no cálculo da nota
+
+**10/09/2026.** Decisão da escola, depois de ver o relatório do RM sair com
+`MEDIA TRI = 0.00` e "Sem Habilidade Associada" nas cinco notas que a integração
+escreveu:
+
+> "nos nao vamos mais usar as habilidades no totvs, vamos ajustar ele para
+> calcular sem as habilidades. entao podemos manter como estava"
+
+### O que isso encerra
+
+**A integração não carrega habilidade, e não precisa passar a carregar.** A
+pergunta que estava aberta — como mapear habilidade do RM ↔ padrão de
+aprendizagem do Toddle — deixa de existir. Nada a construir.
+
+E o alívio é grande, porque o mapeamento não tinha origem viável: a API do Toddle
+**não expõe objetivo de aprendizagem** como entidade (só `subjects`), e
+`GET /progress-summary?ratingType=PlannerElementRatings` devolve **0 registros** —
+ninguém avalia por padrão de aprendizagem hoje. A alternativa seria derivar
+habilidade do `indicatorLabel` da rubrica, que é texto livre por avaliação, sem id
+estável: geraria um catálogo irreconciliável entre trimestres.
+
+Três conselheiros consultados convergiram, separadamente, em que "ajustar o
+formato que o Toddle envia" era o alvo errado — nenhum payload inventa uma
+habilidade que o professor não escolheu.
+
+### O que o RM tem, e que eu descrevi errado antes
+
+Para registro, porque a correção importa: eu afirmei que "a escola não tem
+habilidade cadastrada" olhando `SCompetencia`, que está vazia. **Errado.** As
+habilidades vivem em `SCOMPHABHABILIDADE`: são **10.146**, num catálogo curado —
+378 competências misturando **BNCC** (`BNCC-EF01GE01`), **Common Core**
+(`RL.11-12.1`) e **critérios do IB MYP** ("Critério A — Compreender o espaço
+geográfico", 65 habilidades), organizadas por área (Skill 8.769, Knowledge 735,
+Understanding 582, International Learning 28, Personal Development 24).
+
+A escola tinha o modelo montado. A decisão é deixar de usá-lo no cálculo, não uma
+consequência de não tê-lo.
+
+### ⚠️ O que esta decisão NÃO resolve
+
+**A média pode continuar 0,00 depois do ajuste**, e por outro motivo — medido
+antes e independente da habilidade:
+
+> Escrever `SNotas` **não** recalcula `SNOTAETAPA`. Testado inclusive tocando o
+> `SNotaEtapa` em seguida e esperando 15s, com avaliação e nota já existindo.
+
+Se o bloqueio real for o gatilho de recálculo, tirar a exigência de habilidade
+não muda nada. Vale conferir a média **depois** de reconfigurar, e a pergunta
+"o que recalcula o `SNOTAETAPA`?" continua aberta para a TOTVS. Nenhum
+DataServer disponível expõe a fórmula `01_ETAPA` para ler.
+
+### Rastro a limpar
+
+Na prova de teste (`IDTURMADISC 1266`, etapa 2, `CODPROVA 6`) tentei associar a
+habilidade `25ESGEO001` para medir o mecanismo. O `SaveRecord` respondeu
+`ok=true`, mas o `ReadView` do `EduProvasData` não devolve a tabela filha
+`SProvasCompl`, então **não há confirmação de que gravou**. Se gravou, é uma
+associação indesejada — e imprópria, porque `25ESGEO001` é BNCC de 1º ano do
+Fundamental numa prova de 2ª série do Médio. Com a habilidade fora do cálculo,
+ela é inofensiva; se aparecer no relatório, apagar pela tela.
+
+Aprendizado de método: `SProvasCompl` só é aceito com a linha-pai `SProvas` no
+MESMO dataset — sem ela o RM responde "Os dados da tabela SProvas não foi
+encontrada!".
+
+---
+
 ## Pendências que não são de código
 
 | item | quem resolve |
@@ -479,6 +547,7 @@ worker BullMQ.
 | Datas dos grading periods no portal (requisito da D2) — **mede-se hoje: 0 de 558 combinações escrevíveis; a via de nota só abre em 23/09** | admin do Toddle |
 | ~~Ano corrente é editável?~~ **NÃO** — resolvido 06/08; ver acima. Em produção, calendário certo na criação | — |
 | Nota do RM tem 4 decimais e o `FINAL_SCORE` do Toddle **só aceita inteiro** (medido 09/09: `postedGrade "6.5"` devolve HTTP 400). A primeira aluna consultada tem `6,5000` no RM. O que acontece com as casas decimais? | escola |
+| **`EduNotaEtapaData` não escreve a nota** (medido 09/09: `ok=true` e o campo é descartado; `SETAPAS.CODFORMULANOTA=01_ETAPA`, nota calculada por fórmula). A via de nota precisa de OUTRO destino — avaliação (`SNOTAAVALIACAO`/`SPROVA`), e `EduProvaData` não existe nesta instalação | levantamento + TOTVS |
 | Política de atraso / falta justificada | escola |
 | Política de homeroom (49% sem `courseId`) | escola |
 | `JUSTIFICADA` vazio em 21.300 linhas — ninguém justifica? | secretaria |

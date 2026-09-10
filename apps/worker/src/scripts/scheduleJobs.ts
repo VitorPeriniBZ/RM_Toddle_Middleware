@@ -1,5 +1,5 @@
 import { closeAllQueues, redisConnection } from '@rm-toddle/queues';
-import { upsertStudentsNightly, upsertStaffNightly, SCHEDULER } from '@rm-toddle/queues';
+import { upsertStudentsNightly, upsertStaffNightly, upsertTermGradesPoll, SCHEDULER } from '@rm-toddle/queues';
 import { env, cronDoProfessorEfetivo } from '@rm-toddle/config';
 import { logger } from '@rm-toddle/config';
 
@@ -21,11 +21,18 @@ import { logger } from '@rm-toddle/config';
 async function main(): Promise<void> {
   await upsertStudentsNightly();
   await upsertStaffNightly();
+  // Registra OU REMOVE o poll da nota conforme NOTA_SYNC_ATIVO. Como o `init` do
+  // compose chama este script a cada deploy, desligar a flag e redeployar já
+  // apaga o agendamento — sem precisar mexer no Redis à mão.
+  await upsertTermGradesPoll();
 
   logger.info(
     {
       alunos: { scheduler: SCHEDULER.STUDENTS_NIGHTLY, cron: env.STUDENTS_SYNC_CRON },
       professores: { scheduler: SCHEDULER.STAFF_NIGHTLY, cron: cronDoProfessorEfetivo() },
+      notas: env.NOTA_SYNC_ATIVO
+        ? { scheduler: SCHEDULER.TERM_GRADES_POLL, cron: env.NOTA_SYNC_CRON }
+        : 'DESLIGADA (NOTA_SYNC_ATIVO=false) — agendamento removido se existia',
       tz: 'America/Sao_Paulo',
     },
     'Agendamentos de sincronização registrados',

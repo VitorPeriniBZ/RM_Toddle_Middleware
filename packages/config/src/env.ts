@@ -182,6 +182,7 @@ const envSchema = z.object({
   // alerta que passa a ser ignorado. Use ~13h (ou "grace" de 1h sobre 12h).
   HEARTBEAT_URL_ALUNOS: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   HEARTBEAT_URL_PROFESSORES: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  HEARTBEAT_URL_NOTAS: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   /** Timeout do ping. Curto de propósito: monitor lento não pode atrasar o job. */
   HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 
@@ -216,6 +217,64 @@ const envSchema = z.object({
    * aprovação que aparece por nada é aprovação que alguém passa a dar sem ler.
    */
   WRITE_PISO_SEM_APROVACAO: z.coerce.number().int().min(0).default(50),
+
+  // --- Via de NOTA, Toddle -> RM (automática) ---
+  //
+  // A única escrita AGENDADA que este projeto faz no RM. Todas as outras exigem
+  // alguém digitando `--executar`, e é por isso que estas três variáveis
+  // existem: a decisão de ligar é por escola, não do código.
+  /**
+   * Liga a via de nota agendada. Default `false`, DE PROPÓSITO.
+   *
+   * O middleware é white label, e escrita automática em registro acadêmico legal
+   * não pode chegar numa escola nova por herança de default. Vale também como
+   * interruptor: `false` e o próximo deploy para de escrever, sem alterar código.
+   */
+  NOTA_SYNC_ATIVO: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /**
+   * Frequência do poll. A API do Toddle NÃO tem webhook — verificado na
+   * referência inteira em 09/09/2026 —, então "quando o professor lançar" é
+   * necessariamente uma consulta periódica.
+   *
+   * O default cobre 6h às 22h de meia em meia hora: fora desse intervalo
+   * ninguém está lançando nota, e cada passada custa uma leitura da Sentença
+   * TODDLE.NOTAS (7 mil linhas) no RM.
+   */
+  NOTA_SYNC_CRON: z.string().default('*/30 6-22 * * *'),
+  /**
+   * Recusar nota cuja etapa esteja com `SETAPAS.DISPONIVELALUNOS='N'`?
+   *
+   * Default `false`, e a mudança em relação ao script é deliberada. A guarda
+   * nasceu do fluxo INVERSO (RM -> Toddle), onde escrever significava PUBLICAR
+   * nota provisória para a família. Nesta direção não: `DISPONIVELALUNOS` é a
+   * flag DO RM que controla o que o aluno vê, e gravar em etapa não liberada
+   * deixa a nota no banco sem exibi-la a ninguém. A visibilidade continua nas
+   * mãos da escola, onde sempre esteve.
+   *
+   * Com `true` a via não escreve nada nesta escola: a flag vem 'N' em 100% das
+   * 7.268 notas medidas.
+   */
+  NOTA_EXIGIR_ETAPA_LIBERADA: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /**
+   * Quais `assessmentType` do Toddle viram nota no RM. CSV de prefixos.
+   *
+   * Medido em 09/09/2026, os 223 assignments do sandbox se dividem em oito
+   * tipos: `learning_engagement/le` (111), `assessment/fmt` (38),
+   * `learning_engagement/` (30), `assessment/pt` (16), `ai_tutor/ai_tutor` (12),
+   * `worksheet/worksheet` (6), `assessment/pri` (6) e `assessment/` (4).
+   *
+   * O default é `assessment` — o que o professor cria clicando "Avaliação" na
+   * interface. Nem toda tarefa é prova: `learning_engagement` e `ai_tutor`
+   * viram nota no boletim ou não? É decisão da escola, e por isso é
+   * configuração e não constante.
+   */
+  NOTA_TIPOS_ELEGIVEIS: z.string().default('assessment'),
 });
 
 const parsed = envSchema.safeParse(process.env);
