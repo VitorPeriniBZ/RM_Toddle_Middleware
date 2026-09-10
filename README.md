@@ -250,8 +250,44 @@ Passos:
 1. Criar o projeto e adicionar os recursos **PostgreSQL** e **Redis**; ativar backup no Postgres.
 2. Adicionar a aplicação apontando para este repo, tipo **Docker Compose**, arquivo `docker-compose.coolify.yml`.
 3. Preencher as variáveis (a lista completa está no cabeçalho do compose). `DATABASE_URL` e `REDIS_URL` saem da UI dos recursos.
-4. Ligar o domínio **só no serviço `web`**.
-5. Deploy. O `init` roda as migrations e registra o cron antes de o worker subir.
+4. Ligar o domínio **só no serviço `web`** — hoje `toddlerm.escolaamericana.com.br`. Os outros três não recebem domínio: o `api` só é alcançado pelo nginx do `web`, pela rede interna.
+5. **No console do Google**, acrescentar `https://toddlerm.escolaamericana.com.br` nas *Authorized JavaScript origins* do cliente OAuth cujo id está em `GOOGLE_CLIENT_ID`. Sem isso o botão de login **não assina** — é o único bloqueio duro do login em produção, e o sintoma parece ser da aplicação, não do console.
+6. Deploy. A ordem é garantida pelo compose, não pela sua memória: `worker` e `api` declaram `depends_on: init: service_completed_successfully`, e o `init` roda `preflight && db:migrate && schedule`. Migration quebrada derruba o deploy inteiro — que é o comportamento certo.
+7. **Conceder o primeiro acesso**, contra o banco de PRODUÇÃO. A tabela `membership` nasce vazia e a API nega tudo, inclusive leitura:
+
+   ```bash
+   npm run conceder -- --subject <o que o 403 mostrou> --papel tenant_admin --email voce@escolaamericana.com.br
+   ```
+
+   Você não precisa saber o seu `subject` de cor: entre na tela, receba o 403, e ele devolve o comando pronto. A concessão feita em desenvolvimento **não vale** aqui — é outro banco.
+
+**O que NÃO precisa mudar por causa do domínio:** `WEB_ORIGINS`. O nginx serve a UI e faz proxy de `/api` no mesmo domínio, então UI e API são a mesma origem e o CORS não entra no caminho — o bundle chama `/api`, relativo, justamente para o domínio não ficar gravado nele.
+
+#### Se o registro de DNS estiver atrás do proxy do Cloudflare
+
+O sintoma é o navegador dizendo **"Esta página não está funcionando"** (`ERR_TOO_MANY_REDIRECTS`) num domínio recém-ligado, enquanto a aplicação está perfeitamente de pé.
+
+**A causa.** O Cloudflare deixa a **nuvem laranja (proxied) como padrão** ao criar um registro A — quem cria o registro pode nem escolher isso. Se o modo de SSL da zona for *Flexible*, o Cloudflare termina o TLS na borda e busca o origin por **HTTP**; o Traefik, configurado com domínio `https://`, responde com o redirect http→https; o Cloudflare devolve esse redirect ao navegador, que pede https de novo — e o ciclo se fecha.
+
+**Como confirmar em três medições** (aconteceu em 10/09/2026, com `toddlerm`):
+
+```bash
+# 1. via Cloudflare: loop
+curl -s -o /dev/null -L --max-redirs 4 -w "%{http_code} saltos=%{num_redirects}\n" https://SEU.DOMINIO/
+# 2. direto no origin, https: a aplicação está OK
+ssh $COOLIFY_SSH_HOST "curl -s -o /dev/null -w '%{http_code}\n' \
+  --resolve SEU.DOMINIO:443:127.0.0.1 https://SEU.DOMINIO/"
+# 3. o registro é proxiado? (IP do Cloudflare em vez do servidor)
+dig +short SEU.DOMINIO
+```
+
+**A correção certa, e ela é de DNS:** deixar a nuvem **cinza (DNS only)**. É o estado dos outros sete hostnames da escola neste servidor (`eavents`, `supply`, `tech`, `eavrelations`, `eavsportsclub`, `manutos`, `mypassport`) — todos com domínio `https://` no Coolify e TLS de ponta a ponta pelo Let's Encrypt do Traefik. Com ela cinza, nada mais precisa mudar.
+
+**A correção possível sem acesso ao Cloudflare:** declarar o domínio no Coolify como **`http://`** em vez de `https://`. O Coolify deriva as labels do esquema, então o Traefik para de anexar o `redirect-to-https` ao roteador e o Flexible passa a servir a página. O navegador continua vendo `https://` (certificado da borda do Cloudflare), e o login do Google funciona porque a origem que ele valida é a que o navegador vê.
+
+⚠️ **O custo dessa segunda opção:** o trecho **Cloudflare → servidor fica sem criptografia**, e o `Authorization: Bearer <id_token>` da tela viaja nele. É inerente ao modo Flexible, não ao ajuste. Trate como estado temporário: quando a nuvem virar cinza, volte o campo para `https://` — o certificado já emitido no servidor passa a atender o navegador direto.
+
+**Não** troque o modo de SSL da zona para *Full (strict)* como conserto: ele é **por zona**, e vale para todos os hostnames de `escolaamericana.com.br`. Numa zona que está em *Flexible*, é bem possível que haja origens servindo só HTTP — essas quebram na hora. Se precisar do proxy ligado com TLS até o origin, o caminho escopado é uma *Configuration Rule* para aquele hostname.
 
 **Depois de mexer em variável, rode `./scripts/comparar-env.sh`.** Ele compara o `.env` local com o `printenv` do container em produção — o ambiente que o processo **realmente vê**, não o que a UI do Coolify mostra. Se você salvou a variável e não redeployou, é este script que conta a verdade.
 

@@ -84,7 +84,7 @@ function checar(): Checagem[] {
 
   // --- sync de ALUNO: está agendado, então é obrigatório ---------------------
   c.push({
-    nome: `RM_SENTENCA_STUDENTS (sync de aluno, cron "${env.STUDENTS_SYNC_CRON}")`,
+    nome: `RM_SENTENCA_STUDENTS (sync de aluno, semente de cron "${env.STUDENTS_SYNC_CRON}")`,
     ok: Boolean(cfg.rm.sentencas.alunos),
     detalhe: cfg.rm.sentencas.alunos ?? 'ausente — o job students.extract falha em runtime',
     fatal: true,
@@ -92,7 +92,12 @@ function checar(): Checagem[] {
 
   // --- sync de PROFESSOR: idem. Foi aqui que doeu ----------------------------
   c.push({
-    nome: `RM_SENTENCA_TURMADISC (sync de professor, cron "${cronDoProfessorEfetivo()}")`,
+    // O cron aqui é a SEMENTE do ambiente, não o horário em vigor: desde a
+    // migração 016 a agenda mora em `flow_schedule`. O preflight não pode ler
+    // aquela tabela — ele roda ANTES do `db:migrate` no `init`, e num ambiente
+    // novo ela ainda não existe. Dizer "semente" evita afirmar um horário que
+    // não é o que vai disparar; o valor real sai de `npm run agenda`.
+    nome: `RM_SENTENCA_TURMADISC (sync de professor, semente de cron "${cronDoProfessorEfetivo()}")`,
     ok: Boolean(cfg.rm.sentencas.turmaDisc),
     detalhe:
       cfg.rm.sentencas.turmaDisc ??
