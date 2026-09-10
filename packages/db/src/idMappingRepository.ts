@@ -282,4 +282,99 @@ export const idMappingRepository = {
     );
     return rows.map(mapRow);
   },
+
+  /**
+   * Busca por trecho de `rm_code` OU de `toddle_id`, em todos os tipos.
+   *
+   * ─── O QUE ISTO SUBSTITUI ─────────────────────────────────────────────────
+   *
+   * A pergunta que eu respondia abrindo o psql: "o RA 12345 está mapeado? para
+   * qual id? em que estado?". Buscar nos DOIS lados é o ponto — metade das vezes
+   * a pergunta chega pelo id do Toddle ("de quem é este aluno no RM?"), e uma
+   * busca que só olhasse `rm_code` obrigaria a saber a resposta antes de
+   * perguntar.
+   *
+   * SEM PII: devolve códigos e ids, nunca nomes. A mesma regra das rotas de
+   * leitura da API, e por isso a busca é por CÓDIGO — não há caminho aqui para
+   * "listar alunos chamados João".
+   */
+  async buscar(trecho: string, limite = 50): Promise<IdMapping[]> {
+    const alvo = `%${trecho.trim()}%`;
+    const { rows } = await pgPool.query<IdMappingRow>(
+      `SELECT * FROM id_mapping
+        WHERE tenant_id = $1
+          AND target_instance_key = $2
+          AND (rm_code ILIKE $3 OR toddle_id ILIKE $3)
+        ORDER BY entity_type, rm_code
+        LIMIT $4`,
+      [await tenantId(), cfg.toddle.organizationId, alvo, Math.min(Math.max(limite, 1), 200)],
+    );
+    return rows.map(mapRow);
+  },
+
+  /**
+   * Mapeamentos ATIVOS que apontam para o mesmo `toddle_id` dentro do mesmo tipo.
+   *
+   * ─── POR QUE ISTO NÃO É PEGO POR CONSTRAINT ───────────────────────────────
+   *
+   * O índice `id_mapping_toddle_1to1_uq` (migration 006) garante 1:1 apenas para
+   * STUDENT, STAFF e PARENT — porque só para pessoas a relação é
+   * necessariamente um-para-um. Para COURSE, TEACHER_COURSE, SUBJECT,
+   * YEAR_GROUP, PERIOD, GRADING_PERIOD e ASSESSMENT, N-para-1 é LEGÍTIMO em
+   * alguns casos (a migration 003 existe exatamente para year group
+   * muitos-para-um) e defeito em outros.
+   *
+   * O banco não pode decidir isso, então esta consulta não afirma "erro": ela
+   * afirma "olhe aqui". A diferença importa — um alarme que grita em cima do
+   * desenho correto é um alarme que alguém desliga.
+   */
+  async duplicatasPorToddleId(): Promise<Array<{ entityType: EntityType; toddleId: string; rmCodes: string[] }>> {
+    const { rows } = await pgPool.query<{ entity_type: EntityType; toddle_id: string; rm_codes: string[] }>(
+      `SELECT entity_type, toddle_id, array_agg(rm_code ORDER BY rm_code) AS rm_codes
+         FROM id_mapping
+        WHERE tenant_id = $1 AND target_instance_key = $2 AND state = 'active'
+        GROUP BY entity_type, toddle_id
+       HAVING count(*) > 1
+        ORDER BY entity_type, toddle_id`,
+      [await tenantId(), cfg.toddle.organizationId],
+    );
+    return rows.map((r) => ({ entityType: r.entity_type, toddleId: r.toddle_id, rmCodes: r.rm_codes }));
+  },
+
+  /**
+   * Mapeamentos deste destino cujo `toddle_id` NÃO está na lista de ids que
+   * existem hoje no Toddle — os órfãos.
+   *
+   * A lista de ids vivos vem de quem chamou (a API cruza com o Toddle), porque
+   * este repositório não fala com o Toddle e não deve passar a falar: ele
+   * responde por uma tabela.
+   *
+   * ATENÇÃO ao chamar: `idsVivos` vazio faz TODA linha parecer órfã. Quem chama
+   * tem de tratar "não consegui ler o Toddle" como "não sei", nunca como "tudo
+   * órfão" — é a mesma armadilha que `findActiveNotIn` documenta para o escopo.
+   */
+  async orfaos(entityType: EntityType, idsVivos: string[]): Promise<IdMapping[]> {
+    if (idsVivos.length === 0) return [];
+    const { rows } = await pgPool.query<IdMappingRow>(
+      `SELECT * FROM id_mapping
+        WHERE tenant_id = $1
+          AND target_instance_key = $2
+          AND entity_type = $3
+          AND state = 'active'
+          AND NOT (toddle_id = ANY($4))
+        ORDER BY rm_code`,
+      [await tenantId(), cfg.toddle.organizationId, entityType, idsVivos],
+    );
+    return rows.map(mapRow);
+  },
+
+  /** Uma linha específica, para congelar no payload de uma proposta. */
+  async porTipoECodigo(entityType: EntityType, rmCode: string): Promise<IdMapping | null> {
+    const { rows } = await pgPool.query<IdMappingRow>(
+      `SELECT * FROM id_mapping
+        WHERE tenant_id = $1 AND target_instance_key = $2 AND entity_type = $3 AND rm_code = $4`,
+      [await tenantId(), cfg.toddle.organizationId, entityType, rmCode],
+    );
+    return rows[0] ? mapRow(rows[0]) : null;
+  },
 };

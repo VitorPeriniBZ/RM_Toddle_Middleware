@@ -3,4 +3,5 @@ export * from './connection';
 export * from './names';
 export * from './queues';
 export * from './deadLetter';
+export * from './fluxos';
 export * from './schedulers';

@@ -333,3 +333,103 @@ export function avaliarDesvio(anterior: number | null, atual: number): DesvioAva
       : undefined,
   };
 }
+
+export interface RunResumo {
+  tipo: string;
+  chave: string;
+  estado: EstadoRun;
+  resultado: Record<string, unknown>;
+  configVersion: string | null;
+  criadoEm: string;
+  atualizadoEm: string;
+}
+
+/**
+ * O ÚLTIMO run de cada tipo, e o último BEM-SUCEDIDO de cada tipo.
+ *
+ * ─── POR QUE OS DOIS, E NÃO UM ──────────────────────────────────────────────
+ *
+ * São perguntas diferentes, e confundi-las é como se erra um painel:
+ *
+ *   "o último rodou?"        -> `ultimo`, qualquer estado. É o que a tela mostra.
+ *   "há quanto tempo dá certo?" -> `ultimoSucesso`. É o que o vigia usa.
+ *
+ * Um fluxo que falha de hora em hora tem `ultimo` recentíssimo e `ultimoSucesso`
+ * de três dias atrás. Uma tela que mostrasse só o primeiro diria "rodou às
+ * 16:00" e estaria tecnicamente certa enquanto o sync está morto há dias.
+ *
+ * `DISTINCT ON` do Postgres resolve as duas em uma consulta cada, sem subquery
+ * correlacionada por tipo.
+ */
+export async function ultimosRunsPorTipo(tipos: string[]): Promise<Record<string, RunResumo>> {
+  if (tipos.length === 0) return {};
+  const { rows } = await pgPool.query<{
+    tipo: string; chave: string; estado: EstadoRun; resultado: Record<string, unknown>;
+    config_version: string | null; created_at: Date; updated_at: Date;
+  }>(
+    `SELECT DISTINCT ON (tipo) tipo, chave, estado, resultado, config_version, created_at, updated_at
+       FROM job_run
+      WHERE tenant_id = $1 AND tipo = ANY($2::text[])
+      ORDER BY tipo, created_at DESC`,
+    [await tenantId(), tipos],
+  );
+  return Object.fromEntries(
+    rows.map((r) => [
+      r.tipo,
+      {
+        tipo: r.tipo,
+        chave: r.chave,
+        estado: r.estado,
+        resultado: r.resultado ?? {},
+        configVersion: r.config_version,
+        criadoEm: new Date(r.created_at).toISOString(),
+        atualizadoEm: new Date(r.updated_at).toISOString(),
+      },
+    ]),
+  );
+}
+
+/** Quando cada tipo teve o último run `succeeded`. Ausente = nunca teve. */
+export async function ultimoSucessoPorTipo(tipos: string[]): Promise<Record<string, string>> {
+  if (tipos.length === 0) return {};
+  const { rows } = await pgPool.query<{ tipo: string; em: Date }>(
+    `SELECT DISTINCT ON (tipo) tipo, updated_at AS em
+       FROM job_run
+      WHERE tenant_id = $1 AND tipo = ANY($2::text[]) AND estado = 'succeeded'
+      ORDER BY tipo, updated_at DESC`,
+    [await tenantId(), tipos],
+  );
+  return Object.fromEntries(rows.map((r) => [r.tipo, new Date(r.em).toISOString()]));
+}
+
+/**
+ * Runs presos em `executing` há mais de N horas.
+ *
+ * A assinatura de "morreu no meio": um lote esgotou as tentativas, foi para a
+ * DLQ e nunca voltou para fechar o run. O `acumularLote` já documenta que isso é
+ * informação, não defeito — mas informação que ninguém olha não serve, e é
+ * justamente o estado em que 62 jobs ficaram sete dias.
+ */
+export async function runsPresos(horas = 6): Promise<RunResumo[]> {
+  const { rows } = await pgPool.query<{
+    tipo: string; chave: string; estado: EstadoRun; resultado: Record<string, unknown>;
+    config_version: string | null; created_at: Date; updated_at: Date;
+  }>(
+    `SELECT tipo, chave, estado, resultado, config_version, created_at, updated_at
+       FROM job_run
+      WHERE tenant_id = $1 AND estado = 'executing'
+        AND created_at < now() - ($2::text || ' hours')::interval
+      ORDER BY created_at DESC
+      LIMIT 50`,
+    [await tenantId(), String(horas)],
+  );
+  return rows.map((r) => ({
+    tipo: r.tipo,
+    chave: r.chave,
+    estado: r.estado,
+    resultado: r.resultado ?? {},
+    configVersion: r.config_version,
+    criadoEm: new Date(r.created_at).toISOString(),
+    atualizadoEm: new Date(r.updated_at).toISOString(),
+  }));
+}

@@ -1,4 +1,5 @@
 import { logger, tenantConfig } from '@rm-toddle/config';
+import { PAPEIS_QUE_APROVAM, quantosPodemAprovar } from './accessRepository';
 import { pgPool } from './pool';
 
 /** Config da escola atendida por este processo. */
@@ -157,6 +158,27 @@ export async function decidirOperacao(
   decisao: 'approved' | 'rejected',
   motivo: string,
 ): Promise<ResultadoDecisao> {
+  // A identidade é resolvida FORA da transação da decisão: é um upsert
+  // independente, e mantê-lo dentro só aumentaria o tempo de vida do `FOR UPDATE`
+  // sobre a operação.
+  return decidirOperacaoPorIdentidade(operationId, await identidadeDeCli(quem), decisao, motivo);
+}
+
+/**
+ * A decisão, a partir de uma identidade JÁ resolvida.
+ *
+ * Existe porque agora há dois caminhos para decidir: a CLI (`npm run aprovar`,
+ * que resolve `provider='cli'`) e a tela (que resolve `provider='google'` pela
+ * claim `sub`). A regra de segregação, a transação e o registro em `approval` são
+ * os mesmos — duplicá-los por caminho seria a forma mais fácil de eles
+ * divergirem.
+ */
+export async function decidirOperacaoPorIdentidade(
+  operationId: string,
+  aprovador: string,
+  decisao: 'approved' | 'rejected',
+  motivo: string,
+): Promise<ResultadoDecisao> {
   const client = await pgPool.connect();
   try {
     await client.query('BEGIN');
@@ -177,19 +199,54 @@ export async function decidirOperacao(
       return { ok: false, erro: `operação está em "${op.estado}", não em "needs_review"` };
     }
 
-    const aprovador = await identidadeDeCli(quem);
-
-    // Segregação de funções, onde ela significa algo. Run de cron tem
-    // `criado_por` NULL — o scheduler propôs, e não há de quem segregar.
+    // ─── SEGREGAÇÃO DE FUNÇÕES, ONDE ELA SIGNIFICA ALGO ────────────────────
+    //
+    // Run de cron tem `criado_por` NULL: o scheduler propôs, e não há de quem
+    // segregar. Este era o único caso quando só existia a CLI.
+    //
+    // A TELA muda isso, e o problema é real: uma proposta de vínculo feita pela
+    // interface tem proponente registrado (é a verdade, e registrá-la é o
+    // objetivo), então a regra passaria a bloquear o único dev do projeto de
+    // decidir sobre a própria proposta — tornando a função inutilizável, que é
+    // pior do que não tê-la.
+    //
+    // A EXCEÇÃO, e ela segue o mesmo raciocínio da regra: com UMA identidade
+    // capaz de aprovar neste tenant, exigir "outra pessoa" não protege ninguém,
+    // porque não existe outra pessoa. Não há de quem segregar — igual ao run de
+    // cron. Com duas ou mais, a regra volta a ter conteúdo e é imposta.
+    //
+    // O controle que permanece nos dois casos é o que de fato pega o dedo errado:
+    // dois PASSOS separados, com o diff à vista e o snapshot revalidado, e a
+    // decisão gravada com nome e motivo. Nunca foi o controle de duas mãos que
+    // fazia esta função valer a pena para uma pessoa só.
     if (op.criado_por && op.criado_por === aprovador) {
-      await client.query('ROLLBACK');
-      return {
-        ok: false,
-        erro:
-          'quem propôs a operação não pode aprová-la. Esta operação tem proponente ' +
-          'registrado, então precisa de outra pessoa. (Run agendado não tem ' +
-          'proponente e pode ser aprovado por quem opera.)',
-      };
+      const aprovadores = await quantosPodemAprovar(client);
+      // EXATAMENTE um aprovador libera; zero NÃO.
+      //
+      // A distinção é o que separa a exceção de um buraco. "Zero identidades com
+      // papel de aprovação" não quer dizer "existe uma pessoa só" — quer dizer
+      // que `membership` nunca foi preenchida, que é o estado ATUAL do tenant
+      // real. Com `<= 1`, a regra desapareceria em silêncio justamente onde
+      // ninguém configurou nada, e ficaria aberta até alguém lembrar de conceder
+      // papéis. Com `=== 1`, a exceção só existe depois de alguém dizer, por
+      // escrito, quem aprova.
+      if (aprovadores !== 1) {
+        await client.query('ROLLBACK');
+        return {
+          ok: false,
+          erro:
+            'quem propôs a operação não pode aprová-la. Este tenant tem ' +
+            `${aprovadores} identidades com papel de aprovação (${PAPEIS_QUE_APROVAM.join(' ou ')}), ` +
+            'então a decisão precisa de outra pessoa. (Run agendado não tem proponente e ' +
+            'pode ser aprovado por quem opera.)',
+        };
+      }
+      logger.warn(
+        { operationId, aprovador, aprovadores },
+        'AUTO-APROVAÇÃO permitida: há uma única identidade capaz de aprovar neste tenant. ' +
+          'A segregação de funções não tem a quem segregar; o controle que resta são os dois ' +
+          'passos e o registro da decisão',
+      );
     }
 
     await client.query(

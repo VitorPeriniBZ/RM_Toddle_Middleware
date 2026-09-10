@@ -1,48 +1,69 @@
-import { closeAllQueues, redisConnection } from '@rm-toddle/queues';
-import { upsertStudentsNightly, upsertStaffNightly, upsertTermGradesPoll, SCHEDULER } from '@rm-toddle/queues';
-import { env, cronDoProfessorEfetivo } from '@rm-toddle/config';
+import { closeAllQueues, redisConnection, FLUXOS_EM_ORDEM } from '@rm-toddle/queues';
+import { listarAgenda, pgPool } from '@rm-toddle/db';
 import { logger } from '@rm-toddle/config';
+import { reconcileSchedulers, semearDoAmbiente } from '../agenda/reconciliar';
 
 /**
- * Registra o agendamento recorrente (Job Scheduler nativo do BullMQ).
+ * Semeia a agenda (se ainda não existir) e reconcilia o Redis com ela.
  * Uso: npm run schedule
  *
- * Idempotente (upsert por id do scheduler), então rodar de novo é seguro — é por
- * isso que o serviço `init` do docker-compose.coolify.yml o chama a cada deploy.
+ * ─── O QUE MUDOU AQUI, E POR QUE IMPORTA ────────────────────────────────────
  *
- * A definição do agendamento NÃO mora aqui: está em packages/queues/schedulers.ts,
- * compartilhada com o startup do worker, que também a registra. Duplicar a
- * definição deixaria dois schedulers vivos com horários diferentes se alguém
- * mudasse o cron num lado só.
+ * Este script LIA O AMBIENTE e registrava os schedulers a partir dele. Não pode
+ * mais: enquanto o `init` de cada deploy carregar o cron do `.env`, a tela de
+ * agendamento não é fonte de verdade de nada — o deploy seguinte desfaria em
+ * silêncio o que alguém mudou pela tela, e a tela continuaria mostrando o valor
+ * novo. Agora ele lê o BANCO (`flow_schedule`, migration 016).
  *
- * Este script continua útil para registrar SEM subir o worker (bootstrap de
- * ambiente, ou conferir a configuração antes do primeiro deploy).
+ * O ambiente sobrevive como SEMENTE, uma vez por fluxo: `semearDoAmbiente()` usa
+ * `ON CONFLICT DO NOTHING`, então só preenche o que ainda não existe.
+ *
+ * ─── POR QUE CONTINUA MORANDO NO `init` DO DEPLOY ───────────────────────────
+ *
+ * Porque o worker também reconcilia, mas o `init` roda ANTES dele e garante que a
+ * primeira reconciliação já aconteceu quando o worker sobe — inclusive a
+ * varredura dos schedulers órfãos com os ids antigos. E porque "uma vez, à mão,
+ * alguém lembra" é exatamente como um cron deixa de existir sem dar erro nenhum.
+ *
+ * É idempotente: a semente não sobrescreve e a reconciliação é upsert por id.
  */
 async function main(): Promise<void> {
-  await upsertStudentsNightly();
-  await upsertStaffNightly();
-  // Registra OU REMOVE o poll da nota conforme NOTA_SYNC_ATIVO. Como o `init` do
-  // compose chama este script a cada deploy, desligar a flag e redeployar já
-  // apaga o agendamento — sem precisar mexer no Redis à mão.
-  await upsertTermGradesPoll();
+  const semeados = await semearDoAmbiente();
+  const resultado = await reconcileSchedulers('npm run schedule');
 
+  if (resultado === 'ocupado') {
+    // Outro processo (o worker) está reconciliando agora. Não é erro: ele lê a
+    // mesma tabela e aplica a mesma revisão.
+    logger.info('Reconciliação já em curso em outro processo — nada a fazer aqui');
+  }
+
+  const agenda = await listarAgenda();
   logger.info(
     {
-      alunos: { scheduler: SCHEDULER.STUDENTS_NIGHTLY, cron: env.STUDENTS_SYNC_CRON },
-      professores: { scheduler: SCHEDULER.STAFF_NIGHTLY, cron: cronDoProfessorEfetivo() },
-      notas: env.NOTA_SYNC_ATIVO
-        ? { scheduler: SCHEDULER.TERM_GRADES_POLL, cron: env.NOTA_SYNC_CRON }
-        : 'DESLIGADA (NOTA_SYNC_ATIVO=false) — agendamento removido se existia',
-      tz: 'America/Sao_Paulo',
+      semeados,
+      aplicados: resultado === 'ocupado' ? [] : resultado.aplicados,
+      removidos: resultado === 'ocupado' ? [] : resultado.removidos,
+      orfaosRemovidos: resultado === 'ocupado' ? [] : resultado.orfaosRemovidos,
+      agenda: agenda.map((a) => ({
+        fluxo: a.flowKey,
+        cron: a.cron,
+        ativo: a.ativo,
+        revisao: a.revisao,
+        aplicada: a.revisaoAplicada,
+      })),
+      fluxosSemLinha: FLUXOS_EM_ORDEM
+        .filter((f) => !agenda.some((a) => a.flowKey === f.key))
+        .map((f) => f.key),
     },
-    'Agendamentos de sincronização registrados',
+    'Agenda em vigor (fonte: tabela flow_schedule — o .env é só semente)',
   );
 
   await closeAllQueues();
   await redisConnection.quit();
+  await pgPool.end();
 }
 
 main().catch((error) => {
-  logger.error({ error }, 'Falha ao registrar agendamento');
+  logger.error({ error }, 'Falha ao reconciliar a agenda');
   process.exit(1);
 });

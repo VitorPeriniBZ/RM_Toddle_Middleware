@@ -3,7 +3,8 @@ import { redisConnection } from '@rm-toddle/queues';
 import { QUEUE, STUDENT_JOB } from '@rm-toddle/queues';
 import { wireDeadLetterQueue } from '@rm-toddle/queues';
 import { closeAllQueues } from '@rm-toddle/queues';
-import { manterAgendamentoDeAlunos } from '@rm-toddle/queues';
+import { manterAgendamento } from '../../agenda/reconciliar';
+import { ligarVigia } from '../../agenda/vigia';
 import { pgPool } from '@rm-toddle/db';
 import { closeRmSqlPool } from '@rm-toddle/integrations';
 import {
@@ -145,11 +146,17 @@ staffWorker.on('error', (err) => {
   logger.error({ err }, 'Erro no worker de professores');
 });
 
-// O agendamento noturno vive só no Redis. Se o Redis reiniciar sem persistir, o
+// O agendamento vive só no Redis. Se o Redis reiniciar sem persistir, o
 // scheduler desaparece e NADA dá erro — o worker fica de pé consumindo uma fila
-// que nunca mais recebe nada. Isto o re-registra no boot e em cada reconexão ao
-// Redis, então ele não pode estar ausente enquanto o worker estiver vivo.
-manterAgendamentoDeAlunos();
+// que nunca mais recebe nada. A reconciliação re-registra no boot, em cada
+// reconexão ao Redis, a cada aviso da tela e num poll de piso, então ele não pode
+// estar ausente enquanto o worker estiver vivo. A fonte é a tabela
+// `flow_schedule`, não o ambiente — ver apps/worker/src/agenda/reconciliar.ts.
+const pararAgendamento = manterAgendamento();
+
+// O vigia grita pelo que o heartbeat não pega: job morrendo com o worker VIVO.
+// Foi esse o modo de falha dos 62 registros na DLQ, sete dias sem ninguém saber.
+const pararVigia = ligarVigia();
 
 worker.on('completed', (job, result) => {
   logger.info({ jobId: job.id, jobName: job.name, result }, 'Job concluído');
@@ -182,7 +189,12 @@ logger.info(
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Encerrando worker...');
   try {
-    // Os DOIS workers: sem fechar o de professor, o SIGTERM mataria um job em
+    // Primeiro os temporizadores: sem parar o poll da agenda e o vigia, o
+    // processo não SAI no SIGTERM (o event loop segue com timer vivo) e o
+    // encerramento gracioso vira `kill -9` depois do stop_grace_period.
+    pararVigia();
+    await pararAgendamento();
+    // Os TRÊS workers: sem fechar o de professor, o SIGTERM mataria um job em
     // andamento no meio de uma escrita no Toddle.
     await Promise.all([worker.close(), staffWorker.close(), termGradesWorker.close()]);
     await closeAllQueues();

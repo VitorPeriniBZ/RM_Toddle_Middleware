@@ -1,151 +1,122 @@
-import { env, logger, cronDoProfessorEfetivo } from '@rm-toddle/config';
+import { logger } from '@rm-toddle/config';
 import { getQueue } from './queues';
-import { QUEUE, STAFF_JOB, STUDENT_JOB, TERM_GRADE_JOB } from './names';
-import { redisConnection } from './connection';
+import { FLUXOS_EM_ORDEM, acharFluxo, type Fluxo } from './fluxos';
 
 /**
- * DEFINIÇÃO ÚNICA dos agendamentos recorrentes.
+ * A ÚNICA porta de escrita no Job Scheduler do BullMQ.
  *
- * Mora aqui, e não no script `scheduleJobs.ts`, porque DOIS lugares registram o
- * mesmo scheduler: o script (`npm run schedule`) e o startup do worker. Com a
- * definição duplicada, mudar o cron num lado deixaria dois schedulers vivos com
- * horários diferentes — e o sync rodaria duas vezes por noite.
+ * ─── O QUE MUDOU, E POR QUE ─────────────────────────────────────────────────
+ *
+ * Antes este arquivo era a definição da agenda: ele lia `STUDENTS_SYNC_CRON`,
+ * derivava o cron do professor e decidia, por `NOTA_SYNC_ATIVO`, se registrava
+ * ou removia o poll da nota. Fazia sentido enquanto a agenda era o ambiente.
+ *
+ * Agora a agenda mora em `flow_schedule` (migration 016) e quem decide é o
+ * reconciliador, em apps/worker/src/agenda/reconciliar.ts. Este módulo perdeu a
+ * decisão e ficou só com a MECÂNICA: aplicar, remover, observar. Ele não lê
+ * ambiente nem banco — de propósito. Um módulo que só executa não pode discordar
+ * de quem decide.
+ *
+ * ─── ESCRITOR ÚNICO ─────────────────────────────────────────────────────────
+ *
+ * `upsertJobScheduler` e `removeJobScheduler` só são chamados aqui, e este módulo
+ * só é chamado pelo reconciliador. A API NÃO escreve no Redis, mesmo tendo acesso
+ * — ela grava a intenção no Postgres e avisa. Três razões, e a primeira é
+ * histórica: dois lugares registrando o mesmo scheduler foi o risco que o
+ * comentário original deste arquivo existia para conter. A segunda é durabilidade
+ * (intenção no Redis evapora num restart sem persistência; no Postgres, não). A
+ * terceira é raio de dano: a API é o processo exposto.
  */
-export const SCHEDULER = {
-  STUDENTS_NIGHTLY: 'students-sync-nightly',
-  STAFF_NIGHTLY: 'staff-sync-nightly',
-  TERM_GRADES_POLL: 'term-grades-poll',
-} as const;
 
-/**
- * Registra (upsert) o agendamento noturno de alunos.
- *
- * Idempotente: o BullMQ faz upsert pelo id do scheduler, então chamar N vezes
- * não duplica nem reinicia a contagem.
- */
-export async function upsertStudentsNightly(): Promise<void> {
-  const queue = getQueue(QUEUE.RM_TO_TODDLE_STUDENTS);
+/** Fuso de todo agendamento. O mesmo de packages/config/src/cron.ts. */
+const TZ = 'America/Sao_Paulo';
+
+/** Aplica (upsert) a agenda de um fluxo. Idempotente pelo id do scheduler. */
+export async function aplicarAgenda(fluxo: Fluxo, cron: string, tz: string = TZ): Promise<void> {
+  const queue = getQueue(fluxo.fila);
   await queue.upsertJobScheduler(
-    SCHEDULER.STUDENTS_NIGHTLY,
-    { pattern: env.STUDENTS_SYNC_CRON, tz: 'America/Sao_Paulo' },
-    { name: STUDENT_JOB.EXTRACT, data: { trigger: 'cron' } },
-  );
-}
-
-/** Registra (upsert) o agendamento noturno de professores. Cron derivado em packages/config/src/cronProfessor.ts. */
-export async function upsertStaffNightly(): Promise<void> {
-  const queue = getQueue(QUEUE.RM_TO_TODDLE_STAFF);
-  await queue.upsertJobScheduler(
-    SCHEDULER.STAFF_NIGHTLY,
-    { pattern: cronDoProfessorEfetivo(), tz: 'America/Sao_Paulo' },
-    { name: STAFF_JOB.SYNC, data: { trigger: 'cron' } },
-  );
-}
-
-/**
- * Registra (ou REMOVE) o poll da via de nota, conforme `NOTA_SYNC_ATIVO`.
- *
- * ─── POR QUE REMOVER TAMBÉM ─────────────────────────────────────────────────
- *
- * O scheduler vive no Redis, não no código. Desligar `NOTA_SYNC_ATIVO` e só
- * "deixar de registrar" NÃO para nada: o registro anterior continua lá e o cron
- * segue disparando. O processador ainda recusaria por conta própria, mas a
- * escola veria job rodando de meia em meia hora depois de pedir para desligar —
- * e desconfiaria, com razão, de tudo o mais que dissemos estar desligado.
- *
- * Por isso o interruptor é de duas vias: liga registrando, desliga removendo.
- *
- * ─── POR QUE NÃO É "NOTURNO" ────────────────────────────────────────────────
- *
- * Aluno e professor rodam 4x ao dia porque cadastro muda devagar. Nota muda
- * quando o professor digita, e o pedido é que chegue ao RM perto disso. A API do
- * Toddle não tem webhook (verificado na referência inteira em 09/09/2026), então
- * o mais próximo possível é um poll curto na janela em que gente trabalha.
- */
-export async function upsertTermGradesPoll(): Promise<void> {
-  const queue = getQueue(QUEUE.TODDLE_TO_RM_TERM_GRADES);
-
-  if (!env.NOTA_SYNC_ATIVO) {
-    await queue.removeJobScheduler(SCHEDULER.TERM_GRADES_POLL).catch(() => undefined);
-    return;
-  }
-
-  await queue.upsertJobScheduler(
-    SCHEDULER.TERM_GRADES_POLL,
-    { pattern: env.NOTA_SYNC_CRON, tz: 'America/Sao_Paulo' },
-    { name: TERM_GRADE_JOB.SYNC, data: { trigger: 'cron' } },
+    fluxo.key,
+    { pattern: cron, tz },
+    { name: fluxo.job, data: { trigger: 'cron' } },
   );
 }
 
 /**
- * Mantém o agendamento vivo enquanto o worker estiver de pé.
+ * Remove o scheduler de um fluxo. `true` quando havia algo para remover.
  *
- * O PROBLEMA que isto resolve: o registro do scheduler vive SÓ no Redis. Se o
- * Redis reiniciar sem persistência, o `students-sync-nightly` desaparece e
- * **nada dá erro** — o worker segue de pé, saudável, consumindo uma fila que
- * nunca mais recebe nada. Você descobre quando notar que o Toddle parou de
- * atualizar, dias depois.
- *
- * Por que no evento `ready` e não só no boot: quando o Redis reinicia, o worker
- * NÃO reinicia — ele reconecta. Registrar apenas no startup não cobriria
- * justamente o caso que motivou esta função. O ioredis emite `ready` na conexão
- * inicial E em cada reconexão, então um único listener cobre os dois.
- *
- * Falha aqui NÃO derruba o worker: consumir a fila é mais importante que manter
- * o agendamento, e o próximo `ready` tenta de novo. Mas o erro é logado alto,
- * porque um agendamento ausente é invisível por natureza.
+ * Desligar um fluxo TEM de remover, não apenas deixar de registrar: o registro
+ * vive no Redis, não no código. "Parar de registrar" não para nada — o registro
+ * anterior segue lá e o cron segue disparando, e a escola veria job rodando
+ * depois de pedir para desligar. O interruptor é de duas vias.
  */
-export function manterAgendamentoDeAlunos(): void {
-  let emAndamento = false;
-
-  const registrar = async (motivo: string): Promise<void> => {
-    // O 'ready' pode disparar em rajada numa reconexão instável; sem esta guarda
-    // as chamadas se sobreporiam.
-    if (emAndamento) return;
-    emAndamento = true;
-    try {
-      // Os DOIS agendamentos, na mesma função: professor vive na mesma janela de
-      // perda que aluno (existe só no Redis) e teria o mesmo modo de falha
-      // silenciosa se ficasse de fora daqui.
-      await upsertStudentsNightly();
-      await upsertStaffNightly();
-      // A via de nota entra aqui pelo mesmo motivo que professor: o registro
-      // dela vive só no Redis e teria o mesmo modo de falha silenciosa se
-      // ficasse de fora. Esta chamada também REMOVE o scheduler quando
-      // NOTA_SYNC_ATIVO estiver desligado — ver upsertTermGradesPoll.
-      await upsertTermGradesPoll();
-      logger.info(
-        {
-          scheduler: [SCHEDULER.STUDENTS_NIGHTLY, SCHEDULER.STAFF_NIGHTLY],
-          cronAlunos: env.STUDENTS_SYNC_CRON,
-          cronProfessores: cronDoProfessorEfetivo(),
-          notaSyncAtivo: env.NOTA_SYNC_ATIVO,
-          cronNotas: env.NOTA_SYNC_ATIVO ? env.NOTA_SYNC_CRON : null,
-          tz: 'America/Sao_Paulo',
-          motivo,
-        },
-        'Agendamentos garantidos',
-      );
-    } catch (error) {
-      logger.error(
-        { error, motivo },
-        'FALHA ao garantir os agendamentos noturnos — o sync pode não disparar. ' +
-          'Rode `npm run schedule` e confira com ' +
-          '`redis-cli zrange bull:rm-to-toddle.students:repeat 0 -1` e ' +
-          '`redis-cli zrange bull:rm-to-toddle.staff:repeat 0 -1`.',
-      );
-    } finally {
-      emAndamento = false;
-    }
-  };
-
-  // Se a conexão já estava pronta antes deste listener existir, o 'ready' dela
-  // já passou e não voltaria — daí a chamada imediata.
-  if (redisConnection.status === 'ready') {
-    void registrar('boot');
-  }
-
-  redisConnection.on('ready', () => {
-    void registrar('redis-ready');
+export async function removerAgenda(fluxo: Fluxo): Promise<boolean> {
+  const queue = getQueue(fluxo.fila);
+  return queue.removeJobScheduler(fluxo.key).catch((err) => {
+    logger.warn({ err: (err as Error).message, flowKey: fluxo.key }, 'Falha ao remover scheduler');
+    return false;
   });
+}
+
+/** Remove um scheduler por id cru — para varrer registro órfão. Ver `observar`. */
+export async function removerSchedulerPorId(fila: string, id: string): Promise<boolean> {
+  return getQueue(fila)
+    .removeJobScheduler(id)
+    .catch((err) => {
+      logger.warn({ err: (err as Error).message, id, fila }, 'Falha ao remover scheduler órfão');
+      return false;
+    });
+}
+
+export interface SchedulerObservado {
+  /** Id do scheduler no Redis. Para os nossos, é o `flow_key`. */
+  id: string;
+  fila: string;
+  cron: string | null;
+  tz: string | null;
+  /** Próximo disparo em ISO, como o BullMQ calculou. `null` se ele não sabe. */
+  proximoDisparoEm: string | null;
+  iteracoes: number | null;
+  /**
+   * `true` quando o id não corresponde a nenhum fluxo do catálogo.
+   *
+   * Não é curiosidade: um scheduler órfão continua disparando para sempre e não
+   * aparece em nenhuma configuração — é invisível por natureza. Esta troca de
+   * agenda produz órfãos de propósito UMA vez, porque os ids antigos eram
+   * `students-sync-nightly`, `staff-sync-nightly` e `term-grades-poll`, e os
+   * novos são as chaves de fluxo. A reconciliação varre os dois casos.
+   */
+  desconhecido: boolean;
+}
+
+/** O que o Redis diz que está agendado nas filas dos fluxos. Só leitura. */
+export async function observarSchedulers(): Promise<SchedulerObservado[]> {
+  // Uma fila pode servir mais de um fluxo no futuro; hoje é 1:1. Deduplicar
+  // evita listar a mesma fila duas vezes se isso mudar.
+  const filas = [...new Set(FLUXOS_EM_ORDEM.map((f) => f.fila))];
+
+  const porFila = await Promise.all(
+    filas.map(async (fila) => {
+      try {
+        // O BullMQ pagina; 100 é folgado para um sistema com 3 fluxos, e o corte
+        // explícito evita depender do default da biblioteca.
+        const lista = await getQueue(fila).getJobSchedulers(0, 99);
+        return lista.map<SchedulerObservado>((s) => ({
+          id: s.key,
+          fila,
+          cron: s.pattern ?? null,
+          tz: s.tz ?? null,
+          proximoDisparoEm: s.next ? new Date(s.next).toISOString() : null,
+          iteracoes: s.iterationCount ?? null,
+          desconhecido: !acharFluxo(s.key),
+        }));
+      } catch (err) {
+        logger.warn(
+          { err: (err as Error).message, fila },
+          'Não foi possível ler os schedulers desta fila — a tela mostrará "não observado"',
+        );
+        return [];
+      }
+    }),
+  );
+  return porFila.flat();
 }
