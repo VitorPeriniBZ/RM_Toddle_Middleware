@@ -372,3 +372,18 @@ e isso ninguém mediu. Se a escola quiser tudo em 7, o lugar de decidir é o
 Fechar a etapa. Escrever `SNotas` **não** recalcula `SNOTAETAPA` — medido, e
 retestado depois de existir avaliação e nota. O boletim segue sendo processo do
 RM e ato humano, com data-limite de digitação e conferência.
+
+---
+
+## 8. Habilidade: encerrado pela escola em 10/09/2026
+
+O relatório do RM saiu com `MEDIA TRI = 0.00` e "Sem Habilidade Associada" nas
+cinco notas. A escola decidiu **não usar habilidade no cálculo** e reconfigurar o
+RM para calcular sem ela — ver **D7** em `DECISOES.md`.
+
+Consequência para este levantamento: **a integração não carrega habilidade e não
+precisa passar a carregar.** A pergunta de mapeamento sai da lista.
+
+Fica aberto, e é outro assunto: **escrever `SNotas` não recalcula `SNOTAETAPA`**.
+Se o bloqueio da média for esse, tirar a habilidade não muda nada — conferir
+depois do ajuste.
