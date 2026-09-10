@@ -37,11 +37,16 @@ export class ApiError extends Error {
   }
 }
 
-async function pedir<T>(rota: string): Promise<T> {
+async function pedir<T>(rota: string, metodo = 'GET', corpoEnviado?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (idToken) headers.Authorization = `Bearer ${idToken}`;
+  if (corpoEnviado !== undefined) headers['Content-Type'] = 'application/json';
 
-  const r = await fetch(BASE + rota, { headers });
+  const r = await fetch(BASE + rota, {
+    method: metodo,
+    headers,
+    body: corpoEnviado === undefined ? undefined : JSON.stringify(corpoEnviado),
+  });
   const texto = await r.text();
   const corpo = texto ? JSON.parse(texto) : null;
 
@@ -50,6 +55,121 @@ async function pedir<T>(rota: string): Promise<T> {
     throw new ApiError(r.status, corpo, msg);
   }
   return corpo as T;
+}
+
+// ─── Formas que a tela lê do servidor ───────────────────────────────────────
+//
+// Escritas à mão, e não geradas: a API é o contrato, e um tipo escrito à mão que
+// discorda dela aparece como erro de tipo na primeira mudança. Tipo gerado de um
+// schema que não existe seria só uma cópia com aparência de garantia.
+
+export interface AgendaDoFluxo {
+  flowKey: string;
+  cron: string;
+  timezone: string;
+  ativo: boolean;
+  revisao: number;
+  revisaoAplicada: number | null;
+  aplicadaEm: string | null;
+  erroAoAplicar: string | null;
+  atualizadoPor: string | null;
+  atualizadoEm: string;
+}
+
+export interface SchedulerObservado {
+  id: string;
+  fila: string;
+  cron: string | null;
+  tz: string | null;
+  proximoDisparoEm: string | null;
+  iteracoes: number | null;
+  desconhecido: boolean;
+}
+
+export interface RunResumo {
+  tipo: string;
+  chave: string;
+  estado: 'executing' | 'succeeded' | 'failed';
+  resultado: Record<string, unknown>;
+  configVersion: string | null;
+  criadoEm: string;
+  atualizadoEm: string;
+}
+
+export interface FluxoNaTela {
+  flowKey: string;
+  rotulo: string;
+  fila: string;
+  podeAtivar: boolean;
+  motivoDoBloqueio: string | null;
+  janelaSemSucessoHoras: number;
+  desejado: AgendaDoFluxo | null;
+  observado: SchedulerObservado | null;
+  divergencias: string[];
+  proximosDisparos: string[];
+  ultimoRun: RunResumo | null;
+  ultimoSucessoEm: string | null;
+}
+
+export interface Painel {
+  fluxos: FluxoNaTela[];
+  orfaos: SchedulerObservado[];
+  dlq: {
+    total: number;
+    recentes: Array<{ jobId?: string; sourceQueue: string; jobName: string; failedReason: string; failedAt: string }>;
+  };
+}
+
+export interface PreviaDeCron {
+  ok: true;
+  cron: string;
+  proximos: string[];
+  intervaloMinimoMinutos: number;
+  avisoDeFolga: string | null;
+  colide: boolean;
+  motivo: string | null;
+}
+
+export interface Mapeamento {
+  entityType: string;
+  rmCode: string;
+  toddleId: string;
+  state: string;
+  curriculumId: string | null;
+  archiveReason?: string | null;
+  lastSeenInScopeAt?: string | null;
+}
+
+export interface Proposta {
+  forma: 'vincular' | 'revincular' | 'arquivar';
+  entityType: string;
+  rmCode: string;
+  toddleId?: string;
+  curriculumId?: string;
+  motivo: string;
+}
+
+export interface PropostaPendente {
+  operationId: string;
+  proposta: Proposta;
+  snapshot: { toddleId?: string; state?: string; curriculumId?: string | null } | null;
+  criadoPor: string | null;
+  criadoPorQuem: string | null;
+  criadoEm: string;
+}
+
+export interface EventoDeAuditoria {
+  id: string;
+  ocorridoEm: string;
+  ator: string;
+  acao: string;
+  entidade?: string;
+  entidadeId?: string;
+  antes?: unknown;
+  depois?: unknown;
+  motivo?: string;
+  resultado?: string;
+  quem?: string;
 }
 
 export const api = {
@@ -67,4 +187,38 @@ export const api = {
     curriculumId: string; yearGroupsNoToddle: number; mapeamentos: number;
     problemas: Array<{ rmCode: string; toddleId: string; curriculumIdRegistrado: string | null; causa: string }>;
   }>(`/pendencias/year-groups?curriculumId=${encodeURIComponent(curriculumId)}`),
+
+  // ─── Agenda ───────────────────────────────────────────────────────────────
+  painel: () => pedir<Painel>('/agenda'),
+  previa: (flowKey: string, cron: string) =>
+    pedir<PreviaDeCron>(`/agenda/${encodeURIComponent(flowKey)}/previa`, 'POST', { cron }),
+  salvarAgenda: (flowKey: string, mudanca: { cron?: string; ativo?: boolean; motivo?: string }) =>
+    pedir<{
+      antes: AgendaDoFluxo; depois: AgendaDoFluxo; proximosDisparos: string[]; aplicacao: string;
+    }>(`/agenda/${encodeURIComponent(flowKey)}`, 'PUT', mudanca),
+  auditoria: (limite = 40) => pedir<{ eventos: EventoDeAuditoria[] }>(`/auditoria?limite=${limite}`),
+
+  // ─── De-para ──────────────────────────────────────────────────────────────
+  buscarMapeamentos: (q: string) =>
+    pedir<{ q: string; total: number; itens: Mapeamento[] }>(`/mappings/busca?q=${encodeURIComponent(q)}`),
+  duplicatas: () =>
+    pedir<{ total: number; itens: Array<{ entityType: string; toddleId: string; rmCodes: string[] }>; leia: string }>(
+      '/mappings/duplicatas',
+    ),
+  orfaos: (entityType: string, curriculumId?: string) =>
+    pedir<{ entityType: string; idsVivosNoToddle: number; total: number; fonte: string; itens: Mapeamento[] }>(
+      `/mappings/orfaos?entityType=${encodeURIComponent(entityType)}` +
+        (curriculumId ? `&curriculumId=${encodeURIComponent(curriculumId)}` : ''),
+    ),
+  curriculos: () =>
+    pedir<{ organizacao: string; itens: Array<{ id: string; name?: string }> }>('/curriculos'),
+
+  // ─── Propostas de vínculo ─────────────────────────────────────────────────
+  propostas: () => pedir<{ formas: string[]; itens: PropostaPendente[] }>('/propostas'),
+  propor: (p: Proposta) =>
+    pedir<{ operationId: string; proximoPasso: string }>('/propostas', 'POST', p),
+  decidirProposta: (id: string, decisao: 'approved' | 'rejected', motivo: string) =>
+    pedir<{ ok: true; estado: string; antes: unknown; depois: unknown }>(
+      `/propostas/${encodeURIComponent(id)}/decidir`, 'POST', { decisao, motivo },
+    ),
 };

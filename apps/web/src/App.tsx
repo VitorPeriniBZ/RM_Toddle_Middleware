@@ -1,14 +1,26 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, setIdToken, type AuthConfig } from './api';
+import { cor, s } from './estilos';
+import { Agenda } from './painel/Agenda';
+import { DePara } from './painel/DePara';
+import { Auditoria } from './painel/Auditoria';
 
 /**
- * Primeira tela: login e leitura. Nenhum botão desta versão escreve em lugar
- * algum — nem no nosso banco, nem no RM, nem no Toddle.
+ * A tela: login, e três assuntos.
  *
  * O token fica em memória, NÃO em localStorage. Token em localStorage é legível
  * por qualquer script na página e sobrevive ao fechamento da aba; recarregar e
- * logar de novo é um preço baixo para um sistema que vai aprovar lançamento em
- * registro acadêmico. Quando houver sessão de servidor, ela substitui isto.
+ * logar de novo é um preço baixo para um sistema que muda o horário de um job que
+ * escreve em registro acadêmico. Quando houver sessão de servidor, ela substitui
+ * isto.
+ *
+ * ─── O 403 É PARTE DO CAMINHO, NÃO UM ERRO ──────────────────────────────────
+ *
+ * Autenticar com a conta da escola não dá acesso: quem pode o quê vive na tabela
+ * `membership`, que nasce vazia. O primeiro acesso é concedido por script, de
+ * fora — uma tela que pudesse conceder o primeiro papel a si mesma não seria uma
+ * porta trancada. Por isso o 403 desta tela mostra o comando pronto em vez de só
+ * dizer "sem permissão".
  */
 
 declare global {
@@ -25,16 +37,14 @@ declare global {
 }
 
 type Estado = 'carregando' | 'deslogado' | 'logado' | 'erro';
+type Aba = 'agenda' | 'de-para' | 'auditoria' | 'saude';
 
 export function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
   const [estado, setEstado] = useState<Estado>('carregando');
   const [erro, setErro] = useState<string | null>(null);
-
-  const [health, setHealth] = useState<Awaited<ReturnType<typeof api.health>> | null>(null);
-  const [resumo, setResumo] = useState<Awaited<ReturnType<typeof api.resumo>> | null>(null);
-  const [auditoria, setAuditoria] = useState<Awaited<ReturnType<typeof api.auditoriaYearGroups>> | null>(null);
-  const [curriculumId, setCurriculumId] = useState('');
+  const [semAcesso, setSemAcesso] = useState<{ comoLiberar?: string; erro?: string } | null>(null);
+  const [aba, setAba] = useState<Aba>('agenda');
 
   // 1. Descobre o modo de autenticação com a própria API.
   useEffect(() => {
@@ -61,6 +71,7 @@ export function App() {
       client_id: authConfig.clientId,
       callback: (resposta) => {
         setIdToken(resposta.credential);
+        setSemAcesso(null);
         setEstado('logado');
         setErro(null);
       },
@@ -68,45 +79,40 @@ export function App() {
     window.google.accounts.id.renderButton(alvo, { theme: 'outline', size: 'large', locale: 'pt-BR' });
   }, [estado, authConfig]);
 
-  async function carregar(): Promise<void> {
-    setErro(null);
-    try {
-      const [h, r] = await Promise.all([api.health(), api.resumo()]);
-      setHealth(h);
-      setResumo(r);
-    } catch (e) {
-      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-        setIdToken(null);
-        setEstado('deslogado');
-        setErro(e.status === 403 ? 'Conta fora dos domínios autorizados.' : 'Sessão expirada — entre de novo.');
-        return;
-      }
-      setErro(e instanceof Error ? e.message : String(e));
+  /**
+   * Tratamento único de erro das abas.
+   *
+   * 401 volta para o login; 403 NÃO volta — a conta é válida, só não tem papel, e
+   * mandar de volta para o botão do Google faria a pessoa logar em círculos sem
+   * nunca ler o que precisa fazer.
+   */
+  function tratar(e: unknown): void {
+    if (e instanceof ApiError && e.status === 401) {
+      setIdToken(null);
+      setEstado('deslogado');
+      setErro('Sessão expirada — entre de novo.');
+      return;
     }
-  }
-
-  useEffect(() => { if (estado === 'logado') void carregar(); }, [estado]);
-
-  async function auditar(): Promise<void> {
-    setErro(null);
-    try {
-      setAuditoria(await api.auditoriaYearGroups(curriculumId.trim()));
-    } catch (e) {
-      setErro(e instanceof Error ? e.message : String(e));
+    if (e instanceof ApiError && e.status === 403) {
+      const corpo = e.corpo as { erro?: string; comoLiberar?: string } | null;
+      setSemAcesso({ erro: corpo?.erro ?? e.message, comoLiberar: corpo?.comoLiberar });
+      return;
     }
+    setErro(e instanceof Error ? e.message : String(e));
   }
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 860, margin: '2rem auto', padding: '0 1rem' }}>
-      <h1 style={{ fontSize: '1.4rem' }}>Middleware RM ↔ Toddle</h1>
+    <main style={s.main}>
+      <h1 style={s.h1}>Middleware RM ↔ Toddle</h1>
+      <p style={s.fraco}>Plano de controle: agenda, de-para e auditoria.</p>
 
       {estado === 'carregando' && <p>Consultando a API…</p>}
 
       {estado === 'erro' && (
-        <p style={{ color: '#b00' }}>
+        <p style={{ color: cor.ruim }}>
           {erro}
           <br />
-          <small>A API sobe com <code>npm run api</code> na porta 3333.</small>
+          <small>A API sobe com <code style={s.mono}>npm run api</code> na porta 3333.</small>
         </p>
       )}
 
@@ -114,79 +120,103 @@ export function App() {
         <section>
           <p>Entre com a conta da escola.</p>
           <div id="botao-google" />
-          {erro && <p style={{ color: '#b00' }}>{erro}</p>}
+          {erro && <p style={{ color: cor.ruim }}>{erro}</p>}
         </section>
       )}
 
       {estado === 'logado' && (
         <>
           {authConfig?.authMode === 'localhost' && (
-            <p style={{ background: '#fff4d6', border: '1px solid #e0c060', padding: '.6rem .8rem' }}>
+            <div style={s.aviso('atencao')}>
               <strong>Modo de desenvolvimento.</strong> A API está sem autenticação
-              (<code>API_AUTH_MODE=localhost</code>) e só aceita conexões locais.
-            </p>
+              (<code style={s.mono}>API_AUTH_MODE=localhost</code>), só aceita conexões locais e
+              dispensa a checagem de papel.
+            </div>
           )}
-          {erro && <p style={{ color: '#b00' }}>{erro}</p>}
 
-          <h2 style={{ fontSize: '1.1rem' }}>Saúde</h2>
-          {health ? (
-            <ul>
-              <li>tenant: <strong>{health.tenant}</strong></li>
-              <li>configVersion: <code>{health.configVersion}</code></li>
-              {health.dependencias.map((d) => (
-                <li key={d.nome}>{d.nome}: {d.ok ? 'ok' : `falha — ${d.erro}`}</li>
-              ))}
-            </ul>
-          ) : <p>—</p>}
-
-          <h2 style={{ fontSize: '1.1rem' }}>Mapeamentos</h2>
-          {resumo ? (
-            <table cellPadding={6} style={{ borderCollapse: 'collapse' }}>
-              <thead><tr><th align="left">tipo</th><th align="left">estado</th><th align="right">total</th></tr></thead>
-              <tbody>
-                {resumo.itens.map((i) => (
-                  <tr key={i.entityType + i.state} style={{ borderTop: '1px solid #ddd' }}>
-                    <td>{i.entityType}</td><td>{i.state}</td><td align="right">{i.total}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p>—</p>}
-
-          <h2 style={{ fontSize: '1.1rem' }}>Auditoria de year group</h2>
-          <p style={{ fontSize: '.9rem', color: '#555' }}>
-            Exige o currículo: sem ele a API do Toddle devolve a organização achatada,
-            onde nomes de year group colidem entre currículos — foi assim que um
-            de-para foi feito para a escada errada.
-          </p>
-          <input
-            value={curriculumId}
-            onChange={(e) => setCurriculumId(e.target.value)}
-            placeholder="curriculumId"
-            style={{ padding: '.4rem', width: 260 }}
-          />
-          <button onClick={() => void auditar()} disabled={!curriculumId.trim()} style={{ marginLeft: 8, padding: '.4rem .8rem' }}>
-            Auditar
-          </button>
-          {auditoria && (
-            <div style={{ marginTop: '1rem' }}>
-              <p>
-                {auditoria.yearGroupsNoToddle} year groups neste currículo · {auditoria.mapeamentos} mapeamentos ·{' '}
-                <strong style={{ color: auditoria.problemas.length ? '#b00' : '#070' }}>
-                  {auditoria.problemas.length} problema(s)
-                </strong>
+          {semAcesso && (
+            <div style={s.aviso('ruim')}>
+              <strong>{semAcesso.erro}</strong>
+              <p style={{ margin: '.4rem 0 0' }}>
+                Autenticar com a conta da escola não dá acesso: pertencer ao Workspace é
+                autenticação, não autorização. O papel vem da tabela <code style={s.mono}>membership</code>.
               </p>
-              {auditoria.problemas.length > 0 && (
-                <ul>
-                  {auditoria.problemas.slice(0, 10).map((p) => (
-                    <li key={p.rmCode}><code>{p.rmCode}</code> — {p.causa}</li>
-                  ))}
-                </ul>
+              {semAcesso.comoLiberar && (
+                <p style={{ margin: '.4rem 0 0' }}>
+                  Rode, na máquina do middleware:
+                  <br />
+                  <code style={{ ...s.mono, userSelect: 'all' }}>{semAcesso.comoLiberar}</code>
+                </p>
               )}
             </div>
           )}
+
+          {erro && <div style={s.aviso('ruim')}>{erro}</div>}
+
+          <div style={s.abas}>
+            {([
+              ['agenda', 'Agenda'],
+              ['de-para', 'De-para'],
+              ['auditoria', 'Auditoria'],
+              ['saude', 'Saúde'],
+            ] as Array<[Aba, string]>).map(([chave, rotulo]) => (
+              <button key={chave} style={s.aba(aba === chave)} onClick={() => { setErro(null); setAba(chave); }}>
+                {rotulo}
+              </button>
+            ))}
+          </div>
+
+          {aba === 'agenda' && <Agenda aoErrar={tratar} />}
+          {aba === 'de-para' && <DePara aoErrar={tratar} />}
+          {aba === 'auditoria' && <Auditoria aoErrar={tratar} />}
+          {aba === 'saude' && <Saude aoErrar={tratar} />}
         </>
       )}
     </main>
+  );
+}
+
+/** Saúde e panorama — o que a primeira versão da tela já mostrava. */
+function Saude({ aoErrar }: { aoErrar: (e: unknown) => void }) {
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof api.health>> | null>(null);
+  const [resumo, setResumo] = useState<Awaited<ReturnType<typeof api.resumo>> | null>(null);
+
+  useEffect(() => {
+    Promise.all([api.health(), api.resumo()])
+      .then(([h, r]) => { setHealth(h); setResumo(r); })
+      .catch(aoErrar);
+  }, []);
+
+  return (
+    <>
+      <h2 style={s.h2}>Saúde</h2>
+      {health ? (
+        <ul>
+          <li>tenant: <strong>{health.tenant}</strong></li>
+          <li>configVersion: <code style={s.mono}>{health.configVersion}</code></li>
+          {health.dependencias.map((d) => (
+            <li key={d.nome}>
+              {d.nome}: {d.ok ? <span style={{ color: cor.bom }}>ok</span> : <span style={{ color: cor.ruim }}>falha — {d.erro}</span>}
+            </li>
+          ))}
+        </ul>
+      ) : <p style={s.fraco}>—</p>}
+
+      <h2 style={s.h2}>Mapeamentos</h2>
+      {resumo ? (
+        <table style={s.tabela}>
+          <thead><tr><th style={s.th}>tipo</th><th style={s.th}>estado</th><th style={s.th}>total</th></tr></thead>
+          <tbody>
+            {resumo.itens.map((i) => (
+              <tr key={i.entityType + i.state}>
+                <td style={s.td}>{i.entityType}</td>
+                <td style={s.td}>{i.state}</td>
+                <td style={{ ...s.td, textAlign: 'right' }}>{i.total}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p style={s.fraco}>—</p>}
+    </>
   );
 }

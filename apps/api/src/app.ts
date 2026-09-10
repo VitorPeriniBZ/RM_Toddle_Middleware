@@ -4,19 +4,46 @@ import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '
 import { pgPool, idMappingRepository, ENTITY_TYPES, type EntityType } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
 import { autenticar } from './auth';
+import { exigirPapel } from './autorizacao';
+import { registrarRotasDeAgenda } from './rotas/agenda';
+import { registrarRotasDeVinculos } from './rotas/vinculos';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
 const cfg = tenantConfig;
 
 /**
- * Plano de CONTROLE. Só leitura nesta primeira fatia — nenhuma rota escreve, nem
- * no nosso banco nem no RM/Toddle. Escrita entra como máquina de operações
- * aprováveis (tabelas `operation`/`approval`, migration 006), não como rota solta.
+ * Plano de CONTROLE.
  *
- * LIMITAÇÃO CONSCIENTE DA v1: o tenant vem de TENANT_SLUG no ambiente, igual ao
- * worker — nenhuma rota aceita tenant por parâmetro. Isso é honesto: não há
- * ilusão de multi-tenancy antes de existir `membership`. Quando a autorização
- * existir, o tenant sairá do vínculo do usuário, nunca do cliente.
+ * ─── O QUE PASSOU A ESCREVER, E COM QUE FREIOS ──────────────────────────────
+ *
+ * A primeira fatia era só leitura. Agora existem rotas de escrita, e cada uma
+ * respeita o desenho que já estava no schema desde a migration 006:
+ *
+ *   agenda      escreve INTENÇÃO em `flow_schedule` e avisa o worker. NÃO toca o
+ *               Redis: quem aplica o scheduler é o reconciliador, e é o único.
+ *   vínculo      NÃO escreve em `id_mapping`. Cria `operation` com payload
+ *               congelado e `source_snapshot`; aplicar exige decisão com o
+ *               snapshot revalidado.
+ *   RM / Toddle  nada. Nenhuma rota desta API escreve nos sistemas do cliente.
+ *
+ * Toda escrita passa por `exigirPapel` e grava `audit_event` na MESMA transação
+ * da mudança — se a auditoria falhar, a mudança falha.
+ *
+ * ─── AUTENTICAÇÃO NÃO É AUTORIZAÇÃO ────────────────────────────────────────
+ *
+ * `auth.ts` responde "quem é" (assinatura, audience, expiração, claim `hd` do
+ * Workspace). `autorizacao.ts` responde "pode o quê", e a resposta vem de
+ * `membership`. Todo mundo da escola autentica; "todo mundo da escola" não é
+ * "quem pode mudar o job que escreve nota no RM".
+ *
+ * A negação é por padrão, inclusive na leitura: sem linha em `membership`,
+ * nenhuma rota protegida responde. A primeira concessão é por script
+ * (`npm run conceder`), fora da tela — uma porta que abre a si mesma não é porta.
+ *
+ * LIMITAÇÃO CONSCIENTE: o tenant vem de TENANT_SLUG no ambiente, igual ao worker
+ * — nenhuma rota aceita tenant por parâmetro. Continua honesto: a arquitetura é
+ * deploy-por-tenant, e o dia em que não for, o tenant sairá do vínculo do
+ * usuário, nunca do cliente.
  */
 export function construirApp() {
   const app = Fastify({ loggerInstance: logger });
@@ -80,10 +107,10 @@ export function construirApp() {
   }));
 
   /** Configuração de escopo/destino em vigor. Nenhum segredo é exposto. */
-  app.get('/config', async () => configVersionDetalhe());
+  app.get('/config', { preHandler: exigirPapel(['viewer']) }, async () => configVersionDetalhe());
 
   /** Contagem de mapeamentos por tipo e estado — o panorama que eu lia via psql. */
-  app.get('/mappings/summary', async () => {
+  app.get('/mappings/summary', { preHandler: exigirPapel(['viewer']) }, async () => {
     const { rows } = await pgPool.query<{ entity_type: string; state: string; total: string }>(
       `SELECT m.entity_type, m.state, count(*)::text AS total
          FROM id_mapping m
@@ -104,6 +131,7 @@ export function construirApp() {
    */
   app.get<{ Querystring: { entityType?: string; state?: string; limit?: string } }>(
     '/mappings',
+    { preHandler: exigirPapel(['viewer']) },
     async (req, reply) => {
       const { entityType, state, limit } = req.query;
       if (!entityType || !ENTITY_TYPES.includes(entityType as EntityType)) {
@@ -141,7 +169,10 @@ export function construirApp() {
    * que eu fazia por script. Responde "algum mapeamento aponta para id que não
    * existe mais, ou para a escada de currículo errada?".
    */
-  app.get<{ Querystring: { curriculumId?: string } }>('/pendencias/year-groups', async (req, reply) => {
+  app.get<{ Querystring: { curriculumId?: string } }>(
+    '/pendencias/year-groups',
+    { preHandler: exigirPapel(['viewer']) },
+    async (req, reply) => {
     const { curriculumId } = req.query;
     if (!curriculumId) {
       return reply.code(400).send({
@@ -169,8 +200,16 @@ export function construirApp() {
             ? 'id não existe neste currículo do Toddle'
             : 'mapeamento registrado em outro currículo',
         })),
-    };
-  });
+      };
+    },
+  );
+
+  // Agenda (painel, prévia, horário, liga/desliga, auditoria) e de-para
+  // (busca, duplicata, órfão, proposta, decisão). Em módulos separados porque
+  // são dois assuntos, e um arquivo de rotas que cresce sem divisão é onde a
+  // próxima rota entra sem `exigirPapel` e ninguém percebe na revisão.
+  void app.register(registrarRotasDeAgenda);
+  void app.register(registrarRotasDeVinculos);
 
   return app;
 }

@@ -186,6 +186,55 @@ const envSchema = z.object({
   /** Timeout do ping. Curto de propósito: monitor lento não pode atrasar o job. */
   HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 
+  // --- Plano de CONTROLE: agenda no banco, alerta e reconciliação ---
+  //
+  // A partir da tela de agendamento, a VERDADE do horário de cada fluxo é a
+  // tabela `flow_schedule` no Postgres, não o ambiente. As variáveis abaixo são
+  // de OPERAÇÃO da instância (com que frequência reconciliar, para onde alertar),
+  // não de escola — continuam aqui pelo mesmo critério de sempre.
+  //
+  // `STUDENTS_SYNC_CRON` e `NOTA_SYNC_ATIVO`/`NOTA_SYNC_CRON` continuam válidas,
+  // mas agora só como SEMENTE: valem na primeira subida, quando a linha do fluxo
+  // ainda não existe no banco. Depois disso o banco manda, e mudar a variável não
+  // muda comportamento. Ver apps/worker/src/agenda/reconciliar.ts.
+
+  /**
+   * Webhook de alerta (Slack, Discord, ntfy, Teams...). Vazio = desligado.
+   *
+   * É COMPLEMENTAR ao heartbeat, não substituto, e a diferença importa: o
+   * heartbeat é um terceiro reclamando do SILÊNCIO — cobre este processo morto.
+   * Este webhook é o processo falando de dentro, e cobre o que o silêncio não
+   * pega: job que morreu mas o worker segue vivo (foi o caso dos 62 jobs na DLQ,
+   * sete dias sem ninguém saber), e "nenhum run bem-sucedido na janela esperada"
+   * enquanto tudo parece de pé.
+   */
+  ALERTA_WEBHOOK_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  /** Timeout do POST de alerta. Curto: canal lento não pode atrasar o worker. */
+  ALERTA_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+
+  /**
+   * Intervalo do poll de reconciliação da agenda.
+   *
+   * POR QUE POLL, e não só pub/sub: pub/sub é entrega no máximo uma vez. Se a
+   * notificação se perder — worker reiniciando, Redis reiniciando, justamente os
+   * cenários que já custaram caro aqui —, o poll converge sozinho. O pub/sub
+   * existe por cima dele, para a tela responder na hora; nunca no lugar dele.
+   */
+  AGENDA_RECONCILIA_MS: z.coerce.number().int().min(5_000).default(60_000),
+  /**
+   * Intervalo mínimo entre dois disparos que a tela aceita salvar, em minutos.
+   *
+   * Guarda contra o `* * * * *` digitado por engano. Com `concurrency: 1` o
+   * sintoma não seria execução concorrente, e sim BACKLOG crescente: a fila
+   * enche mais rápido do que o worker consome, e o atraso só aparece horas
+   * depois. Cada passada de nota ainda lê ~7 mil linhas de Sentença no RM.
+   */
+  AGENDA_INTERVALO_MIN_MINUTOS: z.coerce.number().int().positive().default(15),
+  /**
+   * Intervalo do vigia de "nenhum sucesso na janela". Ver apps/worker/src/agenda/vigia.ts.
+   */
+  VIGIA_INTERVALO_MS: z.coerce.number().int().min(60_000).default(900_000),
+
   /**
    * Guarda de desvio de contagem, em pontos percentuais. O sync é completo: se o
    * RM voltar a servir uma cópia ANTIGA da base — que já aconteceu em 13-15/08 —

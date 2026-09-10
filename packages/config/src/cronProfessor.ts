@@ -1,24 +1,52 @@
+import { parseExpression } from 'cron-parser';
 import { env } from './env';
+import { TZ_AGENDA } from './cron';
 
 /** Folga entre o sync de aluno e o de professor, em minutos. */
 const FOLGA_MIN = 30;
 
 /**
- * Cron do sync de professor, derivado do de aluno somando 30 minutos, para os
- * dois NÃO caírem no mesmo instante.
+ * Folga abaixo da qual os dois syncs são considerados sobrepostos.
  *
- * A razão é medida, não estética: a janela de rate limit do Toddle é de 300s
- * (ver DECISOES.md), e os dois syncs falam com a mesma organização. O de aluno
- * leva ~4 min e faz ~260 chamadas; sobrepor os dois é a receita para os dois
- * falharem. 30 min cobre o pior caso do de aluno com margem larga.
+ * O de aluno leva ~4 min e faz ~260 chamadas (medido em 31/07/2026). Dez minutos
+ * é o menor número que ainda deixa o pior caso caber com margem. Entre 10 e 30 a
+ * tela salva, mas avisa: 30 é a convenção medida, não um enfeite.
+ */
+const FOLGA_MINIMA_ACEITA_MIN = 10;
+
+/** Quantos disparos comparar ao checar colisão. Cobre bem mais que um dia. */
+const DISPAROS_COMPARADOS = 40;
+
+/**
+ * Cron do sync de professor derivado do de aluno, somando 30 minutos.
  *
- * Entende `m h * * *` E `m h1,h2,... * * *` — a segunda forma existe porque o
- * sync roda 4× ao dia (03:00, 09:00, 12:00, 16:00). Antes só a primeira era
- * aceita, e um cron com lista de horas cairia no default, quebrando o
- * escalonamento EM SILÊNCIO.
+ * ─── ATENÇÃO: ISTO DEIXOU DE SER A REGRA DE RUNTIME ─────────────────────────
  *
- * Qualquer outro formato cai no default: melhor um horário previsível que um
- * cron calculado errado sem ninguém notar.
+ * Até a tela de agendamento existir, esta função ERA a configuração do professor:
+ * não havia variável própria, e o horário dele era calculado do horário do aluno
+ * a cada registro de scheduler.
+ *
+ * Isso não sobrevive a uma tela. A derivação só entende `m h * * *` e
+ * `m h1,h2 * * *`; qualquer outro formato cai no default `30 3 * * *` **em
+ * silêncio** — comportamento defensável quando o valor vinha de um `.env` revisado
+ * por quem deu deploy, e indefensável quando qualquer pessoa pode digitar um cron
+ * na tela. O professor voltaria para 03:30 enquanto o aluno foi para outro
+ * horário, e os dois passariam a disputar a janela de rate limit de 300s do
+ * Toddle — o problema que a folga existe para evitar.
+ *
+ * Então a derivação virou DUAS coisas explícitas:
+ *
+ *   1. SEMENTE. Esta função continua sendo como a linha do professor nasce em
+ *      `flow_schedule`, na primeira subida, a partir de `STUDENTS_SYNC_CRON`.
+ *      Derivar uma vez, num valor que alguém revisou, é seguro.
+ *   2. VALIDAÇÃO. `avaliarFolga()` abaixo é o que impede a tela de salvar um par
+ *      de horários que colide. A folga passou de cálculo implícito a regra
+ *      verificada — e a verificação vale para QUALQUER cron, não só para os dois
+ *      formatos que a regex entende.
+ *
+ * Entende `m h * * *` E `m h1,h2,... * * *`; qualquer outro formato cai no
+ * default, porque uma semente previsível é melhor que uma semente calculada
+ * errado.
  *
  * ─── POR QUE MORA EM `config` E NÃO EM `queues` ─────────────────────────────
  *
@@ -45,7 +73,82 @@ export function cronDoProfessor(cronDoAluno: string): string {
   return `${novoMinuto} ${novasHoras.join(',')} * * *`;
 }
 
-/** O cron efetivo do professor neste ambiente, para log e diagnóstico. */
+/**
+ * O cron do professor derivado do AMBIENTE.
+ *
+ * @deprecated Só para SEMEAR a agenda e para o preflight relatar o que o
+ * ambiente traz. O horário em vigor vem de `flow_schedule` — leia pelo
+ * `scheduleRepository`, não por aqui, ou você relata um valor que não é o que vai
+ * disparar.
+ */
 export function cronDoProfessorEfetivo(): string {
   return cronDoProfessor(env.STUDENTS_SYNC_CRON);
+}
+
+export interface FolgaAvaliada {
+  /** `true` quando os dois disparam perto demais para não se atrapalharem. */
+  colide: boolean;
+  /** Menor distância observada entre um disparo de um e um do outro, em minutos. */
+  menorFolgaMinutos: number;
+  /** Preenchido quando `colide`: a mensagem que a tela mostra ao recusar. */
+  motivo?: string;
+  /** Preenchido quando passa, mas abaixo da convenção de 30 min. */
+  aviso?: string;
+}
+
+/**
+ * Os dois cronogramas se atrapalham?
+ *
+ * ─── O QUE ESTA FUNÇÃO PROTEGE ──────────────────────────────────────────────
+ *
+ * A janela de rate limit do Toddle é de 300s (ver docs/DECISOES.md), e os dois
+ * syncs falam com a MESMA organização. O de aluno leva ~4 min e faz ~260
+ * chamadas; sobrepor os dois é a receita para os dois falharem — e falharem por
+ * 429, que é o erro que parece transitório e não é.
+ *
+ * ─── POR QUE COMPARA DISPAROS, E NÃO AS EXPRESSÕES ──────────────────────────
+ *
+ * Porque `0 3 * * *` e `0 3 * * 1-5` colidem só de segunda a sexta, e comparar
+ * texto não vê isso. Expandir os próximos N disparos de cada um e medir a menor
+ * distância responde para qualquer par de expressões, incluindo as que a regex da
+ * derivação nunca entendeu.
+ */
+export function avaliarFolga(cronA: string, cronB: string, agora: Date = new Date()): FolgaAvaliada {
+  const disparos = (cron: string): number[] => {
+    const it = parseExpression(cron, { tz: TZ_AGENDA, currentDate: agora });
+    return Array.from({ length: DISPAROS_COMPARADOS }, () => it.next().toDate().getTime());
+  };
+
+  const a = disparos(cronA);
+  const b = disparos(cronB);
+
+  let menor = Number.POSITIVE_INFINITY;
+  for (const ta of a) {
+    for (const tb of b) {
+      const delta = Math.abs(ta - tb) / 60_000;
+      if (delta < menor) menor = delta;
+    }
+  }
+  const menorFolgaMinutos = Math.floor(menor);
+
+  if (menorFolgaMinutos < FOLGA_MINIMA_ACEITA_MIN) {
+    return {
+      colide: true,
+      menorFolgaMinutos,
+      motivo:
+        `os dois fluxos disparam a ${menorFolgaMinutos} min de distância, e o sync de aluno leva ~4 min ` +
+        `fazendo ~260 chamadas. Sobrepostos, os dois competem pela janela de rate limit de 300s do Toddle ` +
+        `e podem falhar juntos. Deixe ao menos ${FOLGA_MIN} min entre eles`,
+    };
+  }
+  if (menorFolgaMinutos < FOLGA_MIN) {
+    return {
+      colide: false,
+      menorFolgaMinutos,
+      aviso:
+        `folga de ${menorFolgaMinutos} min entre os dois fluxos. A convenção medida é ${FOLGA_MIN} min, ` +
+        'que cobre o pior caso do sync de aluno com margem larga',
+    };
+  }
+  return { colide: false, menorFolgaMinutos };
 }

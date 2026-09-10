@@ -5,3 +5,8 @@ export * from './runRepository';
 export * from './provenanceRepository';
 export * from './pendencyRepository';
 export * from './approvalRepository';
+export * from './executor';
+export * from './scheduleRepository';
+export * from './accessRepository';
+export * from './auditRepository';
+export * from './mappingProposalRepository';
