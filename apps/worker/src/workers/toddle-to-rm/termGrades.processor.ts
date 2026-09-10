@@ -1,6 +1,5 @@
 import type { Job } from 'bullmq';
-import { env, heartbeat, logger } from '@rm-toddle/config';
-import { sincronizarNotas } from '../../services/sincronizarNotas';
+import { env, logger } from '@rm-toddle/config';
 
 /**
  * Job da via de NOTA: Toddle -> TOTVS RM.
@@ -47,61 +46,46 @@ export async function processTermGradesSync(job: Job): Promise<Record<string, un
     return { desligado: true };
   }
 
-  const r = await sincronizarNotas({ executar: true, quem: 'cron' });
-
-  const comum = {
-    jobId: job.id,
-    chaveRun: r.chaveRun,
-    notasNoToddle: r.origem.notas.length,
-    projetaveis: r.projecao.projetados.length,
-    recusadasNaProjecao: r.projecao.recusados.length,
-    porMotivo: r.projecao.porMotivo,
-    aEscrever: r.decisoes.aEscrever,
-    pendenciasAbertas: r.pendenciasAbertasNestaPassada,
-    filaAberta: r.filaAberta,
-    teto: r.volume.veredito,
-  };
-
-  if (r.naoEscreveu) {
-    // Nenhum destes é falha: são as guardas fazendo o trabalho delas.
-    const nivel = r.naoEscreveu === 'recusado-pelo-teto' ? 'error' : 'info';
-    logger[nivel](
-      { ...comum, naoEscreveu: r.naoEscreveu, motivosDoTeto: r.volume.motivos },
-      r.naoEscreveu === 'nada-a-escrever'
-        ? 'Via de nota: nada mudou no Toddle'
-        : `Via de nota: NÃO escreveu (${r.naoEscreveu})`,
-    );
-    // Teto RECUSADO é o único que merece alerta: significa escopo suspeito.
-    await heartbeat.notas(r.naoEscreveu === 'recusado-pelo-teto' ? 'falha' : 'sucesso', comum);
-    return { ...comum, naoEscreveu: r.naoEscreveu };
-  }
-
-  const e = r.escrita;
-  if (!e) return comum;
-
-  const integridadeOk = e.divergentes.length === 0 && e.ausentes.length === 0 && e.desconhecidas.length === 0;
-
-  const resultado = {
-    ...comum,
-    enviadas: e.enviadas,
-    conferidas: e.conferidas,
-    divergentes: e.divergentes.length,
-    ausentes: e.ausentes.length,
-    recusadasPeloRm: e.recusadas.length,
-    semResposta: e.desconhecidas.length,
-    chamadas: e.chamadas,
-  };
-
-  if (!integridadeOk) {
-    logger.error(
-      { ...resultado, exemplosDivergentes: e.divergentes.slice(0, 5), exemplosAusentes: e.ausentes.slice(0, 5) },
-      'Via de nota: escrita com DIVERGÊNCIA — NÃO será retentada. Releia o RM antes de rodar de novo',
-    );
-    await heartbeat.notas('falha', resultado);
-    return resultado;
-  }
-
-  logger.info(resultado, 'Via de nota: escrita conferida');
-  await heartbeat.notas('sucesso', resultado);
-  return resultado;
+  // ─── PARADA DURA: ESTE JOB APONTA PARA UM DESTINO QUE NÃO ESCREVE ─────────
+  //
+  // Medido em 09/09/2026, depois de este job existir: o `SaveRecord` do
+  // `EduNotaEtapaData` aceita o dataset, responde `ok=true` e DESCARTA o
+  // `NOTAFALTA`. Seis formatos testados, todos com releitura `0.0000`. A nota da
+  // etapa é calculada por fórmula (`SETAPAS.CODFORMULANOTA='01_ETAPA'`).
+  //
+  // Ligar `NOTA_SYNC_ATIVO` hoje não seria inócuo: o job CRIA a linha em
+  // `SNOTAETAPA` com nota **zero**, silenciosamente, em cima do histórico
+  // escolar. Zero é um valor plausível — ninguém notaria.
+  //
+  // O caminho que funciona é a nota de AVALIAÇÃO (`SProvas` + `SNotas`), em
+  // `npm run escrever:avaliacoes`, provado com 5 notas reais. Este job precisa
+  // ser REDIRECIONADO para lá antes de rodar; a flag por si só não basta, e é por
+  // isso que a recusa é no código e não num comentário.
+  //
+  // Ver docs/rm-dataservers/EduNotaEtapaData.md e
+  // docs/levantamento-nota-por-avaliacao.md.
+  throw new Error(
+    'Via de nota de ETAPA desativada por medição: o EduNotaEtapaData aceita e DESCARTA ' +
+      'o valor (ok=true, releitura 0.0000), então este job criaria notas ZERO no ' +
+      'histórico escolar. Use `npm run escrever:avaliacoes` (nota de AVALIAÇÃO) e ' +
+      'redirecione este processador antes de ligar NOTA_SYNC_ATIVO.',
+  );
 }
+
+// ─── O QUE FICOU FORA, E POR QUÊ ─────────────────────────────────────────────
+//
+// Este processador tinha, abaixo da guarda acima, a orquestração completa da via
+// de nota de ETAPA: chamada do serviço, classificação dos vereditos que não são
+// falha (`nada-a-escrever`, `precisa-aprovacao`), heartbeat e a regra de NÃO
+// retentar falha de integridade. Removido de propósito, e não por limpeza:
+//
+//   1. O destino está provado morto, então aquele código não pode rodar.
+//   2. Quando o job for redirecionado para a nota de AVALIAÇÃO, o relatório e os
+//      vereditos serão outros — dois destinos (SProvas + SNotas), criação de
+//      estrutura, e conferência por chave E valor. Reaproveitar a orquestração da
+//      etapa seria adaptar o formato errado.
+//
+// O raciocínio que vale ser levado dali para lá está preservado no histórico
+// (commit 90e21fb) e nos comentários do `escreverAvaliacoes.ts`: interruptor
+// checado dentro do job, falha de integridade que não é retentada, e o gate de
+// volume que pode parar o job com sucesso.
