@@ -78,10 +78,36 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
       if (!linha?.ativo && obs) divergencias.push('desligado no banco e PRESENTE no Redis');
       if (linha && obs && linha.cron !== obs.cron) divergencias.push('cron diferente entre banco e Redis');
       if (linha && obs && linha.timezone !== obs.tz) divergencias.push('fuso diferente entre banco e Redis');
-      if (linha && linha.revisaoAplicada !== linha.revisao) {
-        divergencias.push(`revisão ${linha.revisao} pendente de aplicação`);
-      }
       if (linha?.erroAoAplicar) divergencias.push(`erro ao aplicar: ${linha.erroAoAplicar}`);
+
+      /*
+       * ─── REVISÃO PENDENTE NÃO É DIVERGÊNCIA ────────────────────────────────
+       *
+       * `revisaoAplicada < revisao` significa que nenhum worker CONFIRMOU a
+       * revisão. Na maior parte das vezes o Redis já está exatamente com o
+       * horário desejado — foi o que aconteceu na primeira vez que a tela subiu
+       * com login de verdade: o cartão do professor apareceu em vermelho, como
+       * DIVERGENTE, com o cron do banco e o do Redis IDÊNTICOS. O que faltava era
+       * só o worker passar para marcar.
+       *
+       * Pintar isso de vermelho é o erro que o conselho avisou: alarme que grita
+       * em cima do desenho correto é alarme que alguém aprende a ignorar — e aí
+       * some junto com ele a divergência de verdade, que é a que este painel
+       * existe para acusar.
+       *
+       * Então: se o observado JÁ CONFERE com o desejado, a revisão pendente é
+       * informação (tipicamente "não há worker de pé"), não defeito. Se o
+       * observado não confere, a divergência acima já foi reportada com o motivo
+       * exato, e a revisão pendente não acrescenta nada.
+       *
+       * O reconciliador continua tratando revisão pendente como "aplicar": o
+       * upsert é idempotente e barato, e é ele que fecha a janela em que o Redis
+       * perdeu o registro sem ninguém notar.
+       */
+      const observadoConfere = Boolean(
+        obs && linha && obs.cron === linha.cron && obs.tz === linha.timezone,
+      );
+      const revisaoPendente = Boolean(linha && linha.revisaoAplicada !== linha.revisao);
 
       return {
         flowKey: fluxo.key,
@@ -93,6 +119,8 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         desejado: linha,
         observado: obs,
         divergencias,
+        revisaoPendente,
+        observadoConfere,
         proximosDisparos: linha?.ativo ? proximosDisparos(linha.cron, 3) : [],
         ultimoRun: runs[fluxo.key] ?? null,
         ultimoSucessoEm: sucessos[fluxo.key] ?? null,

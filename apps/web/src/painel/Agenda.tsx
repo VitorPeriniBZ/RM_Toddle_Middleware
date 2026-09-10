@@ -125,6 +125,9 @@ function CartaoDoFluxo({
           <span style={s.selo(ligado ? 'bom' : 'neutro')}>{ligado ? 'ligado' : 'desligado'}</span>
           {!fluxo.podeAtivar && <span style={s.selo('atencao')}>bloqueado</span>}
           {fluxo.divergencias.length > 0 && <span style={s.selo('ruim')}>divergente</span>}
+          {fluxo.divergencias.length === 0 && fluxo.revisaoPendente && fluxo.observadoConfere && (
+            <span style={s.selo('atencao')}>revisão não confirmada</span>
+          )}
         </div>
         <div style={s.linha}>
           <BotaoDeChave fluxo={fluxo} aoMudar={aoMudar} aoErrar={aoErrar} />
@@ -207,6 +210,16 @@ function CartaoDoFluxo({
       {fluxo.divergencias.map((div) => (
         <div key={div} style={s.aviso('ruim')}>{div}</div>
       ))}
+
+      {/* Revisão pendente com o Redis JÁ conferindo nao e divergencia: e quase
+          sempre "nenhum worker de pe para confirmar". Fica em tom neutro, porque
+          vermelho em cima do estado correto ensina a ignorar o vermelho. */}
+      {fluxo.revisaoPendente && fluxo.observadoConfere && (
+        <div style={s.aviso('atencao')}>
+          Revisão {fluxo.desejado?.revisao} ainda não confirmada por um worker — mas o Redis já está
+          com este horário. Some quando o worker passar (boot, aviso ou o poll de 60s).
+        </div>
+      )}
 
       {!fluxo.podeAtivar && fluxo.motivoDoBloqueio && (
         <div style={s.aviso('atencao')}>

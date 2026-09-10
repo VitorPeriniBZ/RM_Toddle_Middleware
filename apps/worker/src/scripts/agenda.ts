@@ -60,11 +60,19 @@ async function main(): Promise<void> {
     if (linha?.ativo && !obs) divergencias.push('ligado no banco e AUSENTE no Redis');
     if (!linha?.ativo && obs) divergencias.push('desligado no banco e PRESENTE no Redis');
     if (linha && obs && linha.cron !== obs.cron) divergencias.push('cron diferente entre banco e Redis');
-    if (linha && linha.revisaoAplicada !== linha.revisao) {
+    // Revisão pendente com o Redis JA conferindo não é divergência — é quase
+    // sempre "nenhum worker de pé para confirmar". Ver o comentário longo em
+    // apps/api/src/rotas/agenda.ts.
+    const confere = Boolean(obs && linha && obs.cron === linha.cron && obs.tz === linha.timezone);
+    if (linha && linha.revisaoAplicada !== linha.revisao && !confere) {
       divergencias.push(`revisão ${linha.revisao} pendente de aplicação (aplicada: ${linha.revisaoAplicada ?? 'nenhuma'})`);
     }
     if (linha?.erroAoAplicar) divergencias.push(`erro ao aplicar: ${linha.erroAoAplicar}`);
     if (divergencias.length) for (const d of divergencias) p(`    ⚠ ${d}`);
+
+    if (linha && linha.revisaoAplicada !== linha.revisao && confere) {
+      p(`    · revisão ${linha.revisao} ainda não confirmada por um worker (o Redis já confere)`);
+    }
 
     if (linha?.ativo && !divergencias.length) {
       p(`    próximos:  ${proximosDisparos(linha.cron, 3).join('  ·  ')}`);
