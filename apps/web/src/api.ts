@@ -106,6 +106,10 @@ export interface FluxoNaTela {
   desejado: AgendaDoFluxo | null;
   observado: SchedulerObservado | null;
   divergencias: string[];
+  /** Revisão gravada que nenhum worker confirmou ainda. Informação, não defeito. */
+  revisaoPendente: boolean;
+  /** O Redis já está com o cron e o fuso desejados. */
+  observadoConfere: boolean;
   proximosDisparos: string[];
   ultimoRun: RunResumo | null;
   ultimoSucessoEm: string | null;
