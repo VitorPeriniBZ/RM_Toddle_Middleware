@@ -263,6 +263,32 @@ Passos:
 
 **O que NÃO precisa mudar por causa do domínio:** `WEB_ORIGINS`. O nginx serve a UI e faz proxy de `/api` no mesmo domínio, então UI e API são a mesma origem e o CORS não entra no caminho — o bundle chama `/api`, relativo, justamente para o domínio não ficar gravado nele.
 
+#### Se o registro de DNS estiver atrás do proxy do Cloudflare
+
+O sintoma é o navegador dizendo **"Esta página não está funcionando"** (`ERR_TOO_MANY_REDIRECTS`) num domínio recém-ligado, enquanto a aplicação está perfeitamente de pé.
+
+**A causa.** O Cloudflare deixa a **nuvem laranja (proxied) como padrão** ao criar um registro A — quem cria o registro pode nem escolher isso. Se o modo de SSL da zona for *Flexible*, o Cloudflare termina o TLS na borda e busca o origin por **HTTP**; o Traefik, configurado com domínio `https://`, responde com o redirect http→https; o Cloudflare devolve esse redirect ao navegador, que pede https de novo — e o ciclo se fecha.
+
+**Como confirmar em três medições** (aconteceu em 10/09/2026, com `toddlerm`):
+
+```bash
+# 1. via Cloudflare: loop
+curl -s -o /dev/null -L --max-redirs 4 -w "%{http_code} saltos=%{num_redirects}\n" https://SEU.DOMINIO/
+# 2. direto no origin, https: a aplicação está OK
+ssh $COOLIFY_SSH_HOST "curl -s -o /dev/null -w '%{http_code}\n' \
+  --resolve SEU.DOMINIO:443:127.0.0.1 https://SEU.DOMINIO/"
+# 3. o registro é proxiado? (IP do Cloudflare em vez do servidor)
+dig +short SEU.DOMINIO
+```
+
+**A correção certa, e ela é de DNS:** deixar a nuvem **cinza (DNS only)**. É o estado dos outros sete hostnames da escola neste servidor (`eavents`, `supply`, `tech`, `eavrelations`, `eavsportsclub`, `manutos`, `mypassport`) — todos com domínio `https://` no Coolify e TLS de ponta a ponta pelo Let's Encrypt do Traefik. Com ela cinza, nada mais precisa mudar.
+
+**A correção possível sem acesso ao Cloudflare:** declarar o domínio no Coolify como **`http://`** em vez de `https://`. O Coolify deriva as labels do esquema, então o Traefik para de anexar o `redirect-to-https` ao roteador e o Flexible passa a servir a página. O navegador continua vendo `https://` (certificado da borda do Cloudflare), e o login do Google funciona porque a origem que ele valida é a que o navegador vê.
+
+⚠️ **O custo dessa segunda opção:** o trecho **Cloudflare → servidor fica sem criptografia**, e o `Authorization: Bearer <id_token>` da tela viaja nele. É inerente ao modo Flexible, não ao ajuste. Trate como estado temporário: quando a nuvem virar cinza, volte o campo para `https://` — o certificado já emitido no servidor passa a atender o navegador direto.
+
+**Não** troque o modo de SSL da zona para *Full (strict)* como conserto: ele é **por zona**, e vale para todos os hostnames de `escolaamericana.com.br`. Numa zona que está em *Flexible*, é bem possível que haja origens servindo só HTTP — essas quebram na hora. Se precisar do proxy ligado com TLS até o origin, o caminho escopado é uma *Configuration Rule* para aquele hostname.
+
 **Depois de mexer em variável, rode `./scripts/comparar-env.sh`.** Ele compara o `.env` local com o `printenv` do container em produção — o ambiente que o processo **realmente vê**, não o que a UI do Coolify mostra. Se você salvou a variável e não redeployou, é este script que conta a verdade.
 
 Existe porque em 10/08 eu adicionei `RM_SENTENCA_TURMADISC` no `.env` local e esqueci em produção: o `staff.sync` rodou às 03:30, morreu nas 3 tentativas e foi para a DLQ. O erro era ruidoso e nomeava a variável — mas ninguém estava olhando às 3h.
