@@ -27,7 +27,28 @@
 #   RM_CODPERLET=2026   ano letivo; sem ele o extract falha em runtime
 #   RM_CODCOLIGADA=1
 #   STUDENTS_SYNC_CRON=0 3 * * *
-#   WEB_ORIGINS         default é localhost:5173; ponha o domínio do Coolify
+#     ATENÇÃO: virou SEMENTE. A agenda em vigor mora na tabela `flow_schedule`
+#     (migração 016) e muda pela tela. Esta variável só vale na PRIMEIRA subida,
+#     quando ainda não há linha para o fluxo; depois disso, mudar aqui não muda
+#     nada. Confira o que está valendo com `npm run agenda`. Mesma coisa para
+#     NOTA_SYNC_CRON e NOTA_SYNC_ATIVO.
+#
+#   WEB_ORIGINS         NÃO precisa do domínio. Deixe o default.
+#     O nginx do `web` serve a UI e faz proxy de /api para o serviço `api`, então
+#     UI e API são a MESMA origem e o CORS não entra no caminho (o bundle chama
+#     "/api", relativo — ver apps/web/src/api.ts). Esta lista só passaria a
+#     importar se algum dia a UI fosse servida de outra origem que não este nginx.
+#
+# (B.1) PLANO DE CONTROLE — todas com default, nenhuma obrigatória:
+#
+#   ALERTA_WEBHOOK_URL         Slack/Discord/ntfy. VAZIA = sem alerta ativo, e
+#     é a única aqui que vale a pena preencher: ela cobre o que o heartbeat não
+#     pega — job morrendo com o worker VIVO, que foi o caso dos 62 registros na
+#     DLQ por sete dias. O vigia também avisa "nenhum sucesso na janela".
+#   ALERTA_WEBHOOK_TIMEOUT_MS  5000
+#   AGENDA_RECONCILIA_MS       60000  piso do poll que aplica a agenda no Redis
+#   AGENDA_INTERVALO_MIN_MINUTOS  15  menor intervalo que a tela aceita salvar
+#   VIGIA_INTERVALO_MS         900000
 #
 # (C) Opcionais no Zod, mas o sync não funciona sem elas:
 #   RM_WS_BASEURL         https://escolaamericana143994.rm.cloudtotvs.com.br:1951

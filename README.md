@@ -250,8 +250,18 @@ Passos:
 1. Criar o projeto e adicionar os recursos **PostgreSQL** e **Redis**; ativar backup no Postgres.
 2. Adicionar a aplicação apontando para este repo, tipo **Docker Compose**, arquivo `docker-compose.coolify.yml`.
 3. Preencher as variáveis (a lista completa está no cabeçalho do compose). `DATABASE_URL` e `REDIS_URL` saem da UI dos recursos.
-4. Ligar o domínio **só no serviço `web`**.
-5. Deploy. O `init` roda as migrations e registra o cron antes de o worker subir.
+4. Ligar o domínio **só no serviço `web`** — hoje `toddlerm.escolaamericana.com.br`. Os outros três não recebem domínio: o `api` só é alcançado pelo nginx do `web`, pela rede interna.
+5. **No console do Google**, acrescentar `https://toddlerm.escolaamericana.com.br` nas *Authorized JavaScript origins* do cliente OAuth cujo id está em `GOOGLE_CLIENT_ID`. Sem isso o botão de login **não assina** — é o único bloqueio duro do login em produção, e o sintoma parece ser da aplicação, não do console.
+6. Deploy. A ordem é garantida pelo compose, não pela sua memória: `worker` e `api` declaram `depends_on: init: service_completed_successfully`, e o `init` roda `preflight && db:migrate && schedule`. Migration quebrada derruba o deploy inteiro — que é o comportamento certo.
+7. **Conceder o primeiro acesso**, contra o banco de PRODUÇÃO. A tabela `membership` nasce vazia e a API nega tudo, inclusive leitura:
+
+   ```bash
+   npm run conceder -- --subject <o que o 403 mostrou> --papel tenant_admin --email voce@escolaamericana.com.br
+   ```
+
+   Você não precisa saber o seu `subject` de cor: entre na tela, receba o 403, e ele devolve o comando pronto. A concessão feita em desenvolvimento **não vale** aqui — é outro banco.
+
+**O que NÃO precisa mudar por causa do domínio:** `WEB_ORIGINS`. O nginx serve a UI e faz proxy de `/api` no mesmo domínio, então UI e API são a mesma origem e o CORS não entra no caminho — o bundle chama `/api`, relativo, justamente para o domínio não ficar gravado nele.
 
 **Depois de mexer em variável, rode `./scripts/comparar-env.sh`.** Ele compara o `.env` local com o `printenv` do container em produção — o ambiente que o processo **realmente vê**, não o que a UI do Coolify mostra. Se você salvou a variável e não redeployou, é este script que conta a verdade.
 
