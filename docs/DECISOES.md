@@ -538,6 +538,153 @@ encontrada!".
 
 ---
 
+## D8 — A agenda mora no banco, e a API não escreve no Redis
+
+**10/09/2026.** Decisão de implementação, para viabilizar a tela de agendamento:
+o horário e o liga/desliga de cada fluxo saem do ambiente e passam para a tabela
+`flow_schedule` (migration 016).
+
+### Por que o ambiente não servia
+
+Mudar `STUDENTS_SYNC_CRON` ou `NOTA_SYNC_ATIVO` exigia editar o `.env` e
+**redeployar** — e o deploy aqui é manual, sem webhook. Não é atrito aceitável
+para "quero que o sync rode às 4h".
+
+### A precedência é de UMA via
+
+O banco é a verdade. O ambiente vira **semente**: vale na primeira subida, quando
+a linha do fluxo ainda não existe (`ON CONFLICT DO NOTHING`), e nunca mais.
+
+A alternativa ("env vence quando presente") foi descartada por um motivo
+concreto: o próximo deploy com `NOTA_SYNC_ATIVO=false` desligaria em silêncio o
+que a tela ligou, **com a tela mostrando ligado por cima**. Duas fontes de
+verdade, uma delas mentindo — a mesma classe de bug que a definição duplicada de
+scheduler quase produziu.
+
+Consequência obrigatória: `npm run schedule` (o `init` de cada deploy) parou de
+ler o ambiente e passou a ler o banco. Enquanto ele carregasse o `.env`, a tela
+não seria fonte de verdade de nada.
+
+### Quem aplica no Redis
+
+O worker, e só ele. `reconcileSchedulers()`
+(`apps/worker/src/agenda/reconciliar.ts`) é o único código do sistema que chama
+`upsertJobScheduler`/`removeJobScheduler`. A API grava a intenção no Postgres e
+avisa por pub/sub.
+
+Três razões, e a primeira é histórica: dois escritores de scheduler é o risco que
+o comentário de `packages/queues/src/schedulers.ts` sempre existiu para conter. A
+segunda é durabilidade — intenção no Redis evapora num restart sem persistência;
+no Postgres, não. A terceira é raio de dano: a API é o processo exposto.
+
+**Três gatilhos, e o piso é o poll:** o `ready` do ioredis (cobre boot e
+reconexão), o aviso por pub/sub (faz a tela responder em segundos) e um poll de
+60s. Pub/sub é entrega no máximo uma vez; se o aviso se perder — worker
+reiniciando, Redis reiniciando, justamente os cenários que já custaram caro
+aqui — o poll converge sozinho. Remover o poll "porque o pub/sub avisa" traz a
+falha silenciosa de volta.
+
+**Diff nos dois sentidos.** A reconciliação também REMOVE: fluxo desligado cujo
+scheduler ficou no Redis, e scheduler órfão com id fora do catálogo. Esta troca
+produziu órfãos uma vez, de propósito — os ids antigos eram
+`students-sync-nightly`, `staff-sync-nightly` e `term-grades-poll`; os novos são
+as chaves de fluxo. Medido em 10/09/2026 na primeira execução: os dois primeiros
+foram varridos. Sem essa varredura o sync de aluno rodaria **duas vezes por
+noite**, uma por id.
+
+### A derivação do cron do professor morreu
+
+O cron do professor era calculado do de aluno somando 30 min. A folga é medida —
+janela de rate limit do Toddle de 300s, sync de aluno de ~4 min com ~260 chamadas
+— mas a derivação só entendia `m h * * *` e `m h1,h2 * * *`, e **qualquer outro
+formato caía num default em silêncio**. Defensável quando o valor vinha de um
+`.env` revisado por quem deu deploy; indefensável quando qualquer pessoa digita
+um cron na tela: o professor voltaria para 03:30 enquanto o aluno foi para outro
+horário, e os dois passariam a disputar a mesma janela.
+
+A folga virou **verificação** (`avaliarFolga`), aplicada a cada mudança. Verificar
+é melhor que derivar por um motivo além da segurança: vale para qualquer par de
+expressões, incluindo as que a regex nunca entendeu — `0 3 * * *` e
+`0 3 * * 1-5` colidem de segunda a sexta, e comparar texto não vê isso.
+
+### O que NÃO entrou no `configVersion`
+
+Cron e liga/desliga continuam **fora** do hash, e a decisão original estava
+certa. A regra, agora escrita: *entra no hash o que mudaria a resposta para "esse
+job está escrevendo no lugar certo?"*. Horário é "quando", não "sobre o quê" —
+incluí-lo faria cada ajuste recusar em massa os jobs em voo.
+
+### Fluxo bloqueado no catálogo
+
+`packages/queues/src/fluxos.ts` marca a via de nota como `podeAtivar: false`, com
+o motivo. Ligar hoje enfileiraria um job cujo processador **recusa rodar** (D7 e a
+medição do `EduNotaEtapaData`), e cada disparo cairia na DLQ. Um interruptor que
+só produz isso não é interruptor, é armadilha; a tela explica em vez de deixar a
+pessoa descobrir pela DLQ. `NOTA_SYNC_ATIVO=true` no ambiente também não liga —
+a semente entra desligada, com aviso alto no log.
+
+---
+
+## D9 — Vínculo do de-para muda por proposta aprovada, nunca por clique
+
+**10/09/2026.** A tela mostra, busca e diagnostica o de-para. Mudar é uma
+`operation` (migration 006) com payload congelado e `source_snapshot`; aplicar é
+um segundo passo, com o diff à vista e o snapshot **revalidado** antes de gravar.
+
+### Por que não CRUD
+
+Um vínculo errado não é erro de tela: é nota ou falta gravada na turma, no aluno
+ou na etapa errada de um registro acadêmico que já tem ~10 mil notas e 14,6 mil
+faltas lançadas à mão.
+
+E há um buraco específico: **o `configVersion` não protege contra isso.** Ele
+cobre escopo e destino, e mapeamento é *dado*, não configuração. Editar um
+vínculo entre o extract e o load muda o destino de fato e o hash não percebe — a
+mesma classe do incidente de 31/07/2026, sem a rede de proteção. A revalidação do
+snapshot é o que cobre a janela.
+
+### Três formas, e não existe uma quarta
+
+`vincular`, `revincular`, `arquivar`. Não existe `apagar`: o `toddle_id` guardado
+é o único caminho de volta para um registro arquivado no Toddle, e apagar 186
+linhas em 31/07/2026 destruiu exatamente esse handle. A migration 018 passou a
+recusar `DELETE` e `TRUNCATE` em `id_mapping` **no banco** — se existe uma tela,
+um dia alguém clica, e a defesa tem de estar abaixo dela.
+
+### O histórico de um `revincular` mora na auditoria
+
+`superseded_by` (migration 006) existe para preservar a cadeia, mas **não se
+aplica aqui**: a chave única é `(tenant_id, entity_type, rm_code,
+target_instance_key)` e não tem predicado de estado, então duas linhas para o
+mesmo `rm_code` no mesmo destino não coexistem nem com uma arquivada. Revincular
+é, necessariamente, `UPDATE`.
+
+Consequência que precisa estar dita: **o valor anterior sobrevive só em
+`audit_event.antes`.** É por isso que a auditoria aqui é transacional e
+obrigatória, e o `motivo` não é formulário.
+
+### Segregação de funções: a exceção, e o seu limite
+
+A migration 006 pede que quem propõe não aprove. Com a tela, uma proposta tem
+proponente registrado — o que bloquearia o único dev do projeto de decidir sobre
+a própria proposta, tornando a função inutilizável.
+
+A exceção segue o mesmo raciocínio da regra: com **exatamente uma** identidade
+capaz de aprovar no tenant, não há de quem segregar (igual ao run de cron, que
+tem `criado_por` NULL). Com duas ou mais, a regra é imposta.
+
+**Zero NÃO libera.** "Nenhuma identidade com papel de aprovação" não quer dizer
+"existe uma pessoa só" — quer dizer que `membership` nunca foi preenchida, que é
+o estado atual do tenant real. Com `<= 1` a regra desapareceria justamente onde
+ninguém configurou nada, e ficaria aberta até alguém lembrar de conceder papéis.
+A primeira versão deste código usava `<= 1`; o teste de integração do gate, que
+já existia, foi o que pegou.
+
+O controle que permanece nos dois casos é o que de fato pega o dedo errado: dois
+passos com diff, snapshot revalidado, e a decisão gravada com nome e motivo.
+
+---
+
 ## Pendências que não são de código
 
 | item | quem resolve |
@@ -598,7 +745,8 @@ dispara atrasado, quando o worker voltar.
 
 **E o agendamento vive só no Redis.** Se o Redis reiniciar sem persistência, o
 scheduler desaparece e nada dá erro. Por isso o worker o re-registra no boot e em
-cada reconexão (`manterAgendamentoDeAlunos`). Registrar só no boot NÃO resolveria:
+cada reconexão (hoje `manterAgendamento`, que chama `reconcileSchedulers` — ver
+D8). Registrar só no boot NÃO resolveria:
 quando o Redis reinicia o worker não reinicia, ele reconecta. Em produção,
 ligar AOF no Redis do Coolify é a outra metade da proteção — e conferir que
 `maxmemory-policy` é `noeviction`, senão o Redis descarta job em silêncio sob
@@ -654,5 +802,18 @@ As três são decisão humana; o relatório aponta. `reconciliar:turmas` cobre t
 professor não tem equivalente, e é aí que a Sentença `TODDLE.TURMADISC` passa a
 fazer sentido, porque é ela que traz professor.
 
-**`apps/api` sem autorização por papel.** As tabelas `membership` existem e não são
-usadas. Adiado pela escola.
+**~~`apps/api` sem autorização por papel~~ — resolvido em 10/09/2026.** A tabela
+`membership` passou a ser consultada: `exigirPapel()`
+(`apps/api/src/autorizacao.ts`) é o único caminho para qualquer rota, negação por
+padrão, inclusive na leitura. `audit_event` deixou de estar vazia e é gravada na
+MESMA transação da mudança — se a auditoria falhar, a mudança falha. A migration
+017 tornou a tabela append-only no banco, não só por contrato.
+
+O primeiro papel é concedido por script (`npm run conceder`), fora da tela: uma
+porta que pode abrir a si mesma não é uma porta trancada. O 403 devolve o
+`subject` de quem pediu e o comando pronto, então o bootstrap não é adivinhação.
+
+**O que continua aberto:** se aluno tiver conta em `escolaamericana.com.br`, ele
+passa na AUTENTICAÇÃO como qualquer funcionário — a claim `hd` não distingue. Com
+`membership` em vigor isso não dá acesso a nada, mas é a razão de a negação por
+padrão valer também para as rotas de leitura.

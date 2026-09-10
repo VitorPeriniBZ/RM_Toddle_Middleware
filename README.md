@@ -95,13 +95,17 @@ O separador é `-`, **não `:`**, e o `runId` é normalizado: o BullMQ recusa cu
 
 **Resiliência.** `attempts: 3` com backoff exponencial (5s → 10s → 20s). O BullMQ não tem DLQ nativa: um listener de `failed` copia o payload completo (fila de origem, job, dados, motivo, stacktrace) para a fila `dead-letter`, e `npm run dlq` lista/reprocessa manualmente.
 
-**Dois agendamentos, escalonados.** `STUDENTS_SYNC_CRON` define o de alunos; o de professores é derivado dele **somando 30 minutos** (`0 3` → `30 3`). Não é estética: a janela de rate limit do Toddle é de 300s e os dois falam com a mesma organização, então sobrepor é a receita para os dois falharem. Se `STUDENTS_SYNC_CRON` não for `m h * * *`, o de professores cai no default `30 3 * * *` — melhor um horário previsível que um cron calculado errado em silêncio.
+**A agenda mora no banco.** O horário e o liga/desliga de cada fluxo estão na tabela `flow_schedule` (migration 016), e mudam pela tela — sem editar `.env` e sem redeploy. As variáveis `STUDENTS_SYNC_CRON`, `NOTA_SYNC_CRON` e `NOTA_SYNC_ATIVO` continuam válidas, mas só como **semente**: valem na primeira subida, quando a linha do fluxo ainda não existe, e nunca mais. A precedência é de uma via de propósito — se o ambiente vencesse quando presente, o próximo deploy desfaria em silêncio o que a tela mudou. Ver **D8** em `docs/DECISOES.md`. Para ver o que está em vigor: `npm run agenda`.
+
+**Três fluxos, escalonados.** Alunos e professores ficam a 30 minutos de distância; a via de nota está desligada e **bloqueada** no catálogo (`packages/queues/src/fluxos.ts`), porque o destino dela está provado morto (D7). A folga de 30 min não é estética: a janela de rate limit do Toddle é de 300s e os dois falam com a mesma organização, então sobrepor é a receita para os dois falharem. Ela era garantida por CÁLCULO (derivar o cron do professor do de aluno); com a tela virou **verificação** a cada mudança (`avaliarFolga`), porque a derivação só entendia dois formatos e caía num default em silêncio.
 
 Um `Worker` do BullMQ é por fila, então há dois — **no mesmo processo e container**: `rm-to-toddle.students` (com fan-out em lotes) e `rm-to-toddle.staff` (sem fan-out; são 35 professores e ~200 turma-disciplina, fatiar traria só complexidade). O encerramento gracioso fecha os dois.
 
-**O agendamento se auto-cura.** O registro do scheduler vive **só no Redis**. Se o Redis reiniciar sem persistência, o `students-sync-nightly` desaparece e **nada dá erro** — o worker fica de pé, saudável, consumindo uma fila que nunca mais recebe nada; você descobre dias depois, ao notar que o Toddle parou de atualizar.
+**O agendamento se auto-cura.** O registro do scheduler vive **só no Redis**. Se o Redis reiniciar sem persistência, o scheduler desaparece e **nada dá erro** — o worker fica de pé, saudável, consumindo uma fila que nunca mais recebe nada; você descobre dias depois, ao notar que o Toddle parou de atualizar.
 
-Por isso o worker re-registra o agendamento no boot **e em cada reconexão ao Redis** (`manterAgendamentoDeAlunos`, em `packages/queues/src/schedulers.ts`). O evento de reconexão é o que importa: quando o Redis reinicia, o worker não reinicia — ele reconecta, então registrar só no boot não cobriria justamente esse caso. A definição do agendamento é única e compartilhada com `npm run schedule`, para o cron não divergir entre os dois lugares e criar dois schedulers.
+Por isso o worker **reconcilia** a agenda: no boot, em cada reconexão ao Redis, a cada aviso da tela (pub/sub) e num poll de 60s como piso (`manterAgendamento` → `reconcileSchedulers`, em `apps/worker/src/agenda/reconciliar.ts`). O evento de reconexão é o que importa: quando o Redis reinicia, o worker não reinicia — ele reconecta, então registrar só no boot não cobriria justamente esse caso. O poll é o piso porque pub/sub é entrega no máximo uma vez.
+
+`reconcileSchedulers()` é o **único** código que chama `upsertJobScheduler`/`removeJobScheduler` — a API grava a intenção no Postgres e avisa, nunca escreve no Redis. E o diff é nos dois sentidos: ele também remove fluxo desligado que ficou registrado e scheduler órfão com id fora do catálogo, que de outra forma dispararia para sempre sem aparecer em configuração nenhuma.
 
 Verificado em 07/08/2026: com o worker de pé, apagadas todas as chaves `repeat*` e o job atrasado, uma reconexão forçada (`redis-cli client kill type normal`) restaurou o scheduler e o próximo disparo sozinho.
 
@@ -283,6 +287,29 @@ Quatro coisas que quebram silenciosamente se você mudar:
 `NODE_ENV=production` **proíbe** `API_AUTH_MODE=localhost` no Zod — o modo sem login não sobe em produção nem por engano.
 
 Verificado localmente: as imagens `runtime` e `web` constroem, o typecheck roda dentro do build (erro de tipo derruba o deploy) e o worker sobe no container conectando em Redis e Postgres. **Não testado** contra o Coolify real — falta confirmar que a CloudTOTVS aceita o IP do servidor novo.
+
+## Plano de controle (API + tela)
+
+`npm run api` (porta 3333) e `npm run web` (Vite na 5173). Três assuntos: **agenda**, **de-para** e **auditoria**.
+
+**Autenticar não é autorizar.** `apps/api/src/auth.ts` valida o token do Google (assinatura, audience, expiração e a claim `hd` do Workspace) e responde *quem é*. `apps/api/src/autorizacao.ts` responde *pode o quê*, e a resposta vem da tabela `membership` — nunca do domínio do e-mail. Todo mundo da escola autentica; "todo mundo da escola" não é "quem pode mudar o job que escreve nota no RM".
+
+A negação é **por padrão, inclusive na leitura**: sem linha em `membership`, nenhuma rota protegida responde. Como a tabela nasce vazia, o primeiro acesso vem de fora da tela:
+
+```bash
+npm run conceder                 # lista quem tem acesso
+npm run conceder -- --subject <sub> --papel tenant_admin --email voce@escola...
+```
+
+Você não precisa saber o seu `subject` de cor: entre na tela, receba o 403 — ele devolve o seu subject e o comando pronto. Uma porta que pode abrir a si mesma não é uma porta trancada.
+
+**O que a tela escreve, e o que ela não escreve.** A agenda grava *intenção* em `flow_schedule` e avisa o worker; nenhuma rota toca o Redis. Mudança de vínculo é *proposta* (`operation` + `source_snapshot`), aplicada num segundo passo com o snapshot revalidado; nenhuma rota escreve direto em `id_mapping`, e não existe caminho de `DELETE` — o banco recusa (migration 018). Nada nesta API escreve no RM ou no Toddle.
+
+**Toda escrita grava `audit_event` na mesma transação da mudança.** Se a auditoria falhar, a mudança falha: auditoria de melhor esforço é exatamente como uma tabela de auditoria fica vazia enquanto todos acham que está funcionando. A migration 017 a tornou append-only no banco (recusa `UPDATE`, `DELETE` e `TRUNCATE`).
+
+**Sem a tela, pelo terminal:** `npm run agenda` mostra o mesmo painel — desejado × observado, próximo disparo, último run, último sucesso, órfãos e DLQ.
+
+**Alerta ativo.** `ALERTA_WEBHOOK_URL` (Slack, Discord, ntfy) recebe: job que esgotou as tentativas e caiu na DLQ, fluxo ligado sem run bem-sucedido dentro da janela, e run preso em `executing`. É **complementar** ao heartbeat, não substituto: o heartbeat é um terceiro reclamando do silêncio e cobre este processo morto; o webhook cobre o que o silêncio não pega — job morrendo com o worker vivo, que foi o caso dos 62 registros na DLQ por sete dias.
 
 ## Fluxo 1 — passo a passo (alunos)
 
