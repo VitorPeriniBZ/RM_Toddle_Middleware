@@ -1,6 +1,7 @@
 import { logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
 import type { EstadoNoRm } from './rmWriteDecision';
+import { canonizarNota } from './notaCanonica';
 
 /**
  * A config da escola que este processo atende.
@@ -263,7 +264,8 @@ function pick(row: ConsultaRow, ...names: string[]): string | undefined {
  */
 export function estadoNoRmDeNota(n: RmNota): EstadoNoRm {
   return {
-    valor: n.nota,
+    // Canônica: ver a nota em `notaCanonica` sobre "9" × "9.0000".
+    valor: canonizarNota(n.nota),
     autoriaEhIntegracao: n.criadoPelaIntegracao,
     // `SNOTAETAPA` guarda RECCREATEDON e RECMODIFIEDON; a Sentença traz os dois.
     // Alterada depois de criada = alguém editou dentro do RM, e o veredito

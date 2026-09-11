@@ -17,6 +17,7 @@ import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 import {
   achataTermGrades,
   avaliarVolume,
+  canonizarNota,
   decidirEscrita,
   estadoNoRmDeNota,
   fetchNotasFromRm,
@@ -356,7 +357,7 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
     decisoes.set(
       pr.origemId,
       decidirEscrita(
-        { chaveNatural: pr.chaveRm, valor: pr.linha.nota },
+        { chaveNatural: pr.chaveRm, valor: canonizarNota(pr.linha.nota) },
         noRmDaChave ? estadoNoRmDeNota(noRmDaChave) : null,
         proveniencia.get(chaveDoMapa(pr.chaveRm)) ?? null,
       ),
@@ -395,9 +396,9 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
       chaveNatural: pr.chaveRm,
       veredito: d.veredito as VereditoPendente,
       porque: d.porque,
-      valorDesejado: pr.linha.nota,
+      valorDesejado: canonizarNota(pr.linha.nota),
       valorNoRm: notasPorChave.get(pr.chaveRm)?.nota ?? null,
-      hashDesejado: hashValor(pr.linha.nota),
+      hashDesejado: hashValor(canonizarNota(pr.linha.nota)),
       origemId: pr.origemId,
     });
     if (abriu) pendenciasAbertas += 1;
@@ -512,7 +513,9 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
       await registrarEscrita({
         entidade: 'NOTA',
         chaveNatural: item.chaveRm,
-        payloadHash: hashValor(item.linha.nota),
+        // Canônico: a próxima passada compara com o valor RELIDO do RM, que
+        // vem com 4 casas. Ver `notaCanonica`.
+        payloadHash: hashValor(canonizarNota(item.linha.nota)),
         runId,
       });
     }
