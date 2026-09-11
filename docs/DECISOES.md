@@ -705,6 +705,72 @@ passos com diff, snapshot revalidado, e a decisão gravada com nome e motivo.
 | 109 `academicCourseId` no portal | admin do Toddle |
 | `POST /attendance` recusa — ticket, se algum dia precisar escrever no Toddle | Toddle |
 
+## D10 — O de-para de turma é chaveado por código de negócio, não por identity
+
+**11/09/2026.** Decidido ao preparar mais uma cópia da produção sobre a base de
+dev, com o agendamento **ligado** durante a cópia (decisão do Vitor).
+
+### O que estava errado
+
+O `id_mapping` sempre teve `rm_code` = código de **negócio** (RA, CHAPA,
+CODTURMA), exatamente para sobreviver a cópia de base. Duas entidades fugiam
+disso:
+
+| entidade | `rm_code` antigo |
+|---|---|
+| `COURSE` | `IDTURMADISC` |
+| `ASSESSMENT` | `IDTURMADISC:CODETAPA:CODPROVA` |
+
+`IDTURMADISC` é coluna *identity* do SQL Server. Toda cópia de produção
+renumera. Os dois desfechos:
+
+1. o número antigo não existe mais → a turma parece nova e o sync cria duplicata
+   no Toddle. **Barulhento**, alguém vê;
+2. o número antigo passou a pertencer a **outra** turma-disciplina → o de-para
+   aponta para a disciplina errada, sem erro nenhum, e frequência e nota vão para
+   a turma errada. **Silencioso**, e é o que motiva esta decisão.
+
+Com o cron em `0 3,9,12,16 * * *`, a primeira passada depois da cópia acontece
+sozinha, sem ninguém olhando.
+
+### A chave nova
+
+`COURSE.rm_code` = **`CODPERLET:CODTURMA:CODDISC`**.
+
+O período letivo entra na chave porque `CODTURMA` **não carrega o ano**
+(`EAVES01IA` é o mesmo código em 2026 e 2027). Medido em 11/09/2026 sobre as 392
+turma-disciplina do RM: `CODTURMA:CODDISC` é único dentro de um período — zero
+colisões; com o período, zero também entre períodos.
+
+É o preço de trocar surrogate por chave natural: o `IDTURMADISC` era globalmente
+único e não tinha o problema do ano. Vale a troca — a colisão de ano é
+determinística e testável, a renumeração não avisa.
+
+O separador `:` segue o precedente do `ASSESSMENT`.
+
+### O que mudou no código
+
+- `packages/domain/src/chaveCourse.ts` — monta, lê e reconhece a chave. Recusa
+  parte vazia: `2026::ES26001` casaria com qualquer outra chave furada e uniria
+  duas turmas no mesmo registro do Toddle.
+- `apps/worker/src/scripts/migrarChaveCourse.ts` — a migração, **fail-closed**.
+  Se uma linha não puder ser traduzida, nada é escrito: meia migração deixa a
+  base com duas convenções e aí `findByRmCode` erra em silêncio, que é a própria
+  classe de falha que se quer eliminar.
+- `sync/professores.ts`, `scripts/reconciliarTurmas.ts` e
+  `scripts/criarTurma1714.ts` passam a resolver pela chave nova.
+
+Não é migração `.sql` porque a correspondência `IDTURMADISC → (CODTURMA,
+CODDISC)` só existe **no RM** — o Postgres não tem como consultá-la, e um de-para
+congelado dentro de um `.sql` envelhece no dia seguinte.
+
+### O que fica em aberto
+
+`ASSESSMENT` continua com `IDTURMADISC` no prefixo. Mesmo problema, mesma
+solução, não feito aqui.
+
+---
+
 ## Dívidas técnicas conhecidas
 
 **Chave do `PERIOD` sem campus.** `rm_code` é o sufixo do `CODHOR` (`001`..`007`),
