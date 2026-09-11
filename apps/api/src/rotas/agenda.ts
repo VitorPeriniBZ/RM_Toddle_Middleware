@@ -70,6 +70,40 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
     const runs = await ultimosRunsPorTipo(tipos);
     const sucessos = await ultimoSucessoPorTipo(tipos);
 
+    /**
+     * Já existe execução em voo? A tela precisa saber ANTES de oferecer o botão.
+     *
+     * O POST recusa com 409 de qualquer jeito — essa é a guarda de verdade, e
+     * continua sendo, porque entre esta leitura e o clique passa tempo. Isto
+     * aqui é para o botão nascer desabilitado em vez de a pessoa descobrir pelo
+     * erro vermelho. Um botão que só serve para produzir recusa é ruído.
+     */
+    const emVooPorFluxo = new Map<string, { quantidade: number; desde: string | null }>();
+    await Promise.all(
+      FLUXOS_EM_ORDEM.map(async (fluxo) => {
+        const fila = getQueue(fluxo.fila);
+        const naFila = await fila.getJobs([...ESTADOS_NAO_TERMINAIS]);
+        const comEstado = await Promise.all(
+          naFila.map(async (j) => ({
+            job: j,
+            estado: (await j.getState()) as
+              | 'waiting' | 'active' | 'delayed' | 'paused' | 'prioritized',
+            repeatJobKey: (j as { repeatJobKey?: string | null }).repeatJobKey ?? null,
+          })),
+        );
+        // O marcador do próximo cron é `delayed` permanente e NÃO é trabalho.
+        const emVoo = comEstado.filter(
+          (x) => execucoesEmVoo([{ estado: x.estado, repeatJobKey: x.repeatJobKey }]).length > 0,
+        );
+        if (emVoo.length === 0) return;
+        const inicios = emVoo.map((x) => x.job.processedOn ?? x.job.timestamp).filter(Boolean);
+        emVooPorFluxo.set(fluxo.key, {
+          quantidade: emVoo.length,
+          desde: inicios.length ? new Date(Math.min(...(inicios as number[]))).toISOString() : null,
+        });
+      }),
+    );
+
     const fluxos = FLUXOS_EM_ORDEM.map((fluxo) => {
       const linha = desejada.find((a) => a.flowKey === fluxo.key) ?? null;
       const obs = porId.get(fluxo.key) ?? null;
@@ -120,6 +154,8 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         podeAtivar: fluxo.podeAtivar,
         motivoDoBloqueio: fluxo.motivoDoBloqueio ?? null,
         avisoAoExecutarAgora: fluxo.avisoAoExecutarAgora,
+        /** `null` = nada rodando. Preenchido = o botão de rodar agora fica travado. */
+        execucaoEmVoo: emVooPorFluxo.get(fluxo.key) ?? null,
         janelaSemSucessoHoras: fluxo.janelaSemSucessoHoras,
         desejado: linha,
         observado: obs,

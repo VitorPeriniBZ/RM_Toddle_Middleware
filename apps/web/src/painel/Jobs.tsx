@@ -38,13 +38,15 @@ export function Jobs({ aoErrar }: { aoErrar: (e: unknown) => void }) {
     }
   }
 
+  // Rápido quando há trabalho, devagar quando não há: uma barra de progresso que
+  // só anda com F5 não é barra de progresso, mas pedir de 5 em 5 segundos com a
+  // fila vazia é só barulho.
+  const ocupado = Boolean(dados?.fluxos.some((f) => f.contagem.ativos > 0 || f.contagem.esperando > 0));
+  useEffect(() => { void carregar(); }, []);
   useEffect(() => {
-    void carregar();
-    // Enquanto houver job ativo o painel se atualiza sozinho: uma barra de
-    // progresso que só anda com F5 não é barra de progresso.
-    const t = setInterval(() => void carregar(), 5_000);
+    const t = setInterval(() => void carregar(), ocupado ? 3_000 : 30_000);
     return () => clearInterval(t);
-  }, []);
+  }, [ocupado]);
 
   if (!dados) return <p style={s.fraco}>{carregando ? 'Lendo as filas…' : '—'}</p>;
 

@@ -104,6 +104,11 @@ export interface FluxoNaTela {
   motivoDoBloqueio: string | null;
   /** O que a confirmação de "Sincronizar agora" mostra. Vem do catálogo de fluxos. */
   avisoAoExecutarAgora: string;
+  /**
+   * `null` = nada rodando. Preenchido = já há execução em voo, e o botão de
+   * rodar agora nasce travado. A guarda de verdade continua sendo o 409 do POST.
+   */
+  execucaoEmVoo: { quantidade: number; desde: string | null } | null;
   janelaSemSucessoHoras: number;
   desejado: AgendaDoFluxo | null;
   observado: SchedulerObservado | null;
