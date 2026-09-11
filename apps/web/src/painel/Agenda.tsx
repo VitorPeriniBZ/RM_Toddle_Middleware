@@ -31,6 +31,39 @@ const PRESETS: Array<{ rotulo: string; cron: string }> = [
   { rotulo: 'De hora em hora, 6h–22h', cron: '0 6-22 * * *' },
 ];
 
+/**
+ * O estado de um fluxo, em UMA palavra.
+ *
+ * A versão anterior empilhava até quatro selos no mesmo cabeçalho (ligado +
+ * bloqueado + divergente + revisão não confirmada). Quatro selos não são quatro
+ * informações: são um borrão que obriga a ler tudo para saber se importa. Aqui a
+ * precedência é explícita — o pior vence — e o resto desce para os detalhes.
+ */
+type Situacao = 'divergente' | 'bloqueado' | 'revisao' | 'ligado' | 'desligado';
+
+function situacaoDe(f: FluxoNaTela): Situacao {
+  if (f.divergencias.length > 0) return 'divergente';
+  if (!f.podeAtivar) return 'bloqueado';
+  if (f.revisaoPendente && f.observadoConfere) return 'revisao';
+  return f.desejado?.ativo ? 'ligado' : 'desligado';
+}
+
+const TOM: Record<Situacao, 'bom' | 'ruim' | 'atencao' | 'neutro'> = {
+  divergente: 'ruim',
+  bloqueado: 'atencao',
+  revisao: 'atencao',
+  ligado: 'bom',
+  desligado: 'neutro',
+};
+
+const ROTULO_SITUACAO: Record<Situacao, string> = {
+  divergente: 'divergente',
+  bloqueado: 'bloqueado',
+  revisao: 'revisão pendente',
+  ligado: 'ligado',
+  desligado: 'desligado',
+};
+
 export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
   const [painel, setPainel] = useState<Painel | null>(null);
   const [carregando, setCarregando] = useState(false);
@@ -51,10 +84,30 @@ export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
 
   if (!painel) return <p style={s.fraco}>{carregando ? 'Lendo a agenda…' : '—'}</p>;
 
+  const situacoes = painel.fluxos.map(situacaoDe);
+  const ligados = situacoes.filter((x) => x === 'ligado').length;
+  const problemas = situacoes.filter((x) => x === 'divergente').length;
+  const atencao = situacoes.filter((x) => x === 'bloqueado' || x === 'revisao').length;
+  // "sem pendência" tem de significar NADA a fazer. Contar só divergência
+  // deixaria o selo verde ao lado de "1 atenção" e de um fluxo bloqueado — o
+  // sinal misturado que esta barra existe para acabar.
+  const tudoBem =
+    problemas === 0 && atencao === 0 && painel.dlq.total === 0 && painel.orfaos.length === 0;
+
   return (
     <>
-      <div style={{ ...s.linha, justifyContent: 'space-between', marginTop: '1rem' }}>
-        <h2 style={{ ...s.h2, marginTop: 0 }}>Agenda</h2>
+      {/* A resposta antes da leitura. Quem abre a tela quer saber se precisa
+          fazer alguma coisa — não ler quatro cartões para descobrir que não. */}
+      <div style={{ ...s.barra, justifyContent: 'space-between' }}>
+        <div style={s.linha}>
+          <span style={s.selo(tudoBem ? 'bom' : problemas > 0 ? 'ruim' : 'atencao')}>
+            {tudoBem ? 'sem pendência' : problemas > 0 ? `${problemas} divergente(s)` : 'requer atenção'}
+          </span>
+          <Kpi n={ligados} de={painel.fluxos.length} rotulo="ligados" tom="neutro" />
+          <Kpi n={atencao} rotulo="atenção" tom={atencao > 0 ? 'atencao' : 'neutro'} />
+          <Kpi n={painel.dlq.total} rotulo="na DLQ" tom={painel.dlq.total > 0 ? 'ruim' : 'neutro'} />
+          <Kpi n={painel.orfaos.length} rotulo="órfãos" tom={painel.orfaos.length > 0 ? 'atencao' : 'neutro'} />
+        </div>
         <button style={s.botao} onClick={() => void carregar()} disabled={carregando}>
           {carregando ? 'Atualizando…' : 'Atualizar'}
         </button>
@@ -74,34 +127,53 @@ export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
       {painel.orfaos.length > 0 && (
         <div style={s.aviso('atencao')}>
           <strong>{painel.orfaos.length} scheduler(s) órfão(s) no Redis.</strong> Id que não pertence a
-          nenhum fluxo — ele dispara sem aparecer em configuração alguma. A próxima reconciliação do
+          nenhum fluxo — dispara sem aparecer em configuração alguma. A próxima reconciliação do
           worker remove.
-          <ul style={{ margin: '.4rem 0 0', paddingLeft: '1.2rem' }}>
-            {painel.orfaos.map((o) => (
-              <li key={o.id} style={s.mono}>{o.id} · {o.fila} · {o.cron}</li>
-            ))}
-          </ul>
+          <details>
+            <summary style={s.resumoDetalhe}>ver os ids</summary>
+            <div style={s.blocoTecnico}>
+              {painel.orfaos.map((o) => `${o.id}  ·  ${o.fila}  ·  ${o.cron}`).join('\n')}
+            </div>
+          </details>
         </div>
       )}
 
       <h2 style={s.h2}>Fila de jobs mortos (DLQ)</h2>
-      <div style={painel.dlq.total > 0 ? s.aviso('ruim') : s.aviso('bom')}>
-        <strong>{painel.dlq.total}</strong> registro(s).
-        {painel.dlq.total > 0 && (
-          <>
-            {' '}Nada consome esta fila — eles ficam aqui até alguém reprocessar com{' '}
-            <code style={s.mono}>npm run dlq</code>.
-            <ul style={{ margin: '.4rem 0 0', paddingLeft: '1.2rem' }}>
+      {painel.dlq.total === 0 ? (
+        <p style={s.fraco}>Vazia.</p>
+      ) : (
+        <div style={s.aviso('ruim')}>
+          <strong>{painel.dlq.total}</strong> registro(s). Nada consome esta fila — ficam aqui até
+          alguém reprocessar com <code style={s.mono}>npm run dlq</code>.
+          <table style={{ ...s.tabela, marginTop: '.5rem' }}>
+            <thead>
+              <tr><th style={s.th}>job</th><th style={s.th}>quando</th><th style={s.th}>motivo</th></tr>
+            </thead>
+            <tbody>
               {painel.dlq.recentes.map((r, i) => (
-                <li key={r.jobId ?? i} style={{ fontSize: '.85rem' }}>
-                  <span style={s.mono}>{r.jobName}</span> · {quando(r.failedAt)} · {r.failedReason.slice(0, 140)}
-                </li>
+                <tr key={r.jobId ?? i}>
+                  <td style={{ ...s.td, ...s.mono, whiteSpace: 'nowrap' }}>{r.jobName}</td>
+                  <td style={{ ...s.td, whiteSpace: 'nowrap' }}>{quando(r.failedAt)}</td>
+                  <td style={{ ...s.td, fontSize: '.8rem' }}>{r.failedReason.slice(0, 200)}</td>
+                </tr>
               ))}
-            </ul>
-          </>
-        )}
-      </div>
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
+  );
+}
+
+/** Número grande + rótulo. `de` mostra o total quando a fração importa. */
+function Kpi({ n, de, rotulo, tom }: { n: number; de?: number; rotulo: string; tom: 'bom' | 'ruim' | 'atencao' | 'neutro' }) {
+  return (
+    <div>
+      <div style={s.kpiNumero(tom)}>
+        {n}{de !== undefined && <span style={{ fontSize: '.8rem', fontWeight: 400, color: cor.fraco }}>/{de}</span>}
+      </div>
+      <div style={s.kpiRotulo}>{rotulo}</div>
+    </div>
   );
 }
 
@@ -115,19 +187,15 @@ function CartaoDoFluxo({
   aoErrar: (e: unknown) => void;
 }) {
   const d = fluxo.desejado;
-  const ligado = Boolean(d?.ativo);
+  const situacao = situacaoDe(fluxo);
+  const confere = Boolean(fluxo.observado && d && fluxo.observado.cron === d.cron);
 
   return (
     <div style={s.cartao}>
       <div style={{ ...s.linha, justifyContent: 'space-between' }}>
         <div style={s.linha}>
           <h3 style={s.h3}>{fluxo.rotulo}</h3>
-          <span style={s.selo(ligado ? 'bom' : 'neutro')}>{ligado ? 'ligado' : 'desligado'}</span>
-          {!fluxo.podeAtivar && <span style={s.selo('atencao')}>bloqueado</span>}
-          {fluxo.divergencias.length > 0 && <span style={s.selo('ruim')}>divergente</span>}
-          {fluxo.divergencias.length === 0 && fluxo.revisaoPendente && fluxo.observadoConfere && (
-            <span style={s.selo('atencao')}>revisão não confirmada</span>
-          )}
+          <span style={s.selo(TOM[situacao])}>{ROTULO_SITUACAO[situacao]}</span>
         </div>
         <div style={s.linha}>
           <BotaoDeChave fluxo={fluxo} aoMudar={aoMudar} aoErrar={aoErrar} />
@@ -137,87 +205,86 @@ function CartaoDoFluxo({
         </div>
       </div>
 
-      <table style={{ ...s.tabela, marginTop: '.6rem' }}>
-        <tbody>
-          <tr>
-            <td style={{ ...s.td, ...s.fraco, width: 130 }}>desejado</td>
-            <td style={s.td}>
-              {d ? (
-                <>
-                  <span style={s.mono}>{d.cron}</span> <span style={s.fraco}>({d.timezone}, rev {d.revisao})</span>
-                </>
-              ) : (
-                <span style={{ color: cor.atencao }}>
-                  sem linha na agenda = desligado. Rode <code style={s.mono}>npm run schedule</code> para semear.
-                </span>
-              )}
-            </td>
-          </tr>
-          <tr>
-            <td style={{ ...s.td, ...s.fraco }}>observado</td>
-            <td style={s.td}>
-              {fluxo.observado ? (
-                <>
-                  <span style={s.mono}>{fluxo.observado.cron}</span>{' '}
-                  <span style={s.fraco}>
-                    próximo {quando(fluxo.observado.proximoDisparoEm)} · {fluxo.observado.iteracoes ?? 0} disparos
-                  </span>
-                </>
-              ) : (
-                <span style={{ color: ligado ? cor.ruim : cor.fraco }}>nada registrado no Redis</span>
-              )}
-            </td>
-          </tr>
-          <tr>
-            <td style={{ ...s.td, ...s.fraco }}>último run</td>
-            <td style={s.td}>
-              {fluxo.ultimoRun ? (
-                <>
-                  <span style={s.selo(
-                    fluxo.ultimoRun.estado === 'succeeded' ? 'bom'
-                      : fluxo.ultimoRun.estado === 'failed' ? 'ruim' : 'atencao',
-                  )}>
-                    {fluxo.ultimoRun.estado}
-                  </span>{' '}
-                  {quando(fluxo.ultimoRun.atualizadoEm)}{' '}
-                  <span style={s.mono}>{JSON.stringify(fluxo.ultimoRun.resultado)}</span>
-                </>
-              ) : (
-                <span style={s.fraco}>nenhum registrado em job_run</span>
-              )}
-            </td>
-          </tr>
-          <tr>
-            <td style={{ ...s.td, ...s.fraco }}>último sucesso</td>
-            <td style={s.td}>
-              {/* A pergunta que importa não é "rodou?", é "há quanto tempo dá certo?".
-                  Um fluxo que falha de hora em hora tem último run recentíssimo. */}
-              <span style={{ color: fluxo.ultimoSucessoEm ? cor.texto : cor.atencao }}>
-                {desde(fluxo.ultimoSucessoEm)}
-              </span>{' '}
-              <span style={s.fraco}>(o vigia alerta depois de {fluxo.janelaSemSucessoHoras}h)</span>
-            </td>
-          </tr>
-          {d?.ativo && fluxo.proximosDisparos.length > 0 && (
-            <tr>
-              <td style={{ ...s.td, ...s.fraco }}>próximos</td>
-              <td style={{ ...s.td, ...s.mono }}>{fluxo.proximosDisparos.map((p) => p.slice(0, 16)).join('  ·  ')}</td>
-            </tr>
+      {/* ─── desejado × observado, lado a lado ─────────────────────────────
+          Esta comparação é o motivo desta aba existir. Se o Redis reiniciar sem
+          persistência o scheduler some e NADA dá erro; o worker segue de pé
+          consumindo uma fila que nunca mais recebe nada. Lado a lado, a
+          divergência aparece antes de alguém ler o texto. */}
+      <div style={s.comparacao}>
+        <div>
+          <div style={s.dadoRotulo}>desejado (banco)</div>
+          {d ? (
+            <div style={s.mono}>{d.cron}</div>
+          ) : (
+            <div style={{ color: cor.atencao, fontSize: '.85rem' }}>
+              sem linha na agenda = desligado
+            </div>
           )}
-        </tbody>
-      </table>
+        </div>
+        <div
+          style={{ fontSize: '1.1rem', color: confere ? cor.bom : fluxo.observado ? cor.ruim : cor.fraco }}
+          title={confere ? 'o Redis está com este horário' : 'o Redis NÃO confere'}
+        >
+          {confere ? '=' : '≠'}
+        </div>
+        <div>
+          <div style={s.dadoRotulo}>observado (Redis)</div>
+          {fluxo.observado ? (
+            <div style={s.mono}>{fluxo.observado.cron}</div>
+          ) : (
+            <div style={{ color: d?.ativo ? cor.ruim : cor.fraco, fontSize: '.85rem' }}>
+              nada registrado
+            </div>
+          )}
+        </div>
+      </div>
 
+      {/* ─── a pergunta que importa ────────────────────────────────────────
+          Não é "rodou?", é "há quanto tempo dá certo?". Um fluxo que falha de
+          hora em hora tem último run recentíssimo — por isso o último SUCESSO
+          vem primeiro e sozinho. */}
+      <div style={s.tira}>
+        <span>
+          <span style={s.dadoRotulo}>último sucesso </span>
+          <strong style={{ color: fluxo.ultimoSucessoEm ? cor.texto : cor.atencao }}>
+            {desde(fluxo.ultimoSucessoEm)}
+          </strong>
+          <span style={s.fraco}> (alerta em {fluxo.janelaSemSucessoHoras}h)</span>
+        </span>
+        {fluxo.observado?.proximoDisparoEm && (
+          <span>
+            <span style={s.dadoRotulo}>próximo </span>
+            {quando(fluxo.observado.proximoDisparoEm)}
+          </span>
+        )}
+        {fluxo.ultimoRun && (
+          <span>
+            <span style={s.dadoRotulo}>último run </span>
+            <span style={s.selo(
+              fluxo.ultimoRun.estado === 'succeeded' ? 'bom'
+                : fluxo.ultimoRun.estado === 'failed' ? 'ruim' : 'atencao',
+            )}>
+              {fluxo.ultimoRun.estado}
+            </span>{' '}
+            {quando(fluxo.ultimoRun.atualizadoEm)}
+          </span>
+        )}
+      </div>
+
+      {/* Divergência é o único aviso que fica sempre aberto: é a razão do selo
+          vermelho, e esconder a explicação do vermelho faz o vermelho virar
+          enfeite. */}
       {fluxo.divergencias.map((div) => (
         <div key={div} style={s.aviso('ruim')}>{div}</div>
       ))}
 
-      {/* Revisão pendente com o Redis JÁ conferindo nao e divergencia: e quase
-          sempre "nenhum worker de pe para confirmar". Fica em tom neutro, porque
+      {/* Revisão pendente com o Redis JÁ conferindo não é divergência: é quase
+          sempre "nenhum worker de pé para confirmar". Tom neutro, porque
           vermelho em cima do estado correto ensina a ignorar o vermelho. */}
       {fluxo.revisaoPendente && fluxo.observadoConfere && (
         <div style={s.aviso('atencao')}>
-          Revisão {fluxo.desejado?.revisao} ainda não confirmada por um worker — mas o Redis já está
-          com este horário. Some quando o worker passar (boot, aviso ou o poll de 60s).
+          Revisão {d?.revisao} ainda não confirmada por um worker — mas o Redis já está com este
+          horário. Some quando o worker passar (boot, aviso ou o poll de 60s).
         </div>
       )}
 
@@ -226,6 +293,41 @@ function CartaoDoFluxo({
           <strong>Não pode ser ligado.</strong> {fluxo.motivoDoBloqueio}
         </div>
       )}
+
+      {/* O resto é verdade, e quase nunca é a pergunta. Fica a um clique. */}
+      <details>
+        <summary style={s.resumoDetalhe}>detalhes técnicos</summary>
+        <div style={s.tira}>
+          <span><span style={s.dadoRotulo}>flowKey </span><code style={s.mono}>{fluxo.flowKey}</code></span>
+          {d && <span><span style={s.dadoRotulo}>fuso </span>{d.timezone}</span>}
+          {d && <span><span style={s.dadoRotulo}>revisão </span>{d.revisao}</span>}
+          {fluxo.observado && (
+            <span><span style={s.dadoRotulo}>disparos </span>{fluxo.observado.iteracoes ?? 0}</span>
+          )}
+        </div>
+        {!d && (
+          <div style={{ ...s.fraco, marginTop: '.4rem' }}>
+            Rode <code style={s.mono}>npm run schedule</code> para semear a linha na agenda.
+          </div>
+        )}
+        {d?.ativo && fluxo.proximosDisparos.length > 0 && (
+          <>
+            <div style={{ ...s.dadoRotulo, marginTop: '.5rem' }}>próximos disparos</div>
+            <div style={s.blocoTecnico}>
+              {fluxo.proximosDisparos.map((x) => x.slice(0, 16)).join('\n')}
+            </div>
+          </>
+        )}
+        {fluxo.ultimoRun && (
+          <>
+            <div style={{ ...s.dadoRotulo, marginTop: '.5rem' }}>resultado do último run</div>
+            <div style={s.blocoTecnico}>{JSON.stringify(fluxo.ultimoRun.resultado, null, 2)}</div>
+          </>
+        )}
+        {!fluxo.ultimoRun && (
+          <div style={{ ...s.fraco, marginTop: '.4rem' }}>nenhum run registrado em <code style={s.mono}>job_run</code>.</div>
+        )}
+      </details>
 
       {editando && <EditorDeHorario fluxo={fluxo} aoMudar={aoMudar} aoErrar={aoErrar} />}
     </div>

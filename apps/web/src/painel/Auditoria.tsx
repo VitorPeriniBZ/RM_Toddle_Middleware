@@ -27,48 +27,73 @@ export function Auditoria({ aoErrar }: { aoErrar: (e: unknown) => void }) {
 
   return (
     <>
-      <h2 style={s.h2}>Auditoria ({eventos.length} eventos)</h2>
-      <p style={s.fraco}>
-        Append-only: a tabela recusa UPDATE, DELETE e TRUNCATE no banco (migration 017), não só por
-        contrato. Correção se faz com um evento novo.
-      </p>
-      {eventos.length === 0 && (
-        <p style={s.fraco}>
+      <div style={s.barra}>
+        <div>
+          <div style={s.kpiNumero('neutro')}>{eventos.length}</div>
+          <div style={s.kpiRotulo}>eventos</div>
+        </div>
+        <span style={{ ...s.fraco, maxWidth: 520 }}>
+          Append-only: a tabela recusa UPDATE, DELETE e TRUNCATE no banco (migration 017), não só por
+          contrato. Correção se faz com um evento novo.
+        </span>
+      </div>
+
+      {eventos.length === 0 ? (
+        <p style={{ ...s.fraco, marginTop: '1rem' }}>
           Nada ainda. A trilha começa na primeira mudança feita pela tela.
         </p>
-      )}
-      <table style={s.tabela}>
-        <thead>
-          <tr>
-            <th style={s.th}>quando</th><th style={s.th}>quem</th><th style={s.th}>ação</th>
-            <th style={s.th}>alvo</th><th style={s.th}>antes → depois</th><th style={s.th}>motivo</th>
-          </tr>
-        </thead>
-        <tbody>
-          {eventos.map((e) => (
-            <tr key={e.id}>
-              <td style={{ ...s.td, whiteSpace: 'nowrap' }}>{quando(e.ocorridoEm)}</td>
-              <td style={s.td}>{e.quem ?? e.ator}</td>
-              <td style={{ ...s.td, ...s.mono }}>{e.acao}</td>
-              <td style={{ ...s.td, ...s.mono }}>
-                {e.entidade ? `${e.entidade}` : '—'}
-                {e.entidadeId ? <><br />{e.entidadeId}</> : null}
-              </td>
-              <td style={{ ...s.td, ...s.mono, fontSize: '.78rem' }}>
-                {resumir(e.antes)} → {resumir(e.depois)}
-              </td>
-              <td style={s.td}>{e.motivo ?? '—'}</td>
+      ) : (
+        <table style={{ ...s.tabela, marginTop: '1rem' }}>
+          <thead>
+            <tr>
+              <th style={s.th}>quando</th>
+              <th style={s.th}>quem</th>
+              <th style={s.th}>o quê</th>
+              <th style={s.th}>motivo</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {eventos.map((e) => (
+              <tr key={e.id}>
+                <td style={{ ...s.td, whiteSpace: 'nowrap', width: 110 }}>{quando(e.ocorridoEm)}</td>
+                <td style={{ ...s.td, width: 170, wordBreak: 'break-word' }}>{e.quem ?? e.ator}</td>
+                <td style={s.td}>
+                  {/* Ação e alvo juntos: eram duas colunas monoespaçadas que
+                      espremiam o motivo, que é a única parte escrita por gente. */}
+                  <code style={s.mono}>{e.acao}</code>
+                  {e.entidade && (
+                    <span style={s.fraco}>
+                      {' '}· {e.entidade}
+                      {e.entidadeId ? ` ${e.entidadeId}` : ''}
+                    </span>
+                  )}
+                  {(e.antes !== undefined && e.antes !== null) || (e.depois !== undefined && e.depois !== null) ? (
+                    <details>
+                      <summary style={{ ...s.resumoDetalhe, marginTop: '.2rem' }}>antes → depois</summary>
+                      <div style={s.blocoTecnico}>
+                        {`antes:  ${completo(e.antes)}\ndepois: ${completo(e.depois)}`}
+                      </div>
+                    </details>
+                  ) : null}
+                </td>
+                <td style={s.td}>{e.motivo ?? <span style={s.fraco}>—</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </>
   );
 }
 
-/** JSON curto: a tabela precisa caber, e o detalhe completo está no banco. */
-function resumir(v: unknown): string {
+/**
+ * O valor inteiro, dentro do detalhe recolhido.
+ *
+ * Antes era truncado em 90 caracteres direto na célula: o JSON espremia a tabela
+ * E ficava incompleto, então não servia nem para ler rápido nem para investigar.
+ * Recolhido, cabe inteiro.
+ */
+function completo(v: unknown): string {
   if (v === null || v === undefined) return '—';
-  const txt = typeof v === 'string' ? v : JSON.stringify(v);
-  return txt.length > 90 ? `${txt.slice(0, 90)}…` : txt;
+  return typeof v === 'string' ? v : JSON.stringify(v, null, 2);
 }
