@@ -1,0 +1,499 @@
+import { configVersion, env, logger, tenantConfig } from '@rm-toddle/config';
+import {
+  abrirRun,
+  carregarProveniencia,
+  chaveDoMapa,
+  contarProveniencia,
+  estaAprovado,
+  fecharRun,
+  idMappingRepository,
+  pedirAprovacao,
+  registrarEscrita,
+  registrarPendencia,
+  resumoPendencias,
+  type VereditoPendente,
+} from '@rm-toddle/db';
+import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
+import {
+  achataAvaliacoes,
+  avaliarVolume,
+  decidirEscrita,
+  hashValor,
+  montaLotesNotasAvaliacao,
+  montaXmlProva,
+  projetaLoteAvaliacoes,
+  resumirDecisoes,
+  RmAssessmentTargets,
+  RmGradeTargets,
+  type AvaliacaoVolume,
+  type ContextoProjecaoAvaliacao,
+  type Decisao,
+  type JanelaToddle,
+  type LoteNotasAvaliacao,
+  type NotaParaEscrever,
+  type ProvaParaCriar,
+} from '@rm-toddle/domain';
+
+const cfg = tenantConfig;
+
+/**
+ * A via de NOTA DE AVALIAÇÃO: Toddle -> TOTVS RM.
+ *
+ * ─── POR QUE ESTA ORQUESTRAÇÃO SAIU DO SCRIPT ───────────────────────────────
+ *
+ * Ela morava dentro de `scripts/escreverAvaliacoes.ts`, e o comentário de lá
+ * dizia: "sem serviço extraído: não existe segundo consumidor". Agora existe. O
+ * job `term-grades.sync` apontava para a nota de ETAPA, destino que o
+ * `EduNotaEtapaData` aceita e DESCARTA (`ok=true`, releitura `0.0000`, medido em
+ * 09/09/2026) — ele não podia rodar, e por isso o fluxo estava bloqueado na tela.
+ *
+ * Redirecioná-lo exigia que os dois caminhos — o CLI e o job — chamassem o MESMO
+ * código. Duplicar a orquestração faria os dois divergirem, e o lado que
+ * divergisse em silêncio seria o automático, que ninguém lê.
+ *
+ * ─── DOIS DESTINOS, E UM DELES É ESTRUTURA ──────────────────────────────────
+ *
+ * `SProvas` é a avaliação; `SNotas` é a nota dela. Quando o assignment do Toddle
+ * não tem prova no RM, este serviço CRIA a prova — e isso é escrever ESTRUTURA
+ * acadêmica, não valor. Nota errada se corrige; avaliação a mais polui a tela do
+ * professor e o boletim. Por isso as provas a criar saem separadas no relatório
+ * e contam para o gate de volume.
+ *
+ * ─── O QUE ELE NÃO FAZ ──────────────────────────────────────────────────────
+ *
+ * Não fecha a etapa. Escrever `SNotas` NÃO recalcula `SNOTAETAPA` — medido,
+ * inclusive tocando o `SNotaEtapa` depois e esperando. Fechar o boletim é
+ * processo do RM e ato humano.
+ */
+
+export interface OpcoesSincronizacaoAvaliacoes {
+  /** `false` = ensaio: tudo é calculado, nada é enviado ao RM. */
+  executar: boolean;
+  /** Restringe a UMA turma-disciplina (IDTURMADISC). */
+  turma?: string;
+  /** Data de referência do teste de janela. Default: hoje. */
+  dataRef?: string;
+  /** Ver `NOTA_EXIGIR_ETAPA_LIBERADA`. Default: o valor do ambiente. */
+  exigirEtapaLiberada?: boolean;
+  /** Quem operou, gravado no pedido de aprovação. */
+  quem?: string;
+}
+
+export interface RelatorioAvaliacoes {
+  chaveRun: string;
+  codFilial: string;
+  configVersion: string;
+  dataRef: string;
+  tiposElegiveis: string[];
+  turmasEmEscopo: number;
+  origem: {
+    avaliacoes: number;
+    porTipo: Record<string, number>;
+    resultadosLidos: number;
+    comNota: number;
+    semNota: number;
+    soRubrica: number;
+  };
+  alvos: { etapasDigitaveis: number; provas: number; notas: number };
+  projecao: {
+    projetaveis: number;
+    recusados: number;
+    porMotivo: Record<string, number>;
+    colisoes: number;
+  };
+  decisoes: { porVeredito: Record<string, number>; aEscrever: number; pendencias: number };
+  provasACriar: ProvaParaCriar[];
+  lotes: LoteNotasAvaliacao[];
+  volume: AvaliacaoVolume;
+  pendenciasAbertasNestaPassada: number;
+  filaAberta: number;
+  /** Preenchido só quando `executar` e o gate liberou. */
+  escrita?: {
+    provasCriadas: number;
+    provasQueFalharam: Array<{ chave: string; resposta: string }>;
+    notasEnviadas: number;
+    conferidas: number;
+    divergentes: Array<{ chave: string; enviado: string; noRm: string }>;
+    recusadas: Array<{ chave: string; resposta: string }>;
+    chamadas: number;
+    provasNoRm: { antes: number; depois: number };
+    notasNoRm: { antes: number; depois: number };
+  };
+  /** Por que não escreveu, quando não escreveu. */
+  naoEscreveu?:
+    | 'ensaio'
+    | 'nada-a-escrever'
+    | 'recusado-pelo-teto'
+    | 'precisa-aprovacao'
+    | 'desligado';
+}
+
+/** Um único campus: o contexto do wsDataServer exige UM CODFILIAL. */
+export function campusUnico(): string {
+  const campi = cfg.rm.escopo.filiais.split(',').map((c) => c.trim()).filter(Boolean);
+  if (cfg.rm.escopo.filiais.toUpperCase() === 'ALL' || campi.length !== 1) {
+    throw new Error(
+      `RM_CODFILIAL="${cfg.rm.escopo.filiais}" não serve para escrita: o contexto do ` +
+        'wsDataServer exige UM CODFILIAL. Rode um campus por vez.',
+    );
+  }
+  return campi[0];
+}
+
+export async function sincronizarAvaliacoes(
+  op: OpcoesSincronizacaoAvaliacoes,
+): Promise<RelatorioAvaliacoes> {
+  const codFilial = campusUnico();
+  const versao = configVersion();
+  const dataRef = op.dataRef ?? new Date().toISOString().slice(0, 10);
+  const chaveRun = `aval:${cfg.slug}:${codFilial}:${op.turma ?? 'todas'}:${dataRef}`;
+
+  await toddleClient.assertTargetOrganization();
+
+  // ─── de-para, só ATIVOS ───────────────────────────────────────────────────
+  const cursos = await idMappingRepository.listByType('COURSE', 'active');
+  const alunos = await idMappingRepository.listByType('STUDENT', 'active');
+  const etapasMap = await idMappingRepository.listByType('GRADING_PERIOD', 'active');
+  const avaliacoesMap = await idMappingRepository.listByType('ASSESSMENT', 'active');
+
+  const cursoParaTurmaDisc = new Map(cursos.map((m) => [m.toddleId, m.rmCode]));
+  const alunoParaRa = new Map(alunos.map((m) => [m.toddleId, m.rmCode]));
+  const periodoParaEtapa = new Map(etapasMap.map((m) => [m.toddleId, m.rmCode]));
+  const avaliacaoMapeada = new Map(avaliacoesMap.map((m) => [m.toddleId, m.rmCode]));
+
+  let turmasEmEscopo = cursos.map((m) => m.rmCode);
+  let cursosFiltrados = cursos;
+  if (op.turma) {
+    if (!turmasEmEscopo.includes(op.turma)) {
+      throw new Error(`--turma ${op.turma} não tem de-para COURSE ativo.`);
+    }
+    turmasEmEscopo = [op.turma];
+    cursosFiltrados = cursos.filter((m) => m.rmCode === op.turma);
+    cursoParaTurmaDisc.clear();
+    for (const m of cursosFiltrados) cursoParaTurmaDisc.set(m.toddleId, m.rmCode);
+  }
+
+  // ─── alvos no RM ──────────────────────────────────────────────────────────
+  const etapas = await RmGradeTargets.carregar(turmasEmEscopo, codFilial);
+  const alvos = await RmAssessmentTargets.carregar(turmasEmEscopo, codFilial);
+
+  // ─── currículo, ano e janelas ─────────────────────────────────────────────
+  const nossos = new Set(cursosFiltrados.map((c) => c.toddleId));
+  const classes = (await toddleClient.listClasses()).filter((c) => nossos.has(String(c.id)));
+  const curriculos = [...new Set(classes.map((c) => String(c.curriculumId ?? '')).filter(Boolean))];
+  if (curriculos.length === 0) throw new Error('Nenhuma turma mapeada tem curriculumId no Toddle.');
+
+  const anos = await toddleClient.listAcademicYears();
+  const academicYearId = String(anos.find((a) => a.isCurrent === true)?.id ?? '');
+
+  const janelaDoPeriodo = new Map<string, JanelaToddle>();
+  for (const c of curriculos) {
+    for (const gp of await toddleClient.listGradingPeriods(c)) {
+      if (gp.startDate && gp.endDate) {
+        janelaDoPeriodo.set(String(gp.id), {
+          inicio: String(gp.startDate).slice(0, 10),
+          fim: String(gp.endDate).slice(0, 10),
+        });
+      }
+    }
+  }
+
+  // ─── 1. PROJEÇÃO ──────────────────────────────────────────────────────────
+  //
+  // O filtro por `classIds` é o que mantém isto barato: sem ele a leitura traz
+  // os 223 assignments do sandbox, 222 deles de turmas de demonstração.
+  const idsDasNossas = classes.map((c) => String(c.id));
+  const assignments = await toddleClient.listAssignments({
+    curriculumProgramId: curriculos[0],
+    academicYearId: academicYearId || undefined,
+    classIds: idsDasNossas,
+    maxRecords: 5_000,
+  });
+  const resultados = assignments.length
+    ? await toddleClient.listStudentAssignments({
+        curriculumProgramId: curriculos[0],
+        assignmentIds: assignments.map((a) => String(a.id)),
+        maxRecords: 20_000,
+      })
+    : [];
+
+  const origem = achataAvaliacoes(assignments, resultados);
+
+  const tiposElegiveis = env.NOTA_TIPOS_ELEGIVEIS.split(',').map((t) => t.trim()).filter(Boolean);
+  const ctx: ContextoProjecaoAvaliacao = {
+    codColigada: String(cfg.rm.escopo.coligada),
+    alunoParaRa,
+    cursoParaTurmaDisc,
+    periodoParaEtapa,
+    janelaDoPeriodo,
+    etapasRm: etapas.etapas,
+    alvos,
+    avaliacaoMapeada,
+    tiposElegiveis,
+    dataReferencia: dataRef,
+    exigirEtapaLiberada: op.exigirEtapaLiberada ?? env.NOTA_EXIGIR_ETAPA_LIBERADA,
+  };
+  const proj = projetaLoteAvaliacoes(origem.avaliacoes, origem.notas, ctx);
+
+  // ─── 2. DECISÃO, por linha ────────────────────────────────────────────────
+  //
+  // Sem autoria: o ReadView de EduNotasData não expõe RECCREATEDBY. Então a
+  // única evidência de que uma nota é nossa é a proveniência local, e nota que
+  // exista no RM sem ela vira CONFLITO_HUMANO. É o lado certo para errar.
+  const proveniencia = await carregarProveniencia('NOTA', proj.projetados.map((x) => x.chaveRm));
+  const decisoes = new Map<string, Decisao>();
+  for (const x of proj.projetados) {
+    const noRm = alvos.notasPorChave.get(x.chaveRm);
+    decisoes.set(
+      x.origemId,
+      decidirEscrita(
+        { chaveNatural: x.chaveRm, valor: String(x.linha.nota) },
+        noRm ? { valor: noRm.nota } : null,
+        proveniencia.get(chaveDoMapa(x.chaveRm)) ?? null,
+      ),
+    );
+  }
+  const resumoDecisoes = resumirDecisoes([...decisoes.values()]);
+
+  const liberados = proj.projetados.filter((x) => {
+    const d = decisoes.get(x.origemId);
+    return d?.veredito === 'ESCREVER_NOVO' || d?.veredito === 'ATUALIZAR_NOSSO';
+  });
+  const lotes = montaLotesNotasAvaliacao(liberados.map((x) => x.linha));
+
+  // Só as provas de que alguma nota liberada precisa.
+  const provasNecessarias = proj.provasACriar.filter((pr) =>
+    liberados.some((x) => x.linha.idTurmaDisc === pr.idTurmaDisc && x.linha.codProva === pr.codProva),
+  );
+
+  // ─── 3. PENDÊNCIAS ────────────────────────────────────────────────────────
+  let pendenciasAbertas = 0;
+  for (const x of proj.projetados) {
+    const d = decisoes.get(x.origemId);
+    if (!d?.pendencia) continue;
+    const abriu = await registrarPendencia({
+      entidade: 'NOTA',
+      chaveNatural: x.chaveRm,
+      veredito: d.veredito as VereditoPendente,
+      porque:
+        `${d.porque}. Nota de AVALIAÇÃO (CODPROVA ${x.linha.codProva}); o ReadView do RM não ` +
+        'expõe autoria, então "existe e não é nossa" é o veredito conservador.',
+      valorDesejado: String(x.linha.nota),
+      valorNoRm: alvos.notasPorChave.get(x.chaveRm)?.nota ?? null,
+      hashDesejado: hashValor(String(x.linha.nota)),
+      origemId: x.origemId,
+    });
+    if (abriu) pendenciasAbertas += 1;
+  }
+  const fila = await resumoPendencias();
+
+  // ─── 4. TETO DE VOLUME ────────────────────────────────────────────────────
+  const jaEscritas = await contarProveniencia();
+  const volume = avaliarVolume(
+    {
+      aEscrever: resumoDecisoes.aEscrever,
+      emEscopo: proj.projetados.length,
+      historico: jaEscritas.NOTA ?? null,
+    },
+    {
+      tetoAbsoluto: env.WRITE_TETO_ABSOLUTO,
+      desvioMaxPct: env.WRITE_DESVIO_MAX_PCT,
+      tetoEscopoPct: env.WRITE_TETO_ESCOPO_PCT,
+      pisoSemAprovacao: env.WRITE_PISO_SEM_APROVACAO,
+    },
+  );
+
+  const base: RelatorioAvaliacoes = {
+    chaveRun,
+    codFilial,
+    configVersion: versao,
+    dataRef,
+    tiposElegiveis,
+    turmasEmEscopo: turmasEmEscopo.length,
+    origem: {
+      avaliacoes: origem.avaliacoes.length,
+      porTipo: origem.porTipo,
+      resultadosLidos: origem.resultadosLidos,
+      comNota: origem.notas.length,
+      semNota: origem.semNota,
+      soRubrica: origem.soRubrica,
+    },
+    alvos: {
+      etapasDigitaveis: etapas.totalEtapas,
+      provas: alvos.totalProvas,
+      notas: alvos.totalNotas,
+    },
+    projecao: {
+      projetaveis: proj.projetados.length,
+      recusados: proj.recusados.length,
+      porMotivo: proj.porMotivo,
+      colisoes: proj.colisoes.length,
+    },
+    decisoes: {
+      porVeredito: resumoDecisoes.porVeredito,
+      aEscrever: resumoDecisoes.aEscrever,
+      pendencias: resumoDecisoes.pendencias,
+    },
+    provasACriar: provasNecessarias,
+    lotes,
+    volume,
+    pendenciasAbertasNestaPassada: pendenciasAbertas,
+    filaAberta: fila.abertas,
+  };
+
+  // ─── os portões, antes de qualquer envio ──────────────────────────────────
+  if (!op.executar) return { ...base, naoEscreveu: 'ensaio' };
+  if (lotes.length === 0) return { ...base, naoEscreveu: 'nada-a-escrever' };
+  if (volume.veredito === 'RECUSADO') return { ...base, naoEscreveu: 'recusado-pelo-teto' };
+  if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveRun))) {
+    await pedirAprovacao({
+      chave: chaveRun,
+      tipo: 'avaliacao_toddle_para_rm',
+      payload: {
+        codFilial,
+        dataRef,
+        aEscrever: resumoDecisoes.aEscrever,
+        provasACriar: provasNecessarias.map((pr) => ({
+          idTurmaDisc: pr.idTurmaDisc,
+          codEtapa: pr.codEtapa,
+          codProva: pr.codProva,
+          descricao: pr.descricao,
+          valor: pr.valor,
+        })),
+        datasets: lotes.map((l) => ({
+          idTurmaDisc: l.idTurmaDisc,
+          codProva: l.codProva,
+          linhas: l.linhas.length,
+        })),
+        motivosDoTeto: volume.motivos,
+        configVersion: versao,
+        propostoPor: op.quem ?? null,
+      },
+    });
+    return { ...base, naoEscreveu: 'precisa-aprovacao' };
+  }
+
+  // ─── ESCRITA ──────────────────────────────────────────────────────────────
+  const runId = await abrirRun({
+    tipo: 'avaliacao_toddle_para_rm',
+    chave: chaveRun,
+    configVersion: versao,
+    payload: {
+      codFilial,
+      dataRef,
+      provas: provasNecessarias.length,
+      notas: resumoDecisoes.aEscrever,
+      operadoPor: op.quem ?? null,
+    },
+  });
+  const contexto =
+    `CODCOLIGADA=${cfg.rm.escopo.coligada};CODFILIAL=${codFilial};` +
+    `CODTIPOCURSO=1;CODSISTEMA=${cfg.rm.conexao.sistema}`;
+
+  // Fase A: as avaliações. Sem elas a nota não tem endereço, então uma falha
+  // aqui pula o grupo em vez de escrever nota órfã.
+  const provasOk = new Set<string>();
+  const provasQueFalharam: Array<{ chave: string; resposta: string }> = [];
+  for (const pr of provasNecessarias) {
+    const chave = `${pr.idTurmaDisc}|${pr.codEtapa}|${pr.codProva}`;
+    const r = await wsDataServerClient.saveRecord('EduProvasData', montaXmlProva(pr), contexto);
+    if (r.ok) {
+      provasOk.add(chave);
+      await idMappingRepository.upsert({
+        entityType: 'ASSESSMENT',
+        rmCode: pr.rmCode,
+        toddleId: pr.assignmentId,
+      });
+    } else {
+      provasQueFalharam.push({ chave, resposta: r.resposta.replace(/\s+/g, ' ').slice(0, 300) });
+    }
+  }
+
+  // Fase B: as notas.
+  const escritas: NotaParaEscrever[] = [];
+  const recusadas: Array<{ chave: string; resposta: string }> = [];
+  let chamadas = 0;
+
+  for (const l of lotes) {
+    const chaveProva = `${l.idTurmaDisc}|${l.codEtapa}|${l.codProva}`;
+    const precisava = provasNecessarias.some(
+      (pr) => `${pr.idTurmaDisc}|${pr.codEtapa}|${pr.codProva}` === chaveProva,
+    );
+    if (precisava && !provasOk.has(chaveProva)) {
+      recusadas.push({ chave: chaveProva, resposta: 'a avaliação não pôde ser criada — lote pulado' });
+      continue;
+    }
+    const r = await wsDataServerClient.saveRecord('EduNotasData', l.xml, contexto);
+    chamadas += 1;
+    if (r.ok) escritas.push(...l.linhas);
+    else recusadas.push({ chave: chaveProva, resposta: r.resposta.replace(/\s+/g, ' ').slice(0, 300) });
+  }
+
+  for (const x of liberados) {
+    if (!escritas.some((e) => e.ra === x.linha.ra && e.codProva === x.linha.codProva)) continue;
+    await registrarEscrita({
+      entidade: 'NOTA',
+      chaveNatural: x.chaveRm,
+      payloadHash: hashValor(String(x.linha.nota)),
+      runId,
+    });
+  }
+
+  // ─── CONFERÊNCIA POR LEITURA ──────────────────────────────────────────────
+  //
+  // O SaveRecord responde HTTP 200 mesmo recusando, e o EduNotaEtapaData provou
+  // que ele também aceita e DESCARTA. Aqui a releitura confere chave E valor —
+  // é esta conferência, e não o `ok`, que autoriza dizer que a nota chegou.
+  const depois = await RmAssessmentTargets.carregar(turmasEmEscopo, codFilial);
+  let conferidas = 0;
+  const divergentes: Array<{ chave: string; enviado: string; noRm: string }> = [];
+  for (const x of liberados) {
+    const n = depois.notasPorChave.get(x.chaveRm);
+    if (n && Number(n.nota) === Number(x.linha.nota)) conferidas += 1;
+    else if (escritas.some((e) => e.ra === x.linha.ra && e.codProva === x.linha.codProva)) {
+      divergentes.push({
+        chave: x.chaveRm,
+        enviado: String(x.linha.nota),
+        noRm: n?.nota ?? '(ausente)',
+      });
+    }
+  }
+
+  const ok = divergentes.length === 0 && recusadas.length === 0 && provasQueFalharam.length === 0;
+  await fecharRun(runId, ok ? 'succeeded' : 'failed', {
+    provasCriadas: provasOk.size,
+    notasEscritas: escritas.length,
+    conferidas,
+    divergentes: divergentes.length,
+    recusadas: recusadas.length,
+    chamadas,
+    pendenciasAbertas,
+  });
+
+  logger.info(
+    {
+      chaveRun,
+      provasCriadas: provasOk.size,
+      notasEnviadas: escritas.length,
+      conferidas,
+      divergentes: divergentes.length,
+      recusadas: recusadas.length,
+    },
+    ok ? 'Nota de avaliação escrita e conferida' : 'Escrita de nota de avaliação com divergência',
+  );
+
+  return {
+    ...base,
+    escrita: {
+      provasCriadas: provasOk.size,
+      provasQueFalharam,
+      notasEnviadas: escritas.length,
+      conferidas,
+      divergentes,
+      recusadas,
+      chamadas,
+      provasNoRm: { antes: alvos.totalProvas, depois: depois.totalProvas },
+      notasNoRm: { antes: alvos.totalNotas, depois: depois.totalNotas },
+    },
+  };
+}

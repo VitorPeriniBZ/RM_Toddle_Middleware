@@ -1,12 +1,30 @@
 import type { Job } from 'bullmq';
-import { env, logger } from '@rm-toddle/config';
+import { env, heartbeat, logger } from '@rm-toddle/config';
+import { sincronizarAvaliacoes } from '../../services/sincronizarAvaliacoes';
 
 /**
  * Job da via de NOTA: Toddle -> TOTVS RM.
  *
  * É a PRIMEIRA e ÚNICA escrita agendada que este projeto faz no RM. Todas as
- * outras exigem alguém digitando `--executar`. Por isso ele carrega três coisas
- * que os jobs de cadastro não precisam.
+ * outras exigem alguém digitando `--executar`. Por isso ele carrega quatro
+ * coisas que os jobs de cadastro não precisam.
+ *
+ * ─── 0. O DESTINO É A AVALIAÇÃO, NUNCA A ETAPA ──────────────────────────────
+ *
+ * Este job já apontou para a nota de ETAPA (`EduNotaEtapaData`) e ficou
+ * BLOQUEADO por isso. Medido em 09/09/2026, seis formatos: aquele DataServer
+ * aceita o dataset, responde `ok=true` e DESCARTA o `NOTAFALTA` — a releitura
+ * volta `0.0000`. Rodar teria criado nota ZERO no histórico escolar, em
+ * silêncio, e zero é um valor plausível que ninguém notaria.
+ *
+ * A nota que se pode escrever é a da AVALIAÇÃO: `SProvas` (a avaliação) +
+ * `SNotas` (a nota dela). O serviço `sincronizarAvaliacoes` é quem faz, e é o
+ * MESMO código que `npm run escrever:avaliacoes` executa — o CLI e o automático
+ * não podem divergir, porque o lado que divergiria em silêncio é o automático,
+ * que ninguém lê.
+ *
+ * A etapa não é fechada por aqui. Escrever `SNotas` NÃO recalcula `SNOTAETAPA`
+ * — medido. Fechar o boletim é processo do RM e ato humano.
  *
  * ─── 1. INTERRUPTOR ─────────────────────────────────────────────────────────
  *
@@ -17,10 +35,10 @@ import { env, logger } from '@rm-toddle/config';
  *
  * ─── 2. FALHA DE INTEGRIDADE NÃO É RETENTADA ────────────────────────────────
  *
- * Se a releitura achar nota divergente, ausente, ou se algum envio ficou sem
- * resposta, o job NÃO lança. Lançar faria o BullMQ retentar, e retentar uma
- * escrita que PODE ter sido aplicada é escrever duas vezes de olhos fechados —
- * exatamente o que o `SaveRecord` sem resposta já deixa ambíguo.
+ * Se a releitura achar nota divergente, ou se o RM recusar um lote, o job NÃO
+ * lança. Lançar faria o BullMQ retentar, e retentar uma escrita que PODE ter
+ * sido aplicada é escrever duas vezes de olhos fechados — exatamente o que o
+ * `SaveRecord` sem resposta já deixa ambíguo.
  *
  * O caso fica visível por três caminhos que não envolvem reenviar: o run fecha
  * como `failed` (`npm run runs`), o heartbeat vai como falha (alerta externo) e
@@ -32,7 +50,7 @@ import { env, logger } from '@rm-toddle/config';
  *
  * ─── 3. O GATE DE VOLUME PODE PARAR O JOB, E ISSO É SUCESSO ─────────────────
  *
- * `PRECISA_APROVACAO` significa que o plano é grande demais para rodar sozinho —
+ * `precisa-aprovacao` significa que o plano é grande demais para rodar sozinho —
  * tipicamente a PRIMEIRA passada, que vê todas as notas já lançadas de uma vez.
  * O job registra o pedido e termina OK: não escreveu, mas fez o que devia.
  * Alguém aprova com `npm run aprovar` e a próxima passada executa.
@@ -46,46 +64,70 @@ export async function processTermGradesSync(job: Job): Promise<Record<string, un
     return { desligado: true };
   }
 
-  // ─── PARADA DURA: ESTE JOB APONTA PARA UM DESTINO QUE NÃO ESCREVE ─────────
-  //
-  // Medido em 09/09/2026, depois de este job existir: o `SaveRecord` do
-  // `EduNotaEtapaData` aceita o dataset, responde `ok=true` e DESCARTA o
-  // `NOTAFALTA`. Seis formatos testados, todos com releitura `0.0000`. A nota da
-  // etapa é calculada por fórmula (`SETAPAS.CODFORMULANOTA='01_ETAPA'`).
-  //
-  // Ligar `NOTA_SYNC_ATIVO` hoje não seria inócuo: o job CRIA a linha em
-  // `SNOTAETAPA` com nota **zero**, silenciosamente, em cima do histórico
-  // escolar. Zero é um valor plausível — ninguém notaria.
-  //
-  // O caminho que funciona é a nota de AVALIAÇÃO (`SProvas` + `SNotas`), em
-  // `npm run escrever:avaliacoes`, provado com 5 notas reais. Este job precisa
-  // ser REDIRECIONADO para lá antes de rodar; a flag por si só não basta, e é por
-  // isso que a recusa é no código e não num comentário.
-  //
-  // Ver docs/rm-dataservers/EduNotaEtapaData.md e
-  // docs/levantamento-nota-por-avaliacao.md.
-  throw new Error(
-    'Via de nota de ETAPA desativada por medição: o EduNotaEtapaData aceita e DESCARTA ' +
-      'o valor (ok=true, releitura 0.0000), então este job criaria notas ZERO no ' +
-      'histórico escolar. Use `npm run escrever:avaliacoes` (nota de AVALIAÇÃO) e ' +
-      'redirecione este processador antes de ligar NOTA_SYNC_ATIVO.',
-  );
-}
+  const r = await sincronizarAvaliacoes({ executar: true, quem: `job:${job.name}` });
 
-// ─── O QUE FICOU FORA, E POR QUÊ ─────────────────────────────────────────────
-//
-// Este processador tinha, abaixo da guarda acima, a orquestração completa da via
-// de nota de ETAPA: chamada do serviço, classificação dos vereditos que não são
-// falha (`nada-a-escrever`, `precisa-aprovacao`), heartbeat e a regra de NÃO
-// retentar falha de integridade. Removido de propósito, e não por limpeza:
-//
-//   1. O destino está provado morto, então aquele código não pode rodar.
-//   2. Quando o job for redirecionado para a nota de AVALIAÇÃO, o relatório e os
-//      vereditos serão outros — dois destinos (SProvas + SNotas), criação de
-//      estrutura, e conferência por chave E valor. Reaproveitar a orquestração da
-//      etapa seria adaptar o formato errado.
-//
-// O raciocínio que vale ser levado dali para lá está preservado no histórico
-// (commit 90e21fb) e nos comentários do `escreverAvaliacoes.ts`: interruptor
-// checado dentro do job, falha de integridade que não é retentada, e o gate de
-// volume que pode parar o job com sucesso.
+  // ─── não escreveu: cada motivo é um desfecho legítimo ─────────────────────
+  if (!r.escrita) {
+    const resumo = {
+      naoEscreveu: r.naoEscreveu,
+      chaveRun: r.chaveRun,
+      projetaveis: r.projecao.projetaveis,
+      recusadosNaProjecao: r.projecao.recusados,
+      porMotivo: r.projecao.porMotivo,
+      filaAberta: r.filaAberta,
+    };
+
+    if (r.naoEscreveu === 'recusado-pelo-teto') {
+      // O teto recusou: é um plano grande demais para ser plausível. Não lança
+      // — reenviar não muda o plano, e um humano precisa olhar.
+      logger.error({ ...resumo, motivos: r.volume.motivos }, 'Via de nota RECUSADA pelo teto de volume');
+      void heartbeat.notas('falha', { motivo: 'recusado-pelo-teto' });
+      return resumo;
+    }
+
+    if (r.naoEscreveu === 'precisa-aprovacao') {
+      logger.warn({ ...resumo, motivos: r.volume.motivos }, 'Via de nota pediu APROVAÇÃO — nada enviado');
+      void heartbeat.notas('sucesso', { motivo: 'precisa-aprovacao' });
+      return resumo;
+    }
+
+    // `nada-a-escrever` é o caso comum e saudável: ninguém lançou nota nova, ou
+    // a janela do calendário não está aberta. Sucesso, e o heartbeat confirma
+    // que o job RODOU — que é a pergunta que o vigia faz.
+    logger.info(resumo, 'Via de nota: nada a escrever nesta passada');
+    void heartbeat.notas('sucesso', { motivo: r.naoEscreveu });
+    return resumo;
+  }
+
+  // ─── escreveu ─────────────────────────────────────────────────────────────
+  const e = r.escrita;
+  const integro =
+    e.divergentes.length === 0 && e.recusadas.length === 0 && e.provasQueFalharam.length === 0;
+
+  const resumo = {
+    chaveRun: r.chaveRun,
+    provasCriadas: e.provasCriadas,
+    notasEnviadas: e.notasEnviadas,
+    conferidas: e.conferidas,
+    divergentes: e.divergentes.length,
+    recusadas: e.recusadas.length,
+    provasQueFalharam: e.provasQueFalharam.length,
+    chamadas: e.chamadas,
+    filaAberta: r.filaAberta,
+  };
+
+  if (!integro) {
+    // NÃO lança: ver o bloco 2 do cabeçalho. A escrita pode ter sido aplicada
+    // em parte, e retentar cegamente é o pior desfecho possível aqui.
+    logger.error(
+      { ...resumo, divergentes: e.divergentes.slice(0, 10), recusadas: e.recusadas.slice(0, 10) },
+      'Via de nota terminou com DIVERGÊNCIA — precisa de um humano lendo o RM, não de retry',
+    );
+    void heartbeat.notas('falha', resumo);
+    return resumo;
+  }
+
+  logger.info(resumo, 'Via de nota concluída e conferida por releitura');
+  void heartbeat.notas('sucesso', resumo);
+  return resumo;
+}
