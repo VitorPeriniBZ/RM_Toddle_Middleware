@@ -189,6 +189,7 @@ function CartaoDoFluxo({
   const d = fluxo.desejado;
   const situacao = situacaoDe(fluxo);
   const confere = Boolean(fluxo.observado && d && fluxo.observado.cron === d.cron);
+  const [confirmando, setConfirmando] = useState(false);
 
   return (
     <div style={s.cartao}>
@@ -201,6 +202,17 @@ function CartaoDoFluxo({
           <BotaoDeChave fluxo={fluxo} aoMudar={aoMudar} aoErrar={aoErrar} />
           <button style={s.botao} onClick={() => aoEditar(!editando)}>
             {editando ? 'Fechar' : 'Horário'}
+          </button>
+          {/* Rodar agora não depende de o fluxo estar LIGADO: desligado é sobre
+              o automático, e a execução manual é justamente o caso de quem quer
+              uma passada sem ligar o cron. Só fluxo BLOQUEADO não roda. */}
+          <button
+            style={{ ...s.botao, opacity: fluxo.podeAtivar ? 1 : 0.5 }}
+            onClick={() => setConfirmando(!confirmando)}
+            disabled={!fluxo.podeAtivar}
+            title={fluxo.podeAtivar ? '' : fluxo.motivoDoBloqueio ?? ''}
+          >
+            {confirmando ? 'Fechar' : 'Sincronizar agora'}
           </button>
         </div>
       </div>
@@ -329,7 +341,105 @@ function CartaoDoFluxo({
         )}
       </details>
 
+      {confirmando && (
+        <ConfirmacaoDeExecucao
+          fluxo={fluxo}
+          aoFechar={() => setConfirmando(false)}
+          aoMudar={aoMudar}
+          aoErrar={aoErrar}
+        />
+      )}
+
       {editando && <EditorDeHorario fluxo={fluxo} aoMudar={aoMudar} aoErrar={aoErrar} />}
+    </div>
+  );
+}
+
+/**
+ * A confirmação de "Sincronizar agora".
+ *
+ * ─── POR QUE NÃO É UM `window.confirm` ──────────────────────────────────────
+ *
+ * Porque um "tem certeza?" não é confirmação: é um clique a mais, e a pessoa
+ * aprende a dar no automático. O que faz alguém parar é LER o que vai acontecer
+ * — e isso é diferente por fluxo. Criar staff no Toddle é irreversível; escrever
+ * nota mexe no registro acadêmico; sincronizar aluno não apaga ninguém.
+ *
+ * O texto vem do catálogo de fluxos (`avisoAoExecutarAgora`), não daqui: o
+ * efeito de rodar é propriedade do fluxo. Se o destino do job mudar e o aviso
+ * morasse na tela, a tela mentiria — que foi exatamente o que aconteceu com a
+ * via de nota, que passou meses apontando para um DataServer que descartava o
+ * valor.
+ *
+ * ─── O MOTIVO É OPCIONAL, MAS VAI PARA A AUDITORIA ─────────────────────────
+ *
+ * Mesma escolha do liga/desliga: `audit_event` guarda quem mandou rodar e por
+ * quê. Exigir o motivo faria a pessoa digitar "teste" para passar da tela.
+ */
+function ConfirmacaoDeExecucao({
+  fluxo, aoFechar, aoMudar, aoErrar,
+}: {
+  fluxo: FluxoNaTela;
+  aoFechar: () => void;
+  aoMudar: () => void;
+  aoErrar: (e: unknown) => void;
+}) {
+  const [motivo, setMotivo] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  async function confirmar(): Promise<void> {
+    setEnviando(true);
+    setErro(null);
+    try {
+      const r = await api.executarAgora(fluxo.flowKey, motivo.trim() || undefined);
+      setOk(r.aplicacao);
+      aoMudar();
+    } catch (e) {
+      // 409 (já há job na fila, ou fluxo bloqueado) é resposta, não falha da
+      // tela: fica aqui dentro, ao lado do botão que a provocou.
+      if (e instanceof ApiError && e.status === 409) {
+        const corpo = e.corpo as { erro?: string; comoResolver?: string; motivo?: string } | null;
+        setErro([corpo?.erro, corpo?.comoResolver ?? corpo?.motivo].filter(Boolean).join(' — '));
+      } else {
+        setErro(e instanceof Error ? e.message : String(e));
+        aoErrar(e);
+      }
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  if (ok) {
+    return (
+      <div style={s.aviso('bom')}>
+        <strong>Enfileirado.</strong> {ok}
+        <div style={{ marginTop: '.5rem' }}>
+          <button style={s.botao} onClick={aoFechar}>Fechar</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={s.aviso('atencao')}>
+      <strong>Rodar “{fluxo.rotulo}” agora, fora do horário.</strong>
+      <p style={{ margin: '.45rem 0 0' }}>{fluxo.avisoAoExecutarAgora}</p>
+      <div style={{ ...s.linha, marginTop: '.6rem' }}>
+        <input
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+          placeholder="motivo (opcional, fica na auditoria)"
+          style={{ ...s.campo, fontFamily: 'inherit', width: 320 }}
+          disabled={enviando}
+        />
+        <button style={s.botao} onClick={() => void confirmar()} disabled={enviando}>
+          {enviando ? 'Enfileirando…' : 'Confirmar e rodar'}
+        </button>
+        <button style={s.botao} onClick={aoFechar} disabled={enviando}>Cancelar</button>
+      </div>
+      {erro && <div style={{ color: cor.ruim, marginTop: '.5rem' }}>{erro}</div>}
     </div>
   );
 }

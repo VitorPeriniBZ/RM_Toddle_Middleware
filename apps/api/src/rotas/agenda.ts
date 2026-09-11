@@ -14,6 +14,7 @@ import {
   FLUXOS_EM_ORDEM,
   acharFluxo,
   avisarAgendaMudou,
+  getQueue,
   observarSchedulers,
   resumoDaDlq,
 } from '@rm-toddle/queues';
@@ -115,6 +116,7 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         fila: fluxo.fila,
         podeAtivar: fluxo.podeAtivar,
         motivoDoBloqueio: fluxo.motivoDoBloqueio ?? null,
+        avisoAoExecutarAgora: fluxo.avisoAoExecutarAgora,
         janelaSemSucessoHoras: fluxo.janelaSemSucessoHoras,
         desejado: linha,
         observado: obs,
@@ -272,6 +274,121 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
       } finally {
         client.release();
       }
+    },
+  );
+
+  /**
+   * SINCRONIZAR AGORA: enfileira UMA execução avulsa, fora do horário.
+   *
+   * ─── POR QUE A API PODE ESCREVER *ESTE* ITEM NO REDIS ───────────────────
+   *
+   * O cabeçalho deste arquivo diz que nenhuma rota chama `upsertJobScheduler`, e
+   * continua valendo. A razão daquela regra é não existir um SEGUNDO escritor de
+   * scheduler, e durabilidade — intenção que evapora num restart do Redis. Um job
+   * avulso não é nenhuma das duas coisas: não cria scheduler, e perder um
+   * disparo manual num restart é irrelevante, porque a resposta é clicar de novo.
+   *
+   * ─── UM DE CADA VEZ, POR DOIS MECANISMOS ────────────────────────────────
+   *
+   * Os workers são `concurrency: 1`, então um segundo job não roda em paralelo:
+   * ele espera e roda EM SEGUIDA, reescrevendo o que o primeiro acabou de
+   * escrever. Duas defesas, porque uma só não cobre:
+   *
+   * 1. **`jobId` determinístico por minuto.** Dois cliques no mesmo minuto
+   *    produzem o MESMO id, e o BullMQ ignora o segundo `add`. É isto que pega
+   *    o clique duplo — a checagem de contagem sozinha não pegaria, porque ela
+   *    é TOCTOU: dois pedidos simultâneos leem zero os dois e ambos enfileiram.
+   *    O balde de um minuto é curto de propósito: re-rodar de verdade continua
+   *    possível, é só esperar o minuto virar.
+   *
+   * 2. **Contagem do que está pendente.** Recusa com 409 enquanto houver job em
+   *    QUALQUER estado não terminal. `waiting`, `active` e `delayed` não bastam:
+   *    fila pausada põe o job em `paused`, e a primeira versão desta rota
+   *    deixava passar — medido, com a fila pausada, dois `add` seguidos
+   *    responderam 200. Por isso soma tudo menos `completed` e `failed`.
+   *
+   * ─── BLOQUEADO NÃO RODA ─────────────────────────────────────────────────
+   *
+   * Mesma regra do PUT: fluxo com `podeAtivar: false` não é enfileirável. Um
+   * botão que só produz item na DLQ não é botão, é armadilha.
+   */
+  app.post<{ Params: { flowKey: string }; Body: { motivo?: string } }>(
+    '/agenda/:flowKey/executar',
+    { preHandler: exigirPapel(['integration_operator']) },
+    async (req, reply) => {
+      const fluxo = acharFluxo(req.params.flowKey);
+      if (!fluxo) {
+        return reply.code(400).send({ erro: 'fluxo desconhecido', aceitos: FLUXOS_EM_ORDEM.map((f) => f.key) });
+      }
+      if (!fluxo.podeAtivar) {
+        return reply.code(409).send({
+          erro: 'este fluxo não pode ser executado',
+          motivo: fluxo.motivoDoBloqueio,
+        });
+      }
+
+      const fila = getQueue(fluxo.fila);
+
+      // Tudo que não é terminal conta como "já tem um andando".
+      const contagem = await fila.getJobCounts();
+      const naFila = Object.entries(contagem)
+        .filter(([estado]) => estado !== 'completed' && estado !== 'failed')
+        .reduce((soma, [, n]) => soma + (n ?? 0), 0);
+      if (naFila > 0) {
+        return reply.code(409).send({
+          erro: 'já existe uma execução deste fluxo na fila',
+          naFila,
+          estados: contagem,
+          comoResolver: 'espere a atual terminar — acompanhe por "último run" no painel',
+        });
+      }
+
+      // Balde de um minuto: dois cliques dentro dele viram o mesmo job.
+      const balde = Math.floor(Date.now() / 60_000);
+      const jobId = `manual:${fluxo.key}:${balde}`;
+      if (await fila.getJob(jobId)) {
+        return reply.code(409).send({
+          erro: 'este fluxo já foi disparado manualmente neste minuto',
+          jobId,
+          comoResolver: 'se foi sem querer, ignore. Para rodar de novo, espere o minuto virar',
+        });
+      }
+
+      const job = await fila.add(
+        fluxo.job,
+        {
+          trigger: 'manual',
+          por: req.autorizacao!.userIdentityId,
+          motivo: req.body?.motivo ?? null,
+        },
+        { jobId },
+      );
+
+      // A trilha é do PEDIDO, não do resultado: quem mandou rodar e por quê. O
+      // que o job fez sai em `job_run`, que é outra pergunta.
+      await registrarEvento(pgPool, {
+        ator: atorDaRequisicao(req),
+        acao: 'fluxo.executado.manualmente',
+        entidade: 'flow_schedule',
+        entidadeId: fluxo.key,
+        depois: { jobId: job.id ?? null, fila: fluxo.fila, job: fluxo.job },
+        motivo: req.body?.motivo ?? undefined,
+        resultado: 'ok',
+      });
+
+      logger.warn(
+        { flowKey: fluxo.key, jobId: job.id, por: req.autorizacao!.userIdentityId },
+        'EXECUÇÃO MANUAL enfileirada pela tela',
+      );
+
+      return {
+        enfileirado: true,
+        jobId: job.id ?? null,
+        fila: fluxo.fila,
+        aplicacao:
+          'o job está na fila. Se nenhum worker estiver de pé ele espera lá — ' +
+          'acompanhe por "último run" no painel',
+      };
     },
   );
 
