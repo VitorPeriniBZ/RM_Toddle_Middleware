@@ -12,9 +12,12 @@ import {
 import {
   FLOW,
   FLUXOS_EM_ORDEM,
+  ESTADOS_NAO_TERMINAIS,
   acharFluxo,
   avisarAgendaMudou,
+  execucoesEmVoo,
   getQueue,
+  type JobEmVoo,
   observarSchedulers,
   resumoDaDlq,
 } from '@rm-toddle/queues';
@@ -329,16 +332,25 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
 
       const fila = getQueue(fluxo.fila);
 
-      // Tudo que não é terminal conta como "já tem um andando".
-      const contagem = await fila.getJobCounts();
-      const naFila = Object.entries(contagem)
-        .filter(([estado]) => estado !== 'completed' && estado !== 'failed')
-        .reduce((soma, [, n]) => soma + (n ?? 0), 0);
-      if (naFila > 0) {
+      // Os jobs de verdade, não a contagem: o Job Scheduler mantém um job
+      // `delayed` PERMANENTE reservando o próximo disparo do cron, e contá-lo
+      // tornava este botão inútil em todo fluxo ligado. A regra está em
+      // `execucoesEmVoo`, com teste — errei isto duas vezes escrevendo inline.
+      const naFila = await fila.getJobs([...ESTADOS_NAO_TERMINAIS]);
+      // `getState()` em vez de inferir por `opts.delay` ou pelo prefixo do id:
+      // o estado real é o que a regra precisa, e são poucos jobs por fila.
+      const emVoo = execucoesEmVoo(
+        await Promise.all(
+          naFila.map(async (j) => ({
+            estado: (await j.getState()) as JobEmVoo['estado'],
+            repeatJobKey: (j as { repeatJobKey?: string | null }).repeatJobKey ?? null,
+          })),
+        ),
+      );
+      if (emVoo.length > 0) {
         return reply.code(409).send({
           erro: 'já existe uma execução deste fluxo na fila',
-          naFila,
-          estados: contagem,
+          naFila: emVoo.length,
           comoResolver: 'espere a atual terminar — acompanhe por "último run" no painel',
         });
       }
