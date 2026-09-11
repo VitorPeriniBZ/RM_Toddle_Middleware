@@ -85,13 +85,15 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     // Nota muda quando o professor digita, e o pedido é que chegue perto disso.
     // Janela curta porque o poll é curto — mas ver `podeAtivar` abaixo.
     janelaSemSucessoHoras: 4,
-    podeAtivar: false,
-    motivoDoBloqueio:
-      'o destino desta via está provado morto: medido em 09/09/2026, o SaveRecord do ' +
-      'EduNotaEtapaData aceita o dataset, responde ok=true e DESCARTA o NOTAFALTA — o job ' +
-      'criaria nota ZERO no histórico escolar, em silêncio. O processador RECUSA rodar por ' +
-      'isso. Redirecione-o para a nota de AVALIAÇÃO (SProvas + SNotas, `npm run ' +
-      'escrever:avaliacoes`) e troque este `podeAtivar` no mesmo commit.',
+    // Desbloqueado em 11/09/2026, junto do redirecionamento: o processador agora
+    // chama `sincronizarAvaliacoes` (SProvas + SNotas), o mesmo código de
+    // `npm run escrever:avaliacoes`. O destino morto era o EduNotaEtapaData, que
+    // aceitava e descartava o valor — ver o cabeçalho do processador.
+    //
+    // Ligar aqui NÃO faz nada sozinho: `NOTA_SYNC_ATIVO` ainda precisa estar
+    // `true`, e o job confere isso de novo por dentro. São dois interruptores de
+    // propósito, um para a escola e outro para quem opera.
+    podeAtivar: true,
   },
 };
 
