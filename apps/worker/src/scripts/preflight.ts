@@ -1,4 +1,12 @@
-import { cronDoProfessorEfetivo, env, logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
+import {
+  avaliarFolga,
+  cronDoProfessorEfetivo,
+  env,
+  logger,
+  rmSoapConfigurado,
+  tenantConfig,
+} from '@rm-toddle/config';
+import { FLOW, FLUXOS_EM_ORDEM } from '@rm-toddle/queues';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
 const cfg = tenantConfig;
@@ -153,6 +161,53 @@ function checar(): Checagem[] {
           'parar de rodar — a falha volta a ser silenciosa, que é o modo em que a ' +
           'integração ficou 8 dias parada sem ninguém saber',
     fatal: false,
+  });
+
+  /**
+   * Os horários do AMBIENTE se atrapalham entre si?
+   *
+   * ─── POR QUE AQUI, ALÉM DA TELA ─────────────────────────────────────────
+   *
+   * A tela já recusa horário colidente ao salvar e ao ligar. Mas o ambiente é um
+   * segundo caminho: `npm run schedule` semeia os crons do `.env` direto, sem
+   * passar pela API — e nesse caminho a guarda nunca existiu. Um `.env` com dois
+   * fluxos no mesmo minuto entra calado e só aparece como 429 em produção.
+   *
+   * Fatal, e não aviso: sobreposição é o defeito que produziu, em 11/09/2026,
+   * "17/50 alunos falharam (HTTP 429)" num lote real. Deixar o deploy passar
+   * seria deixar passar um erro já medido.
+   */
+  const comRecurso = FLUXOS_EM_ORDEM.filter((f) => f.recursoDisputado);
+  const cronDoFluxo = new Map<string, string>([
+    [FLOW.ALUNOS, env.STUDENTS_SYNC_CRON],
+    [FLOW.PROFESSORES, cronDoProfessorEfetivo()],
+    [FLOW.NOTAS, env.NOTA_SYNC_CRON],
+  ]);
+  const colisoes: string[] = [];
+  const folgasCurtas: string[] = [];
+  for (let i = 0; i < comRecurso.length; i += 1) {
+    for (let j = i + 1; j < comRecurso.length; j += 1) {
+      const [a, b] = [comRecurso[i], comRecurso[j]];
+      if (a.recursoDisputado !== b.recursoDisputado) continue;
+      const cronA = cronDoFluxo.get(a.key);
+      const cronB = cronDoFluxo.get(b.key);
+      if (!cronA || !cronB) continue;
+      const r = avaliarFolga(cronA, cronB);
+      if (r.colide) colisoes.push(`${a.rotulo} x ${b.rotulo}: ${r.menorFolgaMinutos} min`);
+      else if (r.aviso) folgasCurtas.push(`${a.rotulo} x ${b.rotulo}: ${r.menorFolgaMinutos} min`);
+    }
+  }
+  c.push({
+    nome: 'folga entre fluxos que disputam o mesmo recurso',
+    ok: colisoes.length === 0,
+    detalhe:
+      colisoes.length > 0
+        ? `SOBREPOSIÇÃO: ${colisoes.join('; ')}. Os dois disputam a janela de 300s do ` +
+          'Toddle e vão falhar juntos por 429 — em 11/09/2026 isso custou 17 de 50 alunos num lote'
+        : folgasCurtas.length > 0
+          ? `passa, mas apertado: ${folgasCurtas.join('; ')} (a convenção medida é 30 min)`
+          : 'todos os fluxos que disputam o Toddle têm folga confortável',
+    fatal: true,
   });
 
   c.push({
