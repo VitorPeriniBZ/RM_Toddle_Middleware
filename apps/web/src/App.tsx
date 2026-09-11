@@ -176,7 +176,14 @@ export function App() {
   );
 }
 
-/** Saúde e panorama — o que a primeira versão da tela já mostrava. */
+/**
+ * Saúde e panorama.
+ *
+ * Era uma lista de bullets em que "tenant", "configVersion" e cada dependência
+ * tinham o mesmo peso — e o que se quer saber ao abrir é uma coisa só: alguma
+ * dependência caiu? Por isso as dependências viraram a primeira coisa, com
+ * estado visível, e a identidade do ambiente desceu para uma tira de rodapé.
+ */
 function Saude({ aoErrar }: { aoErrar: (e: unknown) => void }) {
   const [health, setHealth] = useState<Awaited<ReturnType<typeof api.health>> | null>(null);
   const [resumo, setResumo] = useState<Awaited<ReturnType<typeof api.resumo>> | null>(null);
@@ -187,36 +194,71 @@ function Saude({ aoErrar }: { aoErrar: (e: unknown) => void }) {
       .catch(aoErrar);
   }, []);
 
+  if (!health) return <p style={s.fraco}>Consultando…</p>;
+
+  const caidas = health.dependencias.filter((d) => !d.ok);
+
   return (
     <>
-      <h2 style={s.h2}>Saúde</h2>
-      {health ? (
-        <ul>
-          <li>tenant: <strong>{health.tenant}</strong></li>
-          <li>configVersion: <code style={s.mono}>{health.configVersion}</code></li>
+      <div style={{ ...s.barra, justifyContent: 'space-between' }}>
+        <div style={s.linha}>
+          <span style={s.selo(caidas.length === 0 ? 'bom' : 'ruim')}>
+            {caidas.length === 0 ? 'tudo no ar' : `${caidas.length} fora do ar`}
+          </span>
+          <span style={s.fraco}>
+            {health.dependencias.length} dependência(s) verificada(s)
+          </span>
+        </div>
+      </div>
+
+      <h2 style={s.h2}>Dependências</h2>
+      <table style={s.tabela}>
+        <tbody>
           {health.dependencias.map((d) => (
-            <li key={d.nome}>
-              {d.nome}: {d.ok ? <span style={{ color: cor.bom }}>ok</span> : <span style={{ color: cor.ruim }}>falha — {d.erro}</span>}
-            </li>
+            <tr key={d.nome}>
+              <td style={{ ...s.td, width: 150 }}>{d.nome}</td>
+              <td style={{ ...s.td, width: 90 }}>
+                <span style={s.selo(d.ok ? 'bom' : 'ruim')}>{d.ok ? 'ok' : 'falha'}</span>
+              </td>
+              <td style={{ ...s.td, color: cor.ruim, fontSize: '.82rem' }}>{d.ok ? '' : d.erro}</td>
+            </tr>
           ))}
-        </ul>
-      ) : <p style={s.fraco}>—</p>}
+        </tbody>
+      </table>
 
       <h2 style={s.h2}>Mapeamentos</h2>
       {resumo ? (
         <table style={s.tabela}>
-          <thead><tr><th style={s.th}>tipo</th><th style={s.th}>estado</th><th style={s.th}>total</th></tr></thead>
+          <thead>
+            <tr>
+              <th style={s.th}>entidade</th>
+              <th style={s.th}>estado</th>
+              <th style={{ ...s.th, textAlign: 'right' }}>total</th>
+            </tr>
+          </thead>
           <tbody>
             {resumo.itens.map((i) => (
               <tr key={i.entityType + i.state}>
-                <td style={s.td}>{i.entityType}</td>
-                <td style={s.td}>{i.state}</td>
+                <td style={{ ...s.td, ...s.mono }}>{i.entityType}</td>
+                <td style={s.td}>
+                  <span style={s.selo(i.state === 'active' ? 'bom' : 'neutro')}>{i.state}</span>
+                </td>
                 <td style={{ ...s.td, textAlign: 'right' }}>{i.total}</td>
               </tr>
             ))}
           </tbody>
         </table>
       ) : <p style={s.fraco}>—</p>}
+
+      {/* Identidade do ambiente: raramente é a pergunta, mas é o que se confere
+          quando a resposta não faz sentido ("isto está apontando para onde?"). */}
+      <div style={{ ...s.tira, marginTop: '1.2rem', paddingTop: '.6rem', borderTop: `1px solid ${cor.borda}` }}>
+        <span><span style={s.dadoRotulo}>tenant </span><strong>{health.tenant}</strong></span>
+        <span>
+          <span style={s.dadoRotulo}>configVersion </span>
+          <code style={s.mono}>{health.configVersion}</code>
+        </span>
+      </div>
     </>
   );
 }

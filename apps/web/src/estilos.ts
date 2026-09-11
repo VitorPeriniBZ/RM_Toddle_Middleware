@@ -83,6 +83,85 @@ export const s = {
   }),
 
   botao: { padding: '.4rem .8rem', fontSize: '.88rem', cursor: 'pointer' } as CSSProperties,
+
+  /**
+   * Barra de resumo no topo de uma aba: a resposta antes da leitura.
+   *
+   * Sem ela a tela obriga a ler quatro cartões para descobrir que está tudo bem —
+   * e quem lê quatro cartões todo dia para ver "ok" para de ler.
+   */
+  barra: {
+    display: 'flex',
+    gap: '1.4rem',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    padding: '.6rem .8rem',
+    border: `1px solid ${cor.borda}`,
+    background: cor.fundoFraco,
+    marginTop: '1rem',
+  } as CSSProperties,
+
+  /** Um número grande com rótulo pequeno embaixo. */
+  kpiNumero: (tipo: 'bom' | 'ruim' | 'atencao' | 'neutro' = 'neutro'): CSSProperties => ({
+    fontSize: '1.25rem',
+    fontWeight: 700,
+    lineHeight: 1.1,
+    color: tipo === 'bom' ? cor.bom : tipo === 'ruim' ? cor.ruim : tipo === 'atencao' ? cor.atencao : cor.texto,
+  }),
+  kpiRotulo: { fontSize: '.72rem', color: cor.fraco, textTransform: 'uppercase', letterSpacing: '.04em' } as CSSProperties,
+
+  /**
+   * Desejado × observado lado a lado.
+   *
+   * Eram duas linhas de tabela com o mesmo peso de "próximos disparos". A
+   * comparação é o coração da aba — se o Redis perdeu o scheduler, NADA dá erro
+   * e o worker segue consumindo uma fila que não recebe mais nada. Lado a lado,
+   * a divergência se vê antes de ler.
+   */
+  comparacao: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto 1fr',
+    gap: '.5rem .8rem',
+    alignItems: 'center',
+    marginTop: '.7rem',
+    padding: '.6rem .7rem',
+    background: cor.fundoFraco,
+    border: `1px solid ${cor.borda}`,
+  } as CSSProperties,
+
+  /** Rótulo miúdo acima de um valor. */
+  dadoRotulo: { fontSize: '.7rem', color: cor.fraco, textTransform: 'uppercase', letterSpacing: '.04em' } as CSSProperties,
+
+  /** Tira de metadados: rótulo e valor em pares, embrulhando. */
+  tira: {
+    display: 'flex',
+    gap: '.3rem 1.3rem',
+    flexWrap: 'wrap',
+    marginTop: '.6rem',
+    fontSize: '.85rem',
+  } as CSSProperties,
+
+  /** `<summary>` de um bloco recolhido: some do caminho até ser preciso. */
+  resumoDetalhe: {
+    cursor: 'pointer',
+    fontSize: '.8rem',
+    color: cor.fraco,
+    marginTop: '.6rem',
+    userSelect: 'none',
+  } as CSSProperties,
+
+  /** Bloco de texto técnico dentro de um detalhe recolhido. */
+  blocoTecnico: {
+    fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+    fontSize: '.78rem',
+    background: cor.fundoFraco,
+    border: `1px solid ${cor.borda}`,
+    padding: '.5rem .6rem',
+    marginTop: '.4rem',
+    overflowX: 'auto',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  } as CSSProperties,
   campo: { padding: '.4rem', fontSize: '.88rem', fontFamily: 'ui-monospace, Menlo, monospace' } as CSSProperties,
   tabela: { borderCollapse: 'collapse', width: '100%', fontSize: '.86rem' } as CSSProperties,
   td: { borderTop: `1px solid ${cor.borda}`, padding: '.35rem .5rem', verticalAlign: 'top' } as CSSProperties,

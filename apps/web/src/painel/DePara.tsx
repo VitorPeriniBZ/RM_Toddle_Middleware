@@ -71,21 +71,30 @@ export function DePara({ aoErrar }: { aoErrar: (e: unknown) => void }) {
 
   return (
     <>
-      <h2 style={s.h2}>Buscar vínculo</h2>
-      <p style={s.fraco}>
-        Por código do RM ou por id do Toddle — os dois lados, porque metade das perguntas chega pelo
-        id de lá. Sem nomes: a busca é por código, de propósito.
-      </p>
-      <div style={s.linha}>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && q.trim().length >= 2) void buscar(); }}
-          placeholder="RA, código ou id do Toddle"
-          style={{ ...s.campo, width: 260 }}
-        />
-        <button style={s.botao} onClick={() => void buscar()} disabled={q.trim().length < 2}>Buscar</button>
-        <button style={s.botao} onClick={() => setProposta({ forma: 'vincular' })}>Propor vínculo novo</button>
+      {/* A busca é a ação principal desta aba — fica num cartão, não solta no
+          fluxo do texto, para ser a primeira coisa que a mão encontra. */}
+      <div style={{ ...s.cartao, marginTop: '1rem' }}>
+        <h3 style={s.h3}>Buscar vínculo</h3>
+        <p style={{ ...s.fraco, margin: '.3rem 0 .6rem' }}>
+          Por código do RM ou por id do Toddle — os dois lados, porque metade das perguntas chega
+          pelo id de lá. Sem nomes: a busca é por código, de propósito.
+        </p>
+        <div style={s.linha}>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && q.trim().length >= 2) void buscar(); }}
+            placeholder="RA, código ou id do Toddle"
+            style={{ ...s.campo, width: 260 }}
+          />
+          <button style={s.botao} onClick={() => void buscar()} disabled={q.trim().length < 2}>Buscar</button>
+          <button style={s.botao} onClick={() => setProposta({ forma: 'vincular' })}>Propor vínculo novo</button>
+        </div>
+        <p style={{ ...s.fraco, margin: '.5rem 0 0' }}>
+          O <code style={s.mono}>rm_code</code> de <code style={s.mono}>COURSE</code> é composto:{' '}
+          <code style={s.mono}>CODPERLET:CODTURMA:CODDISC</code>. Não é mais o IDTURMADISC — identity
+          é renumerado por cópia de base.
+        </p>
       </div>
 
       {erroLocal && <div style={s.aviso('ruim')}>{erroLocal}</div>}
