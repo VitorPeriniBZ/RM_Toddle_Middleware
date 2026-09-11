@@ -397,9 +397,12 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         enfileirado: true,
         jobId: job.id ?? null,
         fila: fluxo.fila,
+        // NÃO prometer "último run": um job que roda e não faz nada (via
+        // desligada) retorna antes de abrir run, e nunca apareceria ali. Quem
+        // mostra todo desfecho é a aba Jobs, que lê a fila além do `job_run`.
         aplicacao:
-          'o job está na fila. Se nenhum worker estiver de pé ele espera lá — ' +
-          'acompanhe por "último run" no painel',
+          'o job está na fila. Acompanhe na aba Jobs — ela mostra o que terminou ' +
+          'nas últimas 24h, inclusive job que rodou e não fez nada',
       };
     },
   );

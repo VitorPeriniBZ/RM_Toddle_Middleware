@@ -261,12 +261,26 @@ export interface RunNoGrafico {
   lotes?: { feitos: number; total: number };
 }
 
+export interface JobTerminado {
+  id: string | null;
+  nome: string;
+  desfecho: 'completed' | 'failed';
+  terminadoEm: string | null;
+  duracaoMs: number | null;
+  tentativas: number;
+  /** O retorno do processador. É onde aparece `{ desligado: true }`. */
+  retorno: unknown;
+  erro: string | null;
+  manual: boolean;
+}
+
 export interface FluxoDeJobs {
   flowKey: string;
   rotulo: string;
   fila: string;
   contagem: { ativos: number; esperando: number; reservaDeCron: number };
   ativos: JobAtivo[];
+  terminados: JobTerminado[];
   /** Progresso por lote do fan-out de aluno. `null` nos demais. */
   lotesEmCurso: { feitos: number; total: number } | null;
   historico: RunNoGrafico[];

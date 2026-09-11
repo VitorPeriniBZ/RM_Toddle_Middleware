@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type PainelDeJobs, type FluxoDeJobs, type RunNoGrafico } from '../api';
+import { api, type PainelDeJobs, type FluxoDeJobs, type JobTerminado, type RunNoGrafico } from '../api';
 import { cor, quando, s } from '../estilos';
 
 /**
@@ -105,6 +105,7 @@ function CartaoDeJobs({ fluxo }: { fluxo: FluxoDeJobs }) {
       </div>
 
       <Execucao fluxo={fluxo} />
+      <Terminados jobs={fluxo.terminados} />
       <Historico fluxo={fluxo} />
     </div>
   );
@@ -161,6 +162,70 @@ function Execucao({ fluxo }: { fluxo: FluxoDeJobs }) {
       })}
     </>
   );
+}
+
+/**
+ * O que acabou de terminar, direto da fila.
+ *
+ * ─── POR QUE ISTO EXISTE ────────────────────────────────────────────────────
+ *
+ * Porque `job_run` não cobre tudo. Um job que roda e decide NÃO fazer nada
+ * retorna antes de abrir run — é o caso da via de nota com `NOTA_SYNC_ATIVO`
+ * em `false`, que devolve `{ desligado: true }` em milissegundos.
+ *
+ * Sem este bloco, clicar em "Sincronizar agora" nesse fluxo produzia silêncio
+ * absoluto: o job rodava, fazia o certo, e a tela continuava dizendo "último
+ * sucesso: nunca". Quem clicou não tinha como saber se funcionou.
+ *
+ * A janela é curta de propósito — é a retenção do Redis (24h/7d). Para prazo
+ * maior, o gráfico abaixo, que vem do Postgres.
+ */
+function Terminados({ jobs }: { jobs: JobTerminado[] }) {
+  if (jobs.length === 0) return null;
+  return (
+    <div style={{ marginTop: '.8rem' }}>
+      <div style={s.dadoRotulo}>terminaram nas últimas 24h</div>
+      <table style={{ ...s.tabela, marginTop: '.2rem', tableLayout: 'fixed' }}>
+        <tbody>
+          {jobs.map((j) => (
+            <tr key={j.id ?? j.terminadoEm}>
+              <td style={{ ...s.td, width: 90, whiteSpace: 'nowrap' }}>
+                <span style={s.selo(j.desfecho === 'failed' ? 'ruim' : 'bom')}>
+                  {j.desfecho === 'failed' ? '✕ falhou' : '✓ ok'}
+                </span>
+              </td>
+              <td style={{ ...s.td, width: 110, whiteSpace: 'nowrap' }}>
+                {quando(j.terminadoEm)}
+                {j.manual && <span style={s.fraco}> · manual</span>}
+              </td>
+              <td style={{ ...s.td, width: 70, whiteSpace: 'nowrap' }}>
+                {j.duracaoMs === null ? '—' : duracao(j.duracaoMs)}
+              </td>
+              {/* O retorno é o que explica um job que "rodou e não fez nada".
+                  Sem ele, `{desligado:true}` seria invisível. Quebra em qualquer
+                  ponto: é JSON, não tem espaço onde quebrar sozinho, e sem isto
+                  ele empurra a largura do cartão para fora da tela. */}
+              <td style={{ ...s.td, ...s.mono, fontSize: '.78rem', wordBreak: 'break-word' }}>
+                {j.erro ?? resumoDoRetorno(j.retorno)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** O retorno em uma linha, com tradução do caso que mais confunde. */
+function resumoDoRetorno(v: unknown): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (o.desligado === true) return 'rodou e não tocou no RM — a via está desligada (NOTA_SYNC_ATIVO=false)';
+    if (typeof o.naoEscreveu === 'string') return `não escreveu: ${o.naoEscreveu}`;
+  }
+  const txt = typeof v === 'string' ? v : JSON.stringify(v);
+  return txt.length > 120 ? `${txt.slice(0, 120)}…` : txt;
 }
 
 /**
