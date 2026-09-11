@@ -44,8 +44,13 @@ import { atorDaRequisicao, exigirPapel } from '../autorizacao';
  * mostrasse só a intenção seria mais uma superfície capaz de mentir.
  */
 
-/** Pares de fluxos que competem pela mesma janela de rate limit do Toddle. */
-const PARES_QUE_COMPETEM: Array<[string, string]> = [[FLOW.ALUNOS, FLOW.PROFESSORES]];
+/*
+ * A lista fixa de pares que competiam saiu daqui: quem declara o que disputa é o
+ * CATÁLOGO (`recursoDisputado` em packages/queues/src/fluxos.ts). Par vira trio
+ * vira quarteto, e uma lista em outro arquivo sempre esquece o fluxo novo — foi
+ * o que aconteceu com o de notas, que entrou disputando a mesma janela do Toddle
+ * e nunca foi checado contra ninguém.
+ */
 
 /*
  * Registrado como PLUGIN, e não como função que recebe a instância: a instância
@@ -69,6 +74,40 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
     const tipos = FLUXOS_EM_ORDEM.map((f) => f.key);
     const runs = await ultimosRunsPorTipo(tipos);
     const sucessos = await ultimoSucessoPorTipo(tipos);
+
+    /**
+     * Já existe execução em voo? A tela precisa saber ANTES de oferecer o botão.
+     *
+     * O POST recusa com 409 de qualquer jeito — essa é a guarda de verdade, e
+     * continua sendo, porque entre esta leitura e o clique passa tempo. Isto
+     * aqui é para o botão nascer desabilitado em vez de a pessoa descobrir pelo
+     * erro vermelho. Um botão que só serve para produzir recusa é ruído.
+     */
+    const emVooPorFluxo = new Map<string, { quantidade: number; desde: string | null }>();
+    await Promise.all(
+      FLUXOS_EM_ORDEM.map(async (fluxo) => {
+        const fila = getQueue(fluxo.fila);
+        const naFila = await fila.getJobs([...ESTADOS_NAO_TERMINAIS]);
+        const comEstado = await Promise.all(
+          naFila.map(async (j) => ({
+            job: j,
+            estado: (await j.getState()) as
+              | 'waiting' | 'active' | 'delayed' | 'paused' | 'prioritized',
+            repeatJobKey: (j as { repeatJobKey?: string | null }).repeatJobKey ?? null,
+          })),
+        );
+        // O marcador do próximo cron é `delayed` permanente e NÃO é trabalho.
+        const emVoo = comEstado.filter(
+          (x) => execucoesEmVoo([{ estado: x.estado, repeatJobKey: x.repeatJobKey }]).length > 0,
+        );
+        if (emVoo.length === 0) return;
+        const inicios = emVoo.map((x) => x.job.processedOn ?? x.job.timestamp).filter(Boolean);
+        emVooPorFluxo.set(fluxo.key, {
+          quantidade: emVoo.length,
+          desde: inicios.length ? new Date(Math.min(...(inicios as number[]))).toISOString() : null,
+        });
+      }),
+    );
 
     const fluxos = FLUXOS_EM_ORDEM.map((fluxo) => {
       const linha = desejada.find((a) => a.flowKey === fluxo.key) ?? null;
@@ -120,6 +159,8 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         podeAtivar: fluxo.podeAtivar,
         motivoDoBloqueio: fluxo.motivoDoBloqueio ?? null,
         avisoAoExecutarAgora: fluxo.avisoAoExecutarAgora,
+        /** `null` = nada rodando. Preenchido = o botão de rodar agora fica travado. */
+        execucaoEmVoo: emVooPorFluxo.get(fluxo.key) ?? null,
         janelaSemSucessoHoras: fluxo.janelaSemSucessoHoras,
         desejado: linha,
         observado: obs,
@@ -205,17 +246,36 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         });
       }
 
+      // A folga é checada no horário que VAI VALER — o proposto, ou o que já
+      // está gravado quando só se está ligando.
+      //
+      // Ligar também passa por aqui, e é o caso que faltava: um cron colidente
+      // dorme inofensivo enquanto o fluxo está desligado e acorda no momento em
+      // que alguém liga. Foi exatamente assim que o de notas entrou em rota de
+      // colisão com os outros dois sem ninguém ser avisado.
+      const vaiFicarAtivo = ativo ?? (await listarAgenda()).find((a) => a.flowKey === fluxo.key)?.ativo;
       if (cron !== undefined) {
         const validado = validarCron(cron);
         if (!validado.ok) return reply.code(400).send({ erro: validado.erro });
-
-        const folga = await avisoDeFolga(fluxo.key, validado.cron);
-        if (folga.colide) {
-          return reply.code(409).send({
-            erro: 'horário recusado: colide com outro fluxo',
-            motivo: folga.motivo,
-            menorFolgaMinutos: folga.menorFolgaMinutos,
-          });
+      }
+      if (vaiFicarAtivo) {
+        const cronEfetivo =
+          cron !== undefined
+            ? validarCronNormalizado(cron)
+            : (await listarAgenda()).find((a) => a.flowKey === fluxo.key)?.cron;
+        if (cronEfetivo) {
+          const folga = await avisoDeFolga(fluxo.key, cronEfetivo);
+          if (folga.colide) {
+            return reply.code(409).send({
+              erro: 'horário recusado: colide com outro fluxo',
+              motivo: folga.motivo,
+              comQuem: folga.comQuem,
+              menorFolgaMinutos: folga.menorFolgaMinutos,
+              comoResolver:
+                'escolha um horário mais distante, ou desligue o outro fluxo antes — ' +
+                'os dois disputam a mesma janela de 300s do Toddle',
+            });
+          }
         }
       }
 
@@ -397,9 +457,12 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         enfileirado: true,
         jobId: job.id ?? null,
         fila: fluxo.fila,
+        // NÃO prometer "último run": um job que roda e não faz nada (via
+        // desligada) retorna antes de abrir run, e nunca apareceria ali. Quem
+        // mostra todo desfecho é a aba Jobs, que lê a fila além do `job_run`.
         aplicacao:
-          'o job está na fila. Se nenhum worker estiver de pé ele espera lá — ' +
-          'acompanhe por "último run" no painel',
+          'o job está na fila. Acompanhe na aba Jobs — ela mostra o que terminou ' +
+          'nas últimas 24h, inclusive job que rodou e não fez nada',
       };
     },
   );
@@ -433,19 +496,59 @@ function validarCronNormalizado(cron: string): string {
  * qualquer par de expressões, incluindo as que a regex da derivação nunca
  * entendeu.
  */
+/**
+ * O horário proposto se atrapalha com algum outro fluxo ATIVO?
+ *
+ * ─── COMPARA CONTRA TODOS, E DEVOLVE O PIOR ─────────────────────────────────
+ *
+ * Não existe mais "o outro fluxo": existem todos os que declaram o mesmo
+ * `recursoDisputado`. A resposta é a PIOR folga encontrada, porque basta uma
+ * sobreposição para os dois falharem por 429 — a janela do Toddle é da
+ * organização, não do fluxo.
+ *
+ * Fluxo desligado não compete: ele não dispara. Por isso a checagem tem de rodar
+ * também na hora de LIGAR (ver o PUT), e não só ao mudar o cron — ligar é
+ * justamente o momento em que uma colisão adormecida acorda.
+ */
 async function avisoDeFolga(
   flowKey: string,
   cronProposto: string,
-): Promise<{ colide: boolean; menorFolgaMinutos: number; motivo?: string; aviso?: string }> {
-  const par = PARES_QUE_COMPETEM.find(([a, b]) => a === flowKey || b === flowKey);
-  if (!par) return { colide: false, menorFolgaMinutos: Number.MAX_SAFE_INTEGER };
+): Promise<{
+  colide: boolean;
+  menorFolgaMinutos: number;
+  motivo?: string;
+  aviso?: string;
+  comQuem?: string;
+}> {
+  const fluxo = acharFluxo(flowKey);
+  if (!fluxo?.recursoDisputado) {
+    return { colide: false, menorFolgaMinutos: Number.MAX_SAFE_INTEGER };
+  }
 
-  const outro = par[0] === flowKey ? par[1] : par[0];
+  const concorrentes = FLUXOS_EM_ORDEM.filter(
+    (f) => f.key !== flowKey && f.recursoDisputado === fluxo.recursoDisputado,
+  );
+  if (concorrentes.length === 0) {
+    return { colide: false, menorFolgaMinutos: Number.MAX_SAFE_INTEGER };
+  }
+
   const agenda = await listarAgenda();
-  const linhaDoOutro = agenda.find((a) => a.flowKey === outro);
+  let pior: {
+    colide: boolean;
+    menorFolgaMinutos: number;
+    motivo?: string;
+    aviso?: string;
+    comQuem?: string;
+  } = { colide: false, menorFolgaMinutos: Number.MAX_SAFE_INTEGER };
 
-  // Outro fluxo desligado ou sem linha não compete por nada.
-  if (!linhaDoOutro?.ativo) return { colide: false, menorFolgaMinutos: Number.MAX_SAFE_INTEGER };
+  for (const outro of concorrentes) {
+    const linha = agenda.find((a) => a.flowKey === outro.key);
+    if (!linha?.ativo) continue; // desligado não dispara, logo não compete
 
-  return avaliarFolga(cronProposto, linhaDoOutro.cron);
+    const r = avaliarFolga(cronProposto, linha.cron);
+    if (r.menorFolgaMinutos < pior.menorFolgaMinutos) {
+      pior = { ...r, comQuem: outro.rotulo };
+    }
+  }
+  return pior;
 }

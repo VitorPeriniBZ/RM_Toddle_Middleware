@@ -64,6 +64,11 @@ const ROTULO_SITUACAO: Record<Situacao, string> = {
   desligado: 'desligado',
 };
 
+/** Algum fluxo com job em voo? Decide se a tela fica se atualizando. */
+function painelTemExecucao(p: Painel | null): boolean {
+  return Boolean(p?.fluxos.some((f) => f.execucaoEmVoo));
+}
+
 export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
   const [painel, setPainel] = useState<Painel | null>(null);
   const [carregando, setCarregando] = useState(false);
@@ -81,6 +86,21 @@ export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
   }
 
   useEffect(() => { void carregar(); }, []);
+
+  /**
+   * Enquanto houver execução em voo, recarrega sozinho.
+   *
+   * Sem isto o botão "Sincronizar agora" ficaria travado até alguém apertar
+   * Atualizar — a trava nasceria correta e depois envelheceria, que é a mesma
+   * classe de mentira que esta tela existe para não cometer. Quando nada está
+   * rodando, não fica pedindo à toa.
+   */
+  const algoRodando = painelTemExecucao(painel);
+  useEffect(() => {
+    if (!algoRodando) return;
+    const t = setInterval(() => void carregar(), 5_000);
+    return () => clearInterval(t);
+  }, [algoRodando]);
 
   if (!painel) return <p style={s.fraco}>{carregando ? 'Lendo a agenda…' : '—'}</p>;
 
@@ -191,6 +211,20 @@ function CartaoDoFluxo({
   const confere = Boolean(fluxo.observado && d && fluxo.observado.cron === d.cron);
   const [confirmando, setConfirmando] = useState(false);
 
+  const emVoo = fluxo.execucaoEmVoo;
+  const podeRodarAgora = fluxo.podeAtivar && !emVoo;
+  const motivoDeNaoRodar = !fluxo.podeAtivar
+    ? fluxo.motivoDoBloqueio ?? ''
+    : emVoo
+      ? `já há ${emVoo.quantidade} execução(ões) deste fluxo em voo${emVoo.desde ? `, desde ${desde(emVoo.desde)}` : ''}`
+      : '';
+
+  // Painel aberto e a execução começou (pelo cron, ou por outra pessoa): fecha,
+  // senão sobra um botão "Confirmar e rodar" que só produziria 409.
+  useEffect(() => {
+    if (emVoo && confirmando) setConfirmando(false);
+  }, [emVoo, confirmando]);
+
   return (
     <div style={s.cartao}>
       <div style={{ ...s.linha, justifyContent: 'space-between' }}>
@@ -205,14 +239,20 @@ function CartaoDoFluxo({
           </button>
           {/* Rodar agora não depende de o fluxo estar LIGADO: desligado é sobre
               o automático, e a execução manual é justamente o caso de quem quer
-              uma passada sem ligar o cron. Só fluxo BLOQUEADO não roda. */}
+              uma passada sem ligar o cron. Só fluxo BLOQUEADO não roda.
+
+              E não roda com outra execução em voo: os workers são
+              `concurrency: 1`, então o segundo job não rodaria em paralelo — ele
+              esperaria e rodaria EM SEGUIDA, reescrevendo o que o primeiro
+              acabou de escrever. O botão diz isso no rótulo em vez de deixar a
+              pessoa clicar e receber uma recusa. */}
           <button
-            style={{ ...s.botao, opacity: fluxo.podeAtivar ? 1 : 0.5 }}
+            style={{ ...s.botao, opacity: podeRodarAgora ? 1 : 0.5 }}
             onClick={() => setConfirmando(!confirmando)}
-            disabled={!fluxo.podeAtivar}
-            title={fluxo.podeAtivar ? '' : fluxo.motivoDoBloqueio ?? ''}
+            disabled={!podeRodarAgora}
+            title={motivoDeNaoRodar}
           >
-            {confirmando ? 'Fechar' : 'Sincronizar agora'}
+            {confirmando ? 'Fechar' : emVoo ? 'Já está rodando' : 'Sincronizar agora'}
           </button>
         </div>
       </div>
@@ -340,6 +380,15 @@ function CartaoDoFluxo({
           <div style={{ ...s.fraco, marginTop: '.4rem' }}>nenhum run registrado em <code style={s.mono}>job_run</code>.</div>
         )}
       </details>
+
+      {emVoo && (
+        <div style={s.aviso('atencao')}>
+          <strong>Execução em curso.</strong> {emVoo.quantidade} job(s) deste fluxo na fila
+          {emVoo.desde && ` desde ${desde(emVoo.desde)}`}. Rodar de novo agora não faria os dois em
+          paralelo — os workers processam um de cada vez, então o segundo esperaria e reescreveria o
+          que o primeiro acabou de escrever. Acompanhe na aba Jobs.
+        </div>
+      )}
 
       {confirmando && (
         <ConfirmacaoDeExecucao

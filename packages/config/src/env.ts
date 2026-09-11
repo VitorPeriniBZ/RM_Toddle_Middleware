@@ -292,7 +292,22 @@ const envSchema = z.object({
    * ninguém está lançando nota, e cada passada custa uma leitura da Sentença
    * TODDLE.NOTAS (7 mil linhas) no RM.
    */
-  NOTA_SYNC_CRON: z.string().default('*/30 6-22 * * *'),
+  //
+  // `15,45` e nao a cada meia hora: com alunos em `:00` e professores em `:30`,
+  // qualquer horario de 30 em 30 minutos cai EM CIMA de um dos dois. Medido em
+  // 11/09/2026, o default antigo dava folga ZERO contra os dois — e sobreposicao
+  // na janela de 300s do Toddle custou "17 de 50 alunos falharam (HTTP 429)" num
+  // lote real.
+  //
+  // O meio do vao e o melhor possivel enquanto os outros dois estiverem em `:00`
+  // e `:30`: 15 min de cada lado. Fica abaixo da convencao de 30 min, e o
+  // preflight avisa — a convencao e a frequencia de 30 em 30 minutos sao
+  // matematicamente incompativeis, e o conserto de verdade e o limitador
+  // compartilhado, nao um cron mais esperto.
+  //
+  // (Comentario de LINHA de proposito: a sintaxe de cron tem `*/`, que fecharia
+  // um comentario de bloco no meio da frase. Ja quebrou o build uma vez.)
+  NOTA_SYNC_CRON: z.string().default('15,45 6-22 * * *'),
   /**
    * Recusar nota cuja etapa esteja com `SETAPAS.DISPONIVELALUNOS='N'`?
    *

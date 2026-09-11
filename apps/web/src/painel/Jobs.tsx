@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type PainelDeJobs, type FluxoDeJobs, type RunNoGrafico } from '../api';
+import { api, type PainelDeJobs, type FluxoDeJobs, type JobTerminado, type RunNoGrafico } from '../api';
 import { cor, quando, s } from '../estilos';
 
 /**
@@ -38,13 +38,15 @@ export function Jobs({ aoErrar }: { aoErrar: (e: unknown) => void }) {
     }
   }
 
+  // Rápido quando há trabalho, devagar quando não há: uma barra de progresso que
+  // só anda com F5 não é barra de progresso, mas pedir de 5 em 5 segundos com a
+  // fila vazia é só barulho.
+  const ocupado = Boolean(dados?.fluxos.some((f) => f.contagem.ativos > 0 || f.contagem.esperando > 0));
+  useEffect(() => { void carregar(); }, []);
   useEffect(() => {
-    void carregar();
-    // Enquanto houver job ativo o painel se atualiza sozinho: uma barra de
-    // progresso que só anda com F5 não é barra de progresso.
-    const t = setInterval(() => void carregar(), 5_000);
+    const t = setInterval(() => void carregar(), ocupado ? 3_000 : 30_000);
     return () => clearInterval(t);
-  }, []);
+  }, [ocupado]);
 
   if (!dados) return <p style={s.fraco}>{carregando ? 'Lendo as filas…' : '—'}</p>;
 
@@ -105,7 +107,41 @@ function CartaoDeJobs({ fluxo }: { fluxo: FluxoDeJobs }) {
       </div>
 
       <Execucao fluxo={fluxo} />
+      <RunsPresos runs={fluxo.runsPresos} />
+      <Terminados jobs={fluxo.terminados} />
       <Historico fluxo={fluxo} />
+    </div>
+  );
+}
+
+/**
+ * Run que ficou aberto e parou de dar notícia.
+ *
+ * Um run só fecha quando o último lote reporta. Se um lote morre — 429 do
+ * Toddle, worker derrubado no meio — ninguém fecha, e a linha fica `executing`
+ * para sempre, com o painel desenhando uma barra que cresce a cada recarga.
+ *
+ * Aqui isso vira um aviso com o que fazer, em vez de uma animação mentindo.
+ */
+function RunsPresos({ runs }: { runs: RunNoGrafico[] }) {
+  if (runs.length === 0) return null;
+  return (
+    <div style={s.aviso('ruim')}>
+      <strong>{runs.length} run(s) preso(s).</strong> Aberto(s) e sem notícia de lote nenhum —
+      ninguém vai fechá-los sozinho, e eles não indicam trabalho em andamento.
+      <ul style={{ margin: '.4rem 0 0', paddingLeft: '1.2rem' }}>
+        {runs.map((r) => (
+          <li key={r.chave} style={{ fontSize: '.85rem' }}>
+            <code style={s.mono}>{r.chave}</code> — começou {quando(r.inicioEm)}
+            {r.lotes && `, parou em ${r.lotes.feitos}/${r.lotes.total} lotes`}
+            {r.semNoticiaHaMs !== undefined && `, sem notícia há ${duracao(r.semNoticiaHaMs)}`}
+          </li>
+        ))}
+      </ul>
+      <div style={{ ...s.fraco, marginTop: '.4rem' }}>
+        O sync é idempotente: o próximo disparo refaz o que faltou. Este aviso é para o run não
+        ficar contando uma história de progresso que não está acontecendo.
+      </div>
     </div>
   );
 }
@@ -164,6 +200,70 @@ function Execucao({ fluxo }: { fluxo: FluxoDeJobs }) {
 }
 
 /**
+ * O que acabou de terminar, direto da fila.
+ *
+ * ─── POR QUE ISTO EXISTE ────────────────────────────────────────────────────
+ *
+ * Porque `job_run` não cobre tudo. Um job que roda e decide NÃO fazer nada
+ * retorna antes de abrir run — é o caso da via de nota com `NOTA_SYNC_ATIVO`
+ * em `false`, que devolve `{ desligado: true }` em milissegundos.
+ *
+ * Sem este bloco, clicar em "Sincronizar agora" nesse fluxo produzia silêncio
+ * absoluto: o job rodava, fazia o certo, e a tela continuava dizendo "último
+ * sucesso: nunca". Quem clicou não tinha como saber se funcionou.
+ *
+ * A janela é curta de propósito — é a retenção do Redis (24h/7d). Para prazo
+ * maior, o gráfico abaixo, que vem do Postgres.
+ */
+function Terminados({ jobs }: { jobs: JobTerminado[] }) {
+  if (jobs.length === 0) return null;
+  return (
+    <div style={{ marginTop: '.8rem' }}>
+      <div style={s.dadoRotulo}>terminaram nas últimas 24h</div>
+      <table style={{ ...s.tabela, marginTop: '.2rem', tableLayout: 'fixed' }}>
+        <tbody>
+          {jobs.map((j) => (
+            <tr key={j.id ?? j.terminadoEm}>
+              <td style={{ ...s.td, width: 90, whiteSpace: 'nowrap' }}>
+                <span style={s.selo(j.desfecho === 'failed' ? 'ruim' : 'bom')}>
+                  {j.desfecho === 'failed' ? '✕ falhou' : '✓ ok'}
+                </span>
+              </td>
+              <td style={{ ...s.td, width: 110, whiteSpace: 'nowrap' }}>
+                {quando(j.terminadoEm)}
+                {j.manual && <span style={s.fraco}> · manual</span>}
+              </td>
+              <td style={{ ...s.td, width: 70, whiteSpace: 'nowrap' }}>
+                {j.duracaoMs === null ? '—' : duracao(j.duracaoMs)}
+              </td>
+              {/* O retorno é o que explica um job que "rodou e não fez nada".
+                  Sem ele, `{desligado:true}` seria invisível. Quebra em qualquer
+                  ponto: é JSON, não tem espaço onde quebrar sozinho, e sem isto
+                  ele empurra a largura do cartão para fora da tela. */}
+              <td style={{ ...s.td, ...s.mono, fontSize: '.78rem', wordBreak: 'break-word' }}>
+                {j.erro ?? resumoDoRetorno(j.retorno)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** O retorno em uma linha, com tradução do caso que mais confunde. */
+function resumoDoRetorno(v: unknown): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (o.desligado === true) return 'rodou e não tocou no RM — a via está desligada (NOTA_SYNC_ATIVO=false)';
+    if (typeof o.naoEscreveu === 'string') return `não escreveu: ${o.naoEscreveu}`;
+  }
+  const txt = typeof v === 'string' ? v : JSON.stringify(v);
+  return txt.length > 120 ? `${txt.slice(0, 120)}…` : txt;
+}
+
+/**
  * A barra.
  *
  * Extremidade arredondada de 4px ancorada na base, trilho recessivo, e o número
@@ -206,16 +306,19 @@ const TOM_DO_DESFECHO: Record<RunNoGrafico['desfecho'], string> = {
   succeeded: cor.bom,
   failed: cor.ruim,
   executing: cor.atencao,
+  preso: cor.ruim,
 };
 const GLIFO: Record<RunNoGrafico['desfecho'], string> = {
   succeeded: '✓',
   failed: '✕',
   executing: '⋯',
+  preso: '!',
 };
 const NOME_DO_DESFECHO: Record<RunNoGrafico['desfecho'], string> = {
   succeeded: 'sucesso',
   failed: 'falha',
   executing: 'em curso',
+  preso: 'preso',
 };
 
 function duracao(ms: number): string {
@@ -258,7 +361,16 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
     );
   }
 
-  const maior = Math.max(...runs.map((r) => r.duracaoMs), 1);
+  /**
+   * A escala sai dos runs TERMINADOS.
+   *
+   * Um run aberto cresce sem limite — um de 116 min achatou quarenta barras de
+   * 30s até virarem linha reta, e o gráfico parou de dizer qualquer coisa sobre
+   * os que terminaram. O aberto é desenhado na altura máxima e marcado, o que é
+   * honesto: ele está FORA da escala, não no topo dela.
+   */
+  const terminados = runs.filter((r) => r.desfecho === 'succeeded' || r.desfecho === 'failed');
+  const maior = Math.max(...(terminados.length ? terminados : runs).map((r) => r.duracaoMs), 1);
   const larguraBarra = 14;
   const vao = 2; // o espaçador de 2px entre marcas
   const alturaPlot = 64;
@@ -270,7 +382,7 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
       <div style={{ ...s.linha, justifyContent: 'space-between' }}>
         <span style={s.dadoRotulo}>duração por run</span>
         <span style={s.fraco}>
-          maior: {duracao(maior)} · {runs.length} run(s)
+          maior terminado: {duracao(maior)} · {runs.length} run(s)
         </span>
       </div>
 
@@ -295,7 +407,10 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
                 stroke={cor.borda} strokeWidth="1" />
 
           {runs.map((r, i) => {
-            const h = Math.max((r.duracaoMs / maior) * alturaPlot, 3);
+            const foraDaEscala = r.duracaoMs > maior;
+            const h = foraDaEscala
+              ? alturaPlot
+              : Math.max((r.duracaoMs / maior) * alturaPlot, 3);
             const x = i * (larguraBarra + vao);
             const y = alturaPlot + alturaGlifo - h;
             const preenchimento =
@@ -331,7 +446,7 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
 
       {/* Legenda: identidade nunca fica só na cor. */}
       <div style={{ ...s.linha, gap: '.9rem', marginTop: '.4rem' }}>
-        {(['succeeded', 'failed', 'executing'] as const).map((d) => (
+        {(['succeeded', 'failed', 'executing', 'preso'] as const).map((d) => (
           <span key={d} style={{ ...s.fraco, display: 'inline-flex', alignItems: 'center', gap: '.3rem' }}>
             <span style={{ color: TOM_DO_DESFECHO[d] }} aria-hidden="true">{GLIFO[d]}</span>
             {NOME_DO_DESFECHO[d]}

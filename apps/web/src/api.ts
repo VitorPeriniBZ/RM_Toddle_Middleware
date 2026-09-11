@@ -104,6 +104,11 @@ export interface FluxoNaTela {
   motivoDoBloqueio: string | null;
   /** O que a confirmação de "Sincronizar agora" mostra. Vem do catálogo de fluxos. */
   avisoAoExecutarAgora: string;
+  /**
+   * `null` = nada rodando. Preenchido = já há execução em voo, e o botão de
+   * rodar agora nasce travado. A guarda de verdade continua sendo o 409 do POST.
+   */
+  execucaoEmVoo: { quantidade: number; desde: string | null } | null;
   janelaSemSucessoHoras: number;
   desejado: AgendaDoFluxo | null;
   observado: SchedulerObservado | null;
@@ -182,7 +187,14 @@ export const api = {
   authConfig: () => pedir<AuthConfig>('/auth/config'),
   health: () => pedir<{
     ok: boolean; authMode: string; tenant: string; configVersion: string;
-    dependencias: Array<{ nome: string; ok: boolean; erro?: string }>;
+    dependencias: Array<{
+      nome: string;
+      ok: boolean;
+      /** `limitado` = rate limit. NÃO é queda — ver o /health na API. */
+      estado: 'ok' | 'limitado' | 'falha';
+      erro?: string;
+      liberaEmSegundos?: number;
+    }>;
   }>('/health'),
   config: () => pedir<Record<string, string>>('/config'),
   resumo: () => pedir<{
@@ -255,10 +267,25 @@ export interface JobAtivo {
 
 export interface RunNoGrafico {
   chave: string;
-  desfecho: 'succeeded' | 'failed' | 'executing';
+  /** `preso` = aberto e sem notícia de lote nenhum há 15 min. Ver /jobs na API. */
+  desfecho: 'succeeded' | 'failed' | 'executing' | 'preso';
   inicioEm: string;
   duracaoMs: number;
   lotes?: { feitos: number; total: number };
+  semNoticiaHaMs?: number;
+}
+
+export interface JobTerminado {
+  id: string | null;
+  nome: string;
+  desfecho: 'completed' | 'failed';
+  terminadoEm: string | null;
+  duracaoMs: number | null;
+  tentativas: number;
+  /** O retorno do processador. É onde aparece `{ desligado: true }`. */
+  retorno: unknown;
+  erro: string | null;
+  manual: boolean;
 }
 
 export interface FluxoDeJobs {
@@ -267,8 +294,10 @@ export interface FluxoDeJobs {
   fila: string;
   contagem: { ativos: number; esperando: number; reservaDeCron: number };
   ativos: JobAtivo[];
+  terminados: JobTerminado[];
   /** Progresso por lote do fan-out de aluno. `null` nos demais. */
   lotesEmCurso: { feitos: number; total: number } | null;
+  runsPresos: RunNoGrafico[];
   historico: RunNoGrafico[];
   historicoSuficiente: boolean;
   minimoParaGrafico: number;

@@ -220,14 +220,22 @@ function Saude({ aoErrar }: { aoErrar: (e: unknown) => void }) {
 
   if (!health) return <p style={s.fraco}>Consultando…</p>;
 
-  const caidas = health.dependencias.filter((d) => !d.ok);
+  // Rate limit NÃO conta como queda: o serviço está no ar, nós é que pedimos
+  // demais. Chamar isso de "fora do ar" manda quem lê procurar defeito no lugar
+  // errado — foi o que a tela fez em 11/09/2026.
+  const caidas = health.dependencias.filter((d) => d.estado === 'falha');
+  const limitadas = health.dependencias.filter((d) => d.estado === 'limitado');
 
   return (
     <>
       <div style={{ ...s.barra, justifyContent: 'space-between' }}>
         <div style={s.linha}>
-          <span style={s.selo(caidas.length === 0 ? 'bom' : 'ruim')}>
-            {caidas.length === 0 ? 'tudo no ar' : `${caidas.length} fora do ar`}
+          <span style={s.selo(caidas.length > 0 ? 'ruim' : limitadas.length > 0 ? 'atencao' : 'bom')}>
+            {caidas.length > 0
+              ? `${caidas.length} fora do ar`
+              : limitadas.length > 0
+                ? `${limitadas.length} com limite atingido`
+                : 'tudo no ar'}
           </span>
           <span style={s.fraco}>
             {health.dependencias.length} dependência(s) verificada(s)
@@ -241,10 +249,20 @@ function Saude({ aoErrar }: { aoErrar: (e: unknown) => void }) {
           {health.dependencias.map((d) => (
             <tr key={d.nome}>
               <td style={{ ...s.td, width: 150 }}>{d.nome}</td>
-              <td style={{ ...s.td, width: 90 }}>
-                <span style={s.selo(d.ok ? 'bom' : 'ruim')}>{d.ok ? 'ok' : 'falha'}</span>
+              <td style={{ ...s.td, width: 110 }}>
+                <span style={s.selo(d.estado === 'ok' ? 'bom' : d.estado === 'limitado' ? 'atencao' : 'ruim')}>
+                  {d.estado === 'ok' ? 'ok' : d.estado === 'limitado' ? 'limitado' : 'falha'}
+                </span>
               </td>
-              <td style={{ ...s.td, color: cor.ruim, fontSize: '.82rem' }}>{d.ok ? '' : d.erro}</td>
+              <td
+                style={{
+                  ...s.td,
+                  color: d.estado === 'limitado' ? cor.atencao : cor.ruim,
+                  fontSize: '.82rem',
+                }}
+              >
+                {d.estado === 'ok' ? '' : d.erro}
+              </td>
             </tr>
           ))}
         </tbody>

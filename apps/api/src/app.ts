@@ -46,6 +46,62 @@ const cfg = tenantConfig;
  * deploy-por-tenant, e o dia em que não for, o tenant sairá do vínculo do
  * usuário, nunca do cliente.
  */
+type EstadoDependencia = 'ok' | 'limitado' | 'falha';
+
+interface Dependencia {
+  nome: string;
+  ok: boolean;
+  estado: EstadoDependencia;
+  erro?: string;
+  /** Segundos até a janela liberar, quando a API informa. */
+  liberaEmSegundos?: number;
+}
+
+async function checarDependencia(
+  nome: string,
+  fn: () => Promise<unknown>,
+): Promise<Dependencia> {
+  try {
+    await fn();
+    return { nome, ok: true, estado: 'ok' };
+  } catch (e) {
+    const status = (e as { status?: number }).status;
+    const texto = e instanceof Error ? e.message : String(e);
+    const corpo = JSON.stringify((e as { body?: unknown }).body ?? '');
+
+    // 429, ou a mensagem do Toddle quando o status não veio.
+    if (status === 429 || /rate limit/i.test(corpo + texto)) {
+      const seg = Number(/after (\d+) seconds/i.exec(corpo + texto)?.[1] ?? 300);
+      return {
+        nome,
+        ok: false,
+        estado: 'limitado',
+        erro: `limite de requisições atingido — não é queda. A janela do Toddle é de ${seg}s`,
+        liberaEmSegundos: seg,
+      };
+    }
+    return { nome, ok: false, estado: 'falha', erro: texto.slice(0, 160) };
+  }
+}
+
+/**
+ * O check do Toddle, com cache curto.
+ *
+ * Guardado em módulo e não em Redis de propósito: é vivacidade do PROCESSO, e
+ * um cache compartilhado faria uma instância responder pela saúde de outra.
+ */
+let cacheDoToddle: { em: number; resultado: Dependencia } | null = null;
+const VALIDADE_DO_CACHE_MS = 30_000;
+
+async function checarToddleComCache(): Promise<Dependencia> {
+  if (cacheDoToddle && Date.now() - cacheDoToddle.em < VALIDADE_DO_CACHE_MS) {
+    return cacheDoToddle.resultado;
+  }
+  const resultado = await checarDependencia('toddle', () => toddleClient.assertTargetOrganization());
+  cacheDoToddle = { em: Date.now(), resultado };
+  return resultado;
+}
+
 export function construirApp() {
   const app = Fastify({ loggerInstance: logger });
 
@@ -74,18 +130,35 @@ export function construirApp() {
     await autenticar(req, reply);
   });
 
-  /** Vivacidade + dependências. Sem autenticação, sem PII. */
+  /**
+   * Vivacidade + dependências. Sem autenticação, sem PII.
+   *
+   * ─── RATE LIMIT NÃO É QUEDA ─────────────────────────────────────────────
+   *
+   * O Toddle pune excesso com `429` e uma janela de 300s. Até 11/09/2026 esta
+   * rota tratava isso como falha, e a tela dizia "1 FORA DO AR" — diagnóstico
+   * errado: o Toddle estava de pé, nós é que pedimos demais. Quem lesse aquilo
+   * iria procurar defeito no lugar errado.
+   *
+   * `limitado` é um terceiro estado, e a tela o pinta como atenção, não erro.
+   *
+   * ─── O CHECK NÃO PODE SER A CAUSA DO PROBLEMA QUE ELE RELATA ────────────
+   *
+   * `assertTargetOrganization` é uma chamada REAL ao Toddle, e o orçamento é
+   * limitado. Sem cache, cada visita à aba Saúde gastava uma requisição da
+   * mesma janela que os syncs precisam — um verificador que ajuda a estourar o
+   * limite que ele mede. O resultado fica em cache por 30s; para vivacidade
+   * isso é tempo real de sobra.
+   */
   app.get('/health', async () => {
-    const checar = async (nome: string, fn: () => Promise<unknown>) => {
-      try { await fn(); return { nome, ok: true }; }
-      catch (e) { return { nome, ok: false, erro: e instanceof Error ? e.message.slice(0, 160) : String(e) }; }
-    };
     const deps = await Promise.all([
-      checar('postgres', () => pgPool.query('SELECT 1')),
-      checar('toddle', () => toddleClient.assertTargetOrganization()),
+      checarDependencia('postgres', () => pgPool.query('SELECT 1')),
+      checarToddleComCache(),
     ]);
     return {
-      ok: deps.every((d) => d.ok),
+      // Limitado NÃO derruba o `ok`: o serviço está no ar, e um monitor externo
+      // não deve ser paginado porque alguém abriu a tela duas vezes seguidas.
+      ok: deps.every((d) => d.ok || d.estado === 'limitado'),
       authMode: env.API_AUTH_MODE,
       tenant: cfg.slug,
       configVersion: configVersion(),

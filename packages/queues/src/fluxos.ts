@@ -23,6 +23,16 @@ import { STAFF_JOB, STUDENT_JOB, TERM_GRADE_JOB } from './names';
  * então "qual foi o último run deste fluxo?" é uma consulta direta.
  */
 
+/**
+ * Recursos externos com limite que os fluxos disputam entre si.
+ *
+ * Hoje só o Toddle: janela de rate limit de 300s por organização, medida. O RM
+ * não entra — o wsConsultaSQL não puniu concorrência em nenhuma medição.
+ */
+export const RECURSO = {
+  TODDLE: 'toddle',
+} as const;
+
 export const FLOW = {
   ALUNOS: 'students.sync',
   PROFESSORES: 'staff.sync',
@@ -59,6 +69,24 @@ export interface Fluxo {
   podeAtivar: boolean;
   motivoDoBloqueio?: string;
   /**
+   * Que recurso EXTERNO e limitado este fluxo disputa.
+   *
+   * ─── POR QUE UM CAMPO, E NÃO UMA LISTA DE PARES ─────────────────────────
+   *
+   * A guarda de folga nasceu como um par fixo `[alunos, professores]` no código
+   * da rota. Com três fluxos isso já falhou: o de notas entrou disputando a
+   * mesma janela do Toddle, ninguém o tinha posto no par, e ligar um cron que
+   * colidia com os outros dois não avisou nada. Par vira trio vira quarteto, e a
+   * lista sempre esquece o fluxo novo.
+   *
+   * Declarar o recurso no CATÁLOGO inverte isso: um fluxo novo entra dizendo o
+   * que disputa, e a guarda o compara com todos os outros que disputam o mesmo,
+   * sem ninguém precisar lembrar de editar uma lista em outro arquivo.
+   *
+   * `undefined` = não disputa nada com ninguém (só lê o RM, por exemplo).
+   */
+  recursoDisputado?: string;
+  /**
    * O que dizer a quem clica em "Sincronizar agora", ANTES de enfileirar.
    *
    * Mora aqui, junto da definição, e não na tela: o efeito de rodar cada fluxo é
@@ -80,11 +108,13 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     fila: QUEUE.RM_TO_TODDLE_STUDENTS,
     job: STUDENT_JOB.EXTRACT,
     janelaSemSucessoHoras: 13,
+    recursoDisputado: RECURSO.TODDLE,
     podeAtivar: true,
     avisoAoExecutarAgora:
       'Lê os alunos do RM e CRIA ou ATUALIZA cadastro no Toddle — inclusive aluno ' +
       'novo, que passa a existir lá. Não apaga ninguém. Leva alguns minutos e não ' +
-      'dá para interromper depois de começar.',
+      'dá para interromper depois de começar. CONSOME COTA: o Toddle limita por ' +
+      'janela de 300s, e rodar isto perto do horário agendado derruba os dois.',
   },
   [FLOW.PROFESSORES]: {
     key: FLOW.PROFESSORES,
@@ -92,17 +122,22 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     fila: QUEUE.RM_TO_TODDLE_STAFF,
     job: STAFF_JOB.SYNC,
     janelaSemSucessoHoras: 13,
+    recursoDisputado: RECURSO.TODDLE,
     podeAtivar: true,
     avisoAoExecutarAgora:
       'Lê os professores do RM e CRIA staff no Toddle. Criar staff é IRREVERSÍVEL: ' +
       'o e-mail vira a identidade da conta, e conta com e-mail errado só pode ser ' +
-      'arquivada, nunca corrigida. Também vincula professor a turma.',
+      'arquivada, nunca corrigida. Também vincula professor a turma. CONSOME COTA ' +
+      'da janela de 300s do Toddle.',
   },
   [FLOW.NOTAS]: {
     key: FLOW.NOTAS,
     rotulo: 'Notas (Toddle → RM)',
     fila: QUEUE.TODDLE_TO_RM_TERM_GRADES,
     job: TERM_GRADE_JOB.SYNC,
+    // Lê o Toddle inteiro antes de decidir o que escrever, então disputa a
+    // mesma janela de 300s que os dois de cadastro.
+    recursoDisputado: RECURSO.TODDLE,
     // Nota muda quando o professor digita, e o pedido é que chegue perto disso.
     // Janela curta porque o poll é curto — mas ver `podeAtivar` abaixo.
     janelaSemSucessoHoras: 4,
