@@ -308,6 +308,27 @@ const envSchema = z.object({
   // (Comentario de LINHA de proposito: a sintaxe de cron tem `*/`, que fecharia
   // um comentario de bloco no meio da frase. Ja quebrou o build uma vez.)
   NOTA_SYNC_CRON: z.string().default('15,45 6-22 * * *'),
+
+  // --- Limitador de taxa COMPARTILHADO do Toddle ----------------------------
+  //
+  // A janela de rate limit e da ORGANIZACAO: alunos, professores e notas gastam
+  // a mesma cota. Espacar cron nao cobre execucao manual, retry nem backfill —
+  // em 11/09/2026 um sync manual somado ao cron estourou a janela e o lote 3 do
+  // sync de alunos falhou com "17/50 alunos falharam (HTTP 429)".
+  //
+  // Ver packages/integrations/src/toddle/limitadorDeTaxa.ts.
+  TODDLE_RATE_LIMIT_ATIVO: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  //
+  // ESTIMATIVA, nao numero conhecido. O Toddle responde 429 dizendo "try again
+  // after 300 seconds" — o CASTIGO, nao a COTA. Medido: ~260 chamadas em ~4 min
+  // passam; dois syncs sobrepostos na mesma janela falham. Logo a cota esta
+  // acima de 260 e abaixo de ~520. 250 fica deliberadamente abaixo do menor
+  // valor que sabemos passar. Quem descobrir o numero real, corrija aqui.
+  TODDLE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(250),
+  TODDLE_RATE_LIMIT_JANELA_S: z.coerce.number().int().positive().default(300),
   /**
    * Recusar nota cuja etapa esteja com `SETAPAS.DISPONIVELALUNOS='N'`?
    *

@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
+import { aguardarVagaNoToddle, registrarRateLimitDoToddle } from './limitadorDeTaxa';
 import { chunk, logger, tenantConfig, type TenantConfig } from '@rm-toddle/config';
 import {
   ToddleAttendance,
@@ -99,6 +100,19 @@ export class ToddleClient {
       },
     });
 
+    /**
+     * Toda chamada passa pelo limitador ANTES de sair.
+     *
+     * No interceptor, e não em cada método, porque o ponto de controle tem de
+     * ser a chamada HTTP: são ~40 métodos neste cliente e qualquer um esquecido
+     * vira o buraco por onde a rajada escapa. O fan-out de alunos faz ~260
+     * chamadas — é aqui que elas ficam espaçadas.
+     */
+    this.http.interceptors.request.use(async (config) => {
+      await aguardarVagaNoToddle(`${config.method?.toUpperCase()} ${config.url}`);
+      return config;
+    });
+
     this.http.interceptors.response.use(undefined, (error: AxiosError) => {
       const status = error.response?.status;
       const body = error.response?.data;
@@ -108,6 +122,19 @@ export class ToddleClient {
       // dizia apenas "falhou", e foi o que tornou o diagnóstico de 10/08 lento:
       // 52 falhas de rede eram indistinguíveis de erro de negócio no log e na DLQ.
       const causa = status ? ` (HTTP ${status})` : error.code ? ` (${error.code})` : '';
+
+      // 429: cala TODOS os fluxos pela janela que a própria API mandou. É a rede
+      // de segurança do limitador — o balde é estimativa, este número é exato.
+      // `void`: registrar o cooldown não pode atrasar nem mascarar o erro.
+      if (status === 429) {
+        const corpo = JSON.stringify(body ?? '');
+        const segundos =
+          Number.isFinite(retryAfter) && retryAfter > 0
+            ? retryAfter
+            : Number(/after (\d+) seconds/i.exec(corpo)?.[1] ?? 300);
+        void registrarRateLimitDoToddle(segundos);
+      }
+
       throw new ToddleApiError(
         `Toddle API ${error.config?.method?.toUpperCase()} ${error.config?.url} falhou${causa}`,
         status,

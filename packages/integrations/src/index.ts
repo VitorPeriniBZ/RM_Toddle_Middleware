@@ -7,3 +7,4 @@ export * from './rm-soap/wsDataServerClient';
 export * from './totvs/types';
 export * from './totvs/totvsEducationalClient';
 export * from './rm-database/rmSqlPool';
+export * from './toddle/limitadorDeTaxa';
