@@ -1,5 +1,6 @@
 import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
+import { chaveCourse } from '@rm-toddle/domain';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
@@ -71,9 +72,18 @@ async function main(): Promise<void> {
   const mapeadas = new Map(ativos.map((c) => [c.rmCode, c]));
   const jaArquivadas = new Set(arquivados.map((c) => c.rmCode));
 
+  // O de-para COURSE é chaveado por CODPERLET:CODTURMA:CODDISC. IDTURMADISC
+  // continua identificando a linha DO RM (e é o que o relatório mostra, porque
+  // é por ele que se procura a turma na tela do TOTVS), mas não identifica mais
+  // o mapeamento — identity renumera na cópia de base. Ver domain/chaveCourse.ts.
+  const periodoLetivo = cfg.rm.escopo.periodoLetivo;
+  if (!periodoLetivo) throw new Error('RM_CODPERLET vazio: é parte da chave do de-para COURSE.');
+  const chaveDe = (r: { CODTURMA?: string; CODDISC?: string }): string =>
+    chaveCourse(periodoLetivo, String(r.CODTURMA ?? ''), String(r.CODDISC ?? ''));
+
   const perletsMapeados = new Map<string, number>();
   for (const r of doRm) {
-    if (mapeadas.has(r.IDTURMADISC)) {
+    if (mapeadas.has(chaveDe(r))) {
       perletsMapeados.set(r.IDPERLET, (perletsMapeados.get(r.IDPERLET) ?? 0) + 1);
     }
   }
@@ -116,7 +126,8 @@ async function main(): Promise<void> {
 
   for (const r of doPerlet) {
     const id = r.IDTURMADISC;
-    vistas.add(id);
+    const chave = chaveDe(r);
+    vistas.add(chave);
     const ativaNoRm = (r.ATIVA ?? '').toUpperCase() === 'S';
     const alunos = alunosPorTd.get(id)?.size ?? 0;
     const base = {
@@ -130,17 +141,19 @@ async function main(): Promise<void> {
       alteradoEm: soData(r.RECMODIFIEDON),
     };
 
-    if (mapeadas.has(id)) {
+    if (mapeadas.has(chave)) {
       achados.push({ ...base, situacao: ativaNoRm ? 'OK' : 'INATIVADA_NO_RM' });
-    } else if (jaArquivadas.has(id)) {
+    } else if (jaArquivadas.has(chave)) {
       if (ativaNoRm) achados.push({ ...base, situacao: 'REATIVADA_NO_RM' });
     } else if (ativaNoRm) {
       achados.push({ ...base, situacao: alunos > 0 ? 'NOVA_COM_ALUNOS' : 'NOVA_SEM_ALUNOS' });
     }
   }
 
-  for (const [id] of mapeadas) {
-    if (!vistas.has(id)) achados.push({ situacao: 'SUMIU_DO_RM', idTurmaDisc: id });
+  // Aqui a chave do mapeamento é o que se tem — a turma sumiu do RM, então não
+  // há linha de onde tirar o IDTURMADISC. Mostra a chave, que é mais legível.
+  for (const [chave] of mapeadas) {
+    if (!vistas.has(chave)) achados.push({ situacao: 'SUMIU_DO_RM', idTurmaDisc: chave });
   }
 
   // ─── deriva de rótulo: o título no Toddle ainda bate com o RM? ───────────
@@ -152,7 +165,7 @@ async function main(): Promise<void> {
     if (t) tituloPorTd.set(c.rmCode, String(t.title ?? ''));
   }
   const renomeadas = doPerlet.filter((r) => {
-    const titulo = tituloPorTd.get(r.IDTURMADISC);
+    const titulo = tituloPorTd.get(chaveDe(r));
     const disc = (r.NOMEDISC ?? '').trim();
     if (!titulo || !disc) return false;
     return !titulo.toLowerCase().includes(disc.toLowerCase());

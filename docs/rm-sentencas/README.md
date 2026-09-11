@@ -184,6 +184,44 @@ o Toddle com dado faltando.
 > `TIPO` é um enum `smallint` (seria `12` para texto) — o que se lê é
 > `System.Int16`, nome de tipo .NET. Confira antes de agir.
 
+## A cópia renumera o IDTURMADISC — e o de-para de COURSE depende dele
+
+Decidido em 11/09/2026: a cópia vem da **produção** e o agendamento **fica
+ligado**. Isso torna um detalhe do `id_mapping` a coisa mais perigosa da
+operação.
+
+O `id_mapping` foi desenhado com `rm_code` = **código de negócio** (RA, CHAPA,
+CODTURMA), justamente para sobreviver a cópia de base. Duas entidades fogem
+disso:
+
+- **`COURSE`** → `rm_code` é o `IDTURMADISC` (`rmTeacherSource.ts`)
+- **`ASSESSMENT`** → chave composta `IDTURMADISC:CODETAPA:CODPROVA`
+  (`mappingProposalRepository.ts`)
+
+`IDTURMADISC` é coluna *identity*. A cópia de produção **renumera**. As linhas
+de `COURSE` no `id_mapping` continuam com os números antigos, e aí há dois
+desfechos — o segundo é o ruim:
+
+1. o número antigo não existe mais → a turma parece nova e o sync cria
+   duplicata no Toddle. Barulhento, dá para ver.
+2. o número antigo passou a pertencer a **outra** turma-disciplina → o de-para
+   aponta para a disciplina errada, sem erro nenhum, e frequência e nota vão
+   para a turma errada. Silencioso.
+
+Com o cron em `0 3,9,12,16 * * *`, a primeira passada depois da cópia acontece
+sozinha, sem ninguém olhando.
+
+**O que existe para reconstruir:** `de-para-idturmadisc-20260911.csv` — as 392
+turma-disciplina distintas de hoje, com `ID_TURMADISC → COD_TURMA + CODDISC +
+CODFILIAL + CODPERLET`. Só chave de negócio, sem nome nem e-mail de ninguém.
+Depois da cópia, rode a `TODDLE.TURMADISC` de novo e case por
+`(COD_TURMA, CODDISC)` para descobrir o `IDTURMADISC` novo de cada uma, e então
+corrija o `id_mapping` antes de deixar qualquer job escrever.
+
+> O conserto de fundo é migrar o `rm_code` de `COURSE` para a chave natural
+> `CODTURMA:CODDISC`, como as outras entidades já fazem. Enquanto isso não
+> acontece, toda cópia de base exige esta conferência à mão.
+
 ## Recorte de campus (`RM_CODFILIAL=2`)
 
 | Sentença | total | campus 2 |

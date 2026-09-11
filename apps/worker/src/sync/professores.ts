@@ -1,6 +1,6 @@
-import { logger } from '@rm-toddle/config';
+import { logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository } from '@rm-toddle/db';
-import { fetchTeachersFromRm, type RmTeacher, type RmTurmaDisc } from '@rm-toddle/domain';
+import { chaveCourse, fetchTeachersFromRm, type RmTeacher, type RmTurmaDisc } from '@rm-toddle/domain';
 import { comPaciencia, toddleClient } from '@rm-toddle/integrations';
 
 /**
@@ -86,7 +86,14 @@ export async function sincronizarProfessores(
   const staffMap = await idMappingRepository.listByType('STAFF', 'active');
   const courseMap = await idMappingRepository.listByType('COURSE', 'active');
   const staffPorCodProf = new Map(staffMap.map((m) => [m.rmCode, m.toddleId]));
+  // O de-para COURSE é chaveado por CODPERLET:CODTURMA:CODDISC, não por
+  // IDTURMADISC: identity renumera na cópia de base e o vínculo passaria a
+  // apontar para outra disciplina em silêncio. Ver domain/chaveCourse.ts.
   const classPorTurmaDisc = new Map(courseMap.map((m) => [m.rmCode, m.toddleId]));
+  const periodoLetivo = tenantConfig.rm.escopo.periodoLetivo;
+  if (!periodoLetivo) {
+    throw new Error('RM_CODPERLET vazio: é parte da chave do de-para COURSE e sem ele o vínculo não resolve.');
+  }
 
   const staffNoToddle = new Map<string, string>(); // email -> staffId
   for (let pagina = 1; pagina <= 20; pagina += 1) {
@@ -137,7 +144,7 @@ export async function sincronizarProfessores(
     // está SÓ aqui?" é a reconciliação, que lê o mesmo `td.gerenciada`.
     if (td.gerenciada) { turmasGerenciadas.push(td.idTurmaDisc); continue; }
 
-    const classId = classPorTurmaDisc.get(td.idTurmaDisc);
+    const classId = classPorTurmaDisc.get(chaveCourse(periodoLetivo, td.codTurma, td.codDisc));
     if (!classId) { turmasNaoMapeadas.push(td); continue; }
     const jaNaTurma = staffPorClass.get(classId) ?? new Set<string>();
 

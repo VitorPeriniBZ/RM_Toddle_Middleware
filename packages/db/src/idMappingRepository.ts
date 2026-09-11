@@ -8,6 +8,16 @@ export const ENTITY_TYPES = [
   'STUDENT',
   'STAFF',
   'PARENT',
+  /**
+   * Turma-disciplina. `rm_code` = `CODPERLET:CODTURMA:CODDISC`.
+   *
+   * Já foi o `IDTURMADISC` puro. Trocado em 11/09/2026 porque identity é
+   * renumerado por cópia de base, e o desfecho ruim não é a turma sumir — é o
+   * número antigo passar a pertencer a OUTRA turma-disciplina, fazendo nota e
+   * frequência irem para a turma errada sem erro nenhum. O período entra na
+   * chave porque `CODTURMA` não carrega o ano. Ver `domain/chaveCourse.ts` e
+   * `scripts/migrarChaveCourse.ts`.
+   */
   'COURSE',
   // Toddle 2.0: a EAV usa o modelo TeacherCourse (uma "turma do professor" por
   // disciplina/docente), distinto do course clássico do 1.0. O Fluxo 2 mapeia

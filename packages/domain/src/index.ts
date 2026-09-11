@@ -28,5 +28,6 @@ export * from './rmAssessmentTargets';
 export * from './assessmentProjection';
 export * from './notaXml';
 export * from './rmTeacherSource';
+export * from './chaveCourse';
 export * from './rmWriteDecision';
 export * from './volumeGuard';
