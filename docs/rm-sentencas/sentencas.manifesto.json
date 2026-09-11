@@ -1,0 +1,256 @@
+{
+  "TODDLE.FREQ": {
+    "APLICACAO": "S",
+    "CODCOLIGADA": "1",
+    "CODSENTENCA": "TODDLE.FREQ",
+    "CONTROLE": "-31161",
+    "DISPONIVEL": null,
+    "DISPONIVELFILTRO": "1",
+    "DISPONIVELMENU": "0",
+    "DISPONIVELRELATORIO": "1",
+    "DISPONIVELVISAO": "1",
+    "DTULTALTERACAO": "2026-08-20T10:04:01.38",
+    "GUID": "184de524-c7be-4144-bf84-06d6d814c17d",
+    "IDDBCONNECTION": null,
+    "IDGRUPO": null,
+    "NIVEL": null,
+    "NOMEFANTASIA": null,
+    "NOMESISTEMA": null,
+    "PARAMETROS": [
+      {
+        "DESCRICAO": "CODCOLIGADA",
+        "NOME": "CODCOLIGADA",
+        "TIPO": "System.Int16"
+      },
+      {
+        "DESCRICAO": "CODPERLET",
+        "NOME": "CODPERLET",
+        "TIPO": null
+      },
+      {
+        "DESCRICAO": "DATAFINAL",
+        "NOME": "DATAFINAL",
+        "TIPO": null
+      },
+      {
+        "DESCRICAO": "DATAINICIAL",
+        "NOME": "DATAINICIAL",
+        "TIPO": null
+      }
+    ],
+    "PODEALTERAR": null,
+    "PODEEXCLUIR": null,
+    "SEMSEGCOLUNAS": "0",
+    "SEMSEGESTENDIDA": "0",
+    "SHA256_SENTENCA": "acf4851c35176959f0f6bdbfd980b40b32ae097992efcb24ff82b71b580271dd",
+    "TAMANHO": "2572",
+    "TITULO": "Toddle Frequencia",
+    "USRULTALTERACAO": "vitor.biazutti",
+    "VERSAO": null
+  },
+  "TODDLE.NOTAS": {
+    "APLICACAO": "S",
+    "CODCOLIGADA": "1",
+    "CODSENTENCA": "TODDLE.NOTAS",
+    "CONTROLE": "17867",
+    "DISPONIVEL": null,
+    "DISPONIVELFILTRO": "1",
+    "DISPONIVELMENU": "0",
+    "DISPONIVELRELATORIO": "1",
+    "DISPONIVELVISAO": "1",
+    "DTULTALTERACAO": "2026-08-20T14:41:38.857",
+    "GUID": "1c8d6419-bd1f-44a2-911e-0b6113dc7140",
+    "IDDBCONNECTION": null,
+    "IDGRUPO": null,
+    "NIVEL": null,
+    "NOMEFANTASIA": null,
+    "NOMESISTEMA": null,
+    "PARAMETROS": [
+      {
+        "DESCRICAO": "CODCOLIGADA",
+        "NOME": "CODCOLIGADA",
+        "TIPO": "System.Int16"
+      },
+      {
+        "DESCRICAO": "CODPERLET",
+        "NOME": "CODPERLET",
+        "TIPO": null
+      }
+    ],
+    "PODEALTERAR": null,
+    "PODEEXCLUIR": null,
+    "SEMSEGCOLUNAS": "0",
+    "SEMSEGESTENDIDA": "0",
+    "SHA256_SENTENCA": "6b4d15cc180f5418a7110c0c6c6e37842e152f5574b42148716e46077f04bad6",
+    "TAMANHO": "2719",
+    "TITULO": "Toddle notas",
+    "USRULTALTERACAO": "vitor.biazutti",
+    "VERSAO": null
+  },
+  "TODDLE.PLANOAULA": {
+    "APLICACAO": "S",
+    "CODCOLIGADA": "1",
+    "CODSENTENCA": "TODDLE.PLANOAULA",
+    "CONTROLE": "-368",
+    "DISPONIVEL": null,
+    "DISPONIVELFILTRO": "1",
+    "DISPONIVELMENU": "0",
+    "DISPONIVELRELATORIO": "1",
+    "DISPONIVELVISAO": "1",
+    "DTULTALTERACAO": "2026-08-21T14:53:34.307",
+    "GUID": "2bdc2b83-3459-42ea-bf33-4cf7f79059e7",
+    "IDDBCONNECTION": null,
+    "IDGRUPO": null,
+    "NIVEL": null,
+    "NOMEFANTASIA": null,
+    "NOMESISTEMA": null,
+    "PARAMETROS": [
+      {
+        "DESCRICAO": "CODCOLIGADA",
+        "NOME": "CODCOLIGADA",
+        "TIPO": "System.Int16"
+      },
+      {
+        "DESCRICAO": "CODPERLET",
+        "NOME": "CODPERLET",
+        "TIPO": null
+      },
+      {
+        "DESCRICAO": "DATAFINAL",
+        "NOME": "DATAFINAL",
+        "TIPO": null
+      },
+      {
+        "DESCRICAO": "DATAINICIAL",
+        "NOME": "DATAINICIAL",
+        "TIPO": null
+      }
+    ],
+    "PODEALTERAR": null,
+    "PODEEXCLUIR": null,
+    "SEMSEGCOLUNAS": "0",
+    "SEMSEGESTENDIDA": "0",
+    "SHA256_SENTENCA": "115d570dbdb9fc7daabfa0a03e63fc9fc489c8ee54a4ea28cfd5c3db8c7b31b7",
+    "TAMANHO": "2877",
+    "TITULO": "Toddle Plano de aula",
+    "USRULTALTERACAO": "vitor.biazutti",
+    "VERSAO": null
+  },
+  "TODDLE.RESP": {
+    "APLICACAO": "S",
+    "CODCOLIGADA": "1",
+    "CODSENTENCA": "TODDLE.RESP",
+    "CONTROLE": "-18019",
+    "DISPONIVEL": null,
+    "DISPONIVELFILTRO": "1",
+    "DISPONIVELMENU": "0",
+    "DISPONIVELRELATORIO": "1",
+    "DISPONIVELVISAO": "1",
+    "DTULTALTERACAO": "2026-08-20T14:54:09.527",
+    "GUID": "4e7b10b1-1168-4a33-ad56-e92d51b3b5bd",
+    "IDDBCONNECTION": null,
+    "IDGRUPO": null,
+    "NIVEL": null,
+    "NOMEFANTASIA": null,
+    "NOMESISTEMA": null,
+    "PARAMETROS": [
+      {
+        "DESCRICAO": "CODCOLIGADA",
+        "NOME": "CODCOLIGADA",
+        "TIPO": "System.Int16"
+      },
+      {
+        "DESCRICAO": "CODPERLET",
+        "NOME": "CODPERLET",
+        "TIPO": null
+      }
+    ],
+    "PODEALTERAR": null,
+    "PODEEXCLUIR": null,
+    "SEMSEGCOLUNAS": "0",
+    "SEMSEGESTENDIDA": "0",
+    "SHA256_SENTENCA": "f97df7dc041cc78523961bbeec94cab0d6a3b958559a545be0797d9de0295f52",
+    "TAMANHO": "1541",
+    "TITULO": "Toddle Responsavel academico",
+    "USRULTALTERACAO": "vitor.biazutti",
+    "VERSAO": null
+  },
+  "TODDLE.STUDENTS": {
+    "APLICACAO": "S",
+    "CODCOLIGADA": "1",
+    "CODSENTENCA": "TODDLE.STUDENTS",
+    "CONTROLE": "-29472",
+    "DISPONIVEL": null,
+    "DISPONIVELFILTRO": "1",
+    "DISPONIVELMENU": "0",
+    "DISPONIVELRELATORIO": "1",
+    "DISPONIVELVISAO": "1",
+    "DTULTALTERACAO": "2026-08-20T14:45:17.093",
+    "GUID": "ac83831a-3821-45a5-8180-73da2b8343f8",
+    "IDDBCONNECTION": null,
+    "IDGRUPO": null,
+    "NIVEL": null,
+    "NOMEFANTASIA": null,
+    "NOMESISTEMA": null,
+    "PARAMETROS": [
+      {
+        "DESCRICAO": "CODCOLIGADA",
+        "NOME": "CODCOLIGADA",
+        "TIPO": "System.Int16"
+      },
+      {
+        "DESCRICAO": "CODPERLET",
+        "NOME": "CODPERLET",
+        "TIPO": null
+      }
+    ],
+    "PODEALTERAR": null,
+    "PODEEXCLUIR": null,
+    "SEMSEGCOLUNAS": "0",
+    "SEMSEGESTENDIDA": "0",
+    "SHA256_SENTENCA": "299f5f8521bb411f0768550d37ee56976606fe3a23a3847d7d2f4e1ed0362638",
+    "TAMANHO": "2066",
+    "TITULO": "Toddle studantes/students",
+    "USRULTALTERACAO": "vitor.biazutti",
+    "VERSAO": null
+  },
+  "TODDLE.TURMADISC": {
+    "APLICACAO": "S",
+    "CODCOLIGADA": "1",
+    "CODSENTENCA": "TODDLE.TURMADISC",
+    "CONTROLE": "-28211",
+    "DISPONIVEL": null,
+    "DISPONIVELFILTRO": "1",
+    "DISPONIVELMENU": "0",
+    "DISPONIVELRELATORIO": "1",
+    "DISPONIVELVISAO": "1",
+    "DTULTALTERACAO": "2026-08-25T11:41:34.803",
+    "GUID": "bb331bc5-b263-4cfa-b9fa-352e5a3a832c",
+    "IDDBCONNECTION": null,
+    "IDGRUPO": null,
+    "NIVEL": null,
+    "NOMEFANTASIA": null,
+    "NOMESISTEMA": null,
+    "PARAMETROS": [
+      {
+        "DESCRICAO": "CODCOLIGADA",
+        "NOME": "CODCOLIGADA",
+        "TIPO": "System.Int16"
+      },
+      {
+        "DESCRICAO": "CODPERLET",
+        "NOME": "CODPERLET",
+        "TIPO": null
+      }
+    ],
+    "PODEALTERAR": null,
+    "PODEEXCLUIR": null,
+    "SEMSEGCOLUNAS": "0",
+    "SEMSEGESTENDIDA": "0",
+    "SHA256_SENTENCA": "a17bff535675c369deac4a9bc6d3b51fc15a55a506804c224af9a4a8b747f543",
+    "TAMANHO": "2059",
+    "TITULO": "Toddle TurmaDisciplina",
+    "USRULTALTERACAO": "vitor.biazutti",
+    "VERSAO": null
+  }
+}

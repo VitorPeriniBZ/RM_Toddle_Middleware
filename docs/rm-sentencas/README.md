@@ -24,28 +24,167 @@ estilo 112 / `YYYYMMDD`) — nas duas, o volume anual não cabe numa resposta s�
 | `TODDLE.RESP.sql` | responsáveis | `RM_SENTENCA_RESPONSAVEIS` | 594 | única |
 | `TODDLE.FREQ.sql` | frequência (leitura) | `RM_SENTENCA_FREQUENCIA` | 2.455¹ | única |
 | `TODDLE.NOTAS.sql` | notas de etapa | `RM_SENTENCA_NOTAS` | 7.268 | única |
-| `TODDLE.PLANOAULA.sql` | plano de aula + autoria² | (a definir) | — | **a cadastrar** |
+| `TODDLE.PLANOAULA.sql` | plano de aula + autoria² | (sem variável) | — | cadastrada |
 
 ¹ fevereiro/2026; a Sentença exige janela de data.
-² **Escrita em 21/08/2026 mas NÃO cadastrada e NÃO executada**, e o fluxo que ela
-serve está bloqueado: o Toddle não expõe plano de aula na API. Existe agora porque
-cadastrar Sentença tem prazo de terceiro — ver `TODDLE.PLANOAULA.ESPEC.md` §7.
-Também recebe **quatro** parâmetros, como a `TODDLE.FREQ`.
+² Cadastrada no RM em **21/08/2026** e conferida em 11/09/2026 — o README dizia
+"a cadastrar" até então, porque ninguém voltou para corrigir. Continua **não
+executada**, e o fluxo que ela serve está bloqueado: o Toddle não expõe plano de
+aula na API. Ver `TODDLE.PLANOAULA.ESPEC.md` §7. Também recebe **quatro**
+parâmetros, como a `TODDLE.FREQ`. Não tem variável no `.env` porque nada a lê.
 
 Cada Sentença tem exatamente **um `.sql`** (puro) e **um `.ESPEC.md`** (a
 documentação). Consolidado em 20/08/2026: existiam `.V1`/`.V2`/`.V3` soltos, sem
 dizer qual valia.
 
 > **As cinco foram recadastradas e validadas em 20/08/2026**, depois de a cópia de
-> base de 13–15/08 tê-las levado junto com o usuário `integracao.toddle`. Os `.sql`
-> desta pasta **são** o que está no RM: conferido comparando as colunas devolvidas
-> pelo web service com os apelidos de cada arquivo — zero divergência nas cinco.
+> base de 13–15/08 tê-las levado junto com o usuário `integracao.toddle`.
 >
 > `TODDLE.NOTAS` e `TODDLE.RESP` foram **reconstruídas** nesta data (nunca tinham
 > sido commitadas; só existiam dentro do RM) e validadas na execução. Ver §6 de
 > `TODDLE.NOTAS.ESPEC.md` e o anexo de `TODDLE.RESP.ESPEC.md`.
 
-### Recorte de campus (`RM_CODFILIAL=2`)
+## Conferência de 11/09/2026 — cinco batem, e o repositório é que estava velho
+
+Antes de mais uma cópia de base sobre o dev, as seis foram lidas **do RM** e
+comparadas com os `.sql` daqui (`./exportar-sentencas.sh`):
+
+| Sentença | corpo no RM vs `.sql` | última alteração no RM | TAMANHO |
+|---|---|---|---|
+| `TODDLE.STUDENTS` | idêntico | 20/08/2026 14:45 | 2.066 |
+| `TODDLE.RESP` | idêntico | 20/08/2026 14:54 | 1.541 |
+| `TODDLE.FREQ` | idêntico | 20/08/2026 10:04 | 2.572 |
+| `TODDLE.NOTAS` | idêntico | 20/08/2026 14:41 | 2.719 |
+| `TODDLE.PLANOAULA` | idêntico | 21/08/2026 14:53 | 2.877 |
+| `TODDLE.TURMADISC` | **`.sql` desatualizado** | 25/08/2026 11:41 | 2.059 |
+
+**A direção da divergência é a que assusta.** Não é o RM que está velho — é o
+`.sql` da `main`. O RM tem o terceiro caminho de e-mail:
+
+```sql
+       GU.EMAIL                       AS EMAIL_PROF_USUARIO
+LEFT JOIN GUSUARIO GU ON GU.CODUSUARIO = PP.CODUSUARIO
+```
+
+Conferido três vezes: está no corpo lido por `ReadRecord`, **e a execução de
+hoje devolve a coluna `EMAIL_PROF_USUARIO`**. O `.sql` da `main` não tinha
+nenhum dos dois — só a branch `refactor/config-por-tenant` (commit `8b08e89`,
+25/08 09:41), que nunca foi mergeada. O RM foi recadastrado duas horas depois
+daquele commit, às 11:41; o repositório ficou para trás.
+
+Isso importa porque o `.sql` **é a fonte de restauração**. Recadastrar a partir
+da `main` teria *rebaixado* o RM, reintroduzindo exatamente o bug que o
+`8b08e89` consertou — cinco professores sem e-mail, sem erro nenhum, porque
+coluna que não existe vira `undefined` e é indistinguível de "o RM não tem esse
+dado". Já tinha acontecido com a `TODDLE.RESP`. Seria a terceira vez.
+
+O `.sql` desta pasta foi atualizado a partir do RM em 11/09/2026. Hoje nada
+quebra em execução: o `rmTeacherSource.ts` da `main` só lê `EMAIL_PROFESSOR` e
+`EMAIL_PROF_PESSOAL`, e ignora a coluna extra.
+
+> **Regra que sai daqui:** quem recadastra uma Sentença no RM tem de commitar o
+> `.sql` no mesmo dia. O único jeito barato de conferir é rodar
+> `./exportar-sentencas.sh` — ele compara os dois lados e nomeia quem divergiu.
+
+### Baseline de execução (11/09/2026, `CODPERLET=2026`, todas as filiais)
+
+Para comparar depois da cópia — se algum destes voltar zerado, a Sentença
+existe mas o dado não:
+
+| Sentença | linhas |
+|---|---|
+| `TODDLE.STUDENTS` | 597 |
+| `TODDLE.TURMADISC` | 672 |
+| `TODDLE.RESP` | 594 |
+| `TODDLE.NOTAS` | 7.283 |
+
+## Onde a Sentença mora, e por que a cópia de base a apaga
+
+Sentença é **dado**, não configuração de servidor: mora em `GCONSSQL` (corpo,
+título, flags) e `GCONSSQLPARAMETROS` (nome, descrição e tipo de cada
+parâmetro), com chave `CODCOLIGADA + APLICACAO + CODSENTENCA` — aqui
+`1 + S + TODDLE.*`. Copiar a base de produção por cima do dev leva as duas
+tabelas junto, e é por isso que as seis somem. Não é acidente nem permissão
+perdida: é a tabela sendo substituída.
+
+### Como ler as Sentenças pela API — e por que não pela mensagem de erro
+
+Existe um DataServer para isso, achado em 11/09/2026: **`GlbConsSQLData`**,
+no mesmo `wsDataServer` da porta 1951. Ele expõe `GConsSql` (corpo e metadados)
+e `GConsSqlParams` (parâmetros). `ReadRecord` com a chave `1;S;TODDLE.STUDENTS`
+devolve o registro inteiro. É o que o `exportar-sentencas.sh` usa.
+
+**Não use a sonda de erro para extrair o corpo.** Chamar com o número errado de
+parâmetros faz o RM vazar o SQL (útil para saber se a Sentença existe — ver
+abaixo), mas o que ele vaza é a forma **normalizada**, com os parâmetros
+reescritos como `@NOME`. O corpo real, com `:NOME`, só vem pelo `ReadRecord` —
+e é o corpo real que se cola de volta. Colar o vazamento reintroduz exatamente
+o erro de sintaxe que o topo deste arquivo manda evitar.
+
+Medido em 11/09: as seis armazenam `:NOME`; nenhuma armazena `@NOME`.
+
+### Dá para recadastrar automaticamente? Em tese sim, e não vale a pena
+
+`GlbConsSQLData` também expõe `SaveRecord` — então existe, no papel, um caminho
+de escrita. Levado ao conselho de LLMs em 11/09/2026 (ChatGPT, Claude e
+Nemotron; o Gemini não respondeu), a recomendação foi unânime no **não como
+primeira opção**, e por um motivo que é a cicatriz desta casa: o modo de falha
+não é o serviço recusar — é ele **aceitar e a Sentença não executar direito**,
+sem erro. Já vimos isso no `EduNotaEtapaData`, que respondeu `ok=true` e
+descartou o valor.
+
+O que se mede hoje nas seis, que nenhum `.sql` guarda:
+
+| campo | valor nas seis | por que importa |
+|---|---|---|
+| `APLICACAO` | `S` | parte da chave; errado = "Sentença não encontrada" |
+| `TAMANHO` | = contagem de caracteres do corpo | inconsistente, trunca o SQL |
+| `SEMSEGCOLUNAS` / `SEMSEGESTENDIDA` | `0` / `0` | se recriar diferente, o RM **remove colunas** ou devolve 0 linhas, sem erro |
+| `DISPONIVELFILTRO` / `RELATORIO` / `VISAO` | `1` | |
+| `DISPONIVELMENU` | `0` | |
+| `IDDBCONNECTION` | **NULL** | nulo = conexão padrão. Copiar um id de outro ambiente faria a consulta rodar no banco errado — aqui o risco não existe, porque é nulo |
+| `DISPONIVEL`, `NIVEL`, `IDGRUPO`, `VERSAO`, `NOMESISTEMA`, `PODEALTERAR`, `PODEEXCLUIR` | **NULL** | e mesmo assim executam — não são porteiros |
+| `CONTROLE` | inteiro curto com sinal (ex.: `-29472`) | é `short`, não chave composta |
+| `GUID` | um por Sentença | |
+
+Os parâmetros guardam **nome de tipo .NET**: `CODCOLIGADA` = `System.Int16`, e
+`CODPERLET`/`DATAINICIAL`/`DATAFINAL` vêm **NULL** (elemento ausente no XML do
+DataSet .NET — que é como se distingue NULL de string vazia). E funcionam assim.
+Não "conserte" isso para `System.String` junto de uma restauração: mudar
+metadado e recuperar ambiente são dois riscos diferentes, e o que está lá
+comprovadamente executa.
+
+Todos os campos acima ficam em `sentencas.manifesto.json`, escrito pelo
+`./exportar-sentencas.sh --gravar`.
+
+**A ordem recomendada**, do mais seguro ao menos:
+
+1. **Exportar antes da cópia** (`--gravar`) — leitura pura, risco zero. É o que
+   faltava em 13–15/08: havia o SQL no git, não havia os metadados.
+2. **Smoke test depois da cópia** — rodar as seis e conferir colunas e linhas
+   contra o baseline acima. Foi a ausência disto que transformou a perda em
+   dias, não a ausência do recadastro.
+3. **Pedir o `INSERT` ao time que faz a cópia** — quem restaura o banco tem
+   acesso SQL por definição; `GCONSSQL` + `GCONSSQLPARAMETROS` no mesmo runbook
+   não passa por camada nenhuma do RM que possa descartar campo em silêncio.
+4. **Recadastrar à mão pela tela** — 20 a 40 minutos com o manifesto ao lado, e
+   o próprio RM preenche `TAMANHO`, `GUID` e `CONTROLE` corretamente.
+5. **`SaveRecord`** — só depois de passar numa sonda em Sentença descartável
+   (nunca numa das seis), cujo critério de sucesso **não é `ok=true`**: tem de
+   executar pelo `wsConsultaSQL`, com a credencial da integração e não a de
+   admin, devolvendo as colunas esperadas.
+
+A assimetria decide: cair é barulhento, Sentença silenciosamente errada é
+silenciosa. São ~30 minutos economizados por cópia contra a chance de alimentar
+o Toddle com dado faltando.
+
+> Nem tudo que o conselho disse resistiu à conferência. O Nemotron apontou
+> tabelas `GSECSENTENCA` / `GSECUSUARIOSENTENCA` para permissão: **nenhuma das
+> duas existe** nas 8.521 tabelas do dicionário do RM. Também afirmou que
+> `TIPO` é um enum `smallint` (seria `12` para texto) — o que se lê é
+> `System.Int16`, nome de tipo .NET. Confira antes de agir.
+
+## Recorte de campus (`RM_CODFILIAL=2`)
 
 | Sentença | total | campus 2 |
 |---|---|---|
@@ -55,7 +194,7 @@ dizer qual valia.
 | FREQ (fev) | 2.455 | 940 |
 | NOTAS | 7.268 | 4.428 |
 
-### Como diagnosticar quando uma para de responder
+## Como diagnosticar quando uma para de responder
 
 O RM **não** distingue "Sentença não existe" de "usuário sem permissão" — as duas
 dão *"a consulta SQL utilizando a chave 1|S|X não existe ou não pôde ser executada
@@ -124,6 +263,12 @@ Notas:
 - `POST /staff` no Toddle exige `email`. Confira a cobertura de
   `EMAIL_PROFESSOR` **antes** de tentar criar: professor sem e-mail
   institucional não entra, e isso é pendência de RH, não de código.
+- O e-mail tem **três** origens, nesta ordem: `PPESSOA.EMAIL`
+  (`EMAIL_PROFESSOR`), `PPESSOA.EMAILPESSOAL` (`EMAIL_PROF_PESSOAL`) e
+  `GUSUARIO.EMAIL` (`EMAIL_PROF_USUARIO`). A terceira entrou em 25/08/2026
+  porque cinco professores apareciam sem e-mail mesmo depois de a secretaria
+  cadastrar — ver `8b08e89`. Quem lê as três é o `rmTeacherSource.ts` da branch
+  `refactor/config-por-tenant`; a `main` ainda só lê as duas primeiras.
 
 ## Ordem de carga (modelo 2.0 / TeacherCourse)
 

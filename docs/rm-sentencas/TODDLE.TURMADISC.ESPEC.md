@@ -72,6 +72,7 @@ janeiro isso vira uma pegadinha na virada de ano letivo.
 | `NOME_PROFESSOR` | `PPESSOA.NOME` | nome completo; o middleware divide em first/last |
 | `EMAIL_PROFESSOR` | `PPESSOA.EMAIL` | **`POST /staff` do Toddle EXIGE e-mail** |
 | `EMAIL_PROF_PESSOAL` | `PPESSOA.EMAILPESSOAL` | fallback quando o institucional falta |
+| `EMAIL_PROF_USUARIO` | `GUSUARIO.EMAIL` | terceiro caminho, acrescentado em 25/08/2026 (`8b08e89`): cinco professores vinham sem e-mail pelos dois primeiros |
 | `CODFILIAL` | `STURMADISC.CODFILIAL` | escopo de campus |
 | `TURMADISC_ATIVA` | `STURMADISC.ATIVA` | filtro (ver §5) |
 | `STATUS_PROF_TURMA` | `SPROFESSORTURMA.STATUS` | filtro (ver §5) |
