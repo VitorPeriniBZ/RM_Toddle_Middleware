@@ -102,6 +102,8 @@ export interface FluxoNaTela {
   fila: string;
   podeAtivar: boolean;
   motivoDoBloqueio: string | null;
+  /** O que a confirmação de "Sincronizar agora" mostra. Vem do catálogo de fluxos. */
+  avisoAoExecutarAgora: string;
   janelaSemSucessoHoras: number;
   desejado: AgendaDoFluxo | null;
   observado: SchedulerObservado | null;
@@ -194,6 +196,12 @@ export const api = {
 
   // ─── Agenda ───────────────────────────────────────────────────────────────
   painel: () => pedir<Painel>('/agenda'),
+  executarAgora: (flowKey: string, motivo?: string) =>
+    pedir<{ enfileirado: boolean; jobId: string | null; fila: string; aplicacao: string }>(
+      `/agenda/${flowKey}/executar`,
+      'POST',
+      { motivo },
+    ),
   previa: (flowKey: string, cron: string) =>
     pedir<PreviaDeCron>(`/agenda/${encodeURIComponent(flowKey)}/previa`, 'POST', { cron }),
   salvarAgenda: (flowKey: string, mudanca: { cron?: string; ativo?: boolean; motivo?: string }) =>

@@ -58,6 +58,19 @@ export interface Fluxo {
    */
   podeAtivar: boolean;
   motivoDoBloqueio?: string;
+  /**
+   * O que dizer a quem clica em "Sincronizar agora", ANTES de enfileirar.
+   *
+   * Mora aqui, junto da definição, e não na tela: o efeito de rodar cada fluxo é
+   * propriedade do fluxo, não do componente que desenha o botão. Uma tela que
+   * escrevesse o próprio aviso ficaria desatualizada no dia em que o destino do
+   * job mudasse — que é exatamente o que acabou de acontecer com a via de nota.
+   *
+   * Texto específico, nunca "tem certeza?". Confirmação que não diz o que vai
+   * acontecer não é confirmação: é um clique a mais que se aprende a dar no
+   * automático.
+   */
+  avisoAoExecutarAgora: string;
 }
 
 export const FLUXOS: Record<FlowKey, Fluxo> = {
@@ -68,6 +81,10 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     job: STUDENT_JOB.EXTRACT,
     janelaSemSucessoHoras: 13,
     podeAtivar: true,
+    avisoAoExecutarAgora:
+      'Lê os alunos do RM e CRIA ou ATUALIZA cadastro no Toddle — inclusive aluno ' +
+      'novo, que passa a existir lá. Não apaga ninguém. Leva alguns minutos e não ' +
+      'dá para interromper depois de começar.',
   },
   [FLOW.PROFESSORES]: {
     key: FLOW.PROFESSORES,
@@ -76,6 +93,10 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     job: STAFF_JOB.SYNC,
     janelaSemSucessoHoras: 13,
     podeAtivar: true,
+    avisoAoExecutarAgora:
+      'Lê os professores do RM e CRIA staff no Toddle. Criar staff é IRREVERSÍVEL: ' +
+      'o e-mail vira a identidade da conta, e conta com e-mail errado só pode ser ' +
+      'arquivada, nunca corrigida. Também vincula professor a turma.',
   },
   [FLOW.NOTAS]: {
     key: FLOW.NOTAS,
@@ -94,6 +115,11 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     // `true`, e o job confere isso de novo por dentro. São dois interruptores de
     // propósito, um para a escola e outro para quem opera.
     podeAtivar: true,
+    avisoAoExecutarAgora:
+      'ESCREVE NO REGISTRO ACADÊMICO. Envia a nota lançada no Toddle para o TOTVS ' +
+      'RM (SProvas + SNotas) e pode CRIAR avaliações que ainda não existem lá. ' +
+      'Nota já lançada por um humano no RM não é sobrescrita — vira pendência. ' +
+      'Se NOTA_SYNC_ATIVO estiver false, o job encerra sem tocar no RM.',
   },
 };
 
