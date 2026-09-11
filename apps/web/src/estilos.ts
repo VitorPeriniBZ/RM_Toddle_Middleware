@@ -13,39 +13,74 @@ import type { CSSProperties } from 'react';
  * mesmos lugares (divergência, estado de run, DLQ).
  */
 
+/**
+ * A paleta proprietária da EAV. **Todo** hex desta tela nasce aqui.
+ *
+ * As cores semânticas SÃO as da marca, não uma segunda paleta ao lado delas —
+ * duas paletas competindo é o caminho mais curto para o vermelho de
+ * "divergente" virar enfeite.
+ *
+ * `atencao` usa o Ocre `#A67206` (a profundidade do amarelo) e não o Amarelo
+ * `#FBB216`: amarelo puro sobre branco não alcança contraste AA em texto, e
+ * esta tela tem de ser lida, não admirada.
+ */
+const PALETA = {
+  oliva: '#A9A52B', // institucional da marca-mãe
+  verde: '#408F38',
+  vermelho: '#AB2A25',
+  ocre: '#A67206',
+  creme: '#F0EEE6',
+  branco: '#FFFFFF',
+  cinza: '#3D3C3B',
+} as const;
+
+/**
+ * Mesma cor, com alfa — em hex de 8 dígitos.
+ *
+ * Existe para que fundo suave e borda sejam DERIVADOS da paleta em vez de
+ * hexes novos escolhidos no olho. Um `#F7EAE9` digitado à mão passa na revisão
+ * e depois ninguém sabe de onde veio nem como recalculá-lo para outra marca —
+ * que é exatamente o que quebra um white label.
+ */
+const comAlfa = (hex: string, alfa: number): string =>
+  hex + Math.round(Math.min(Math.max(alfa, 0), 1) * 255).toString(16).padStart(2, '0').toUpperCase();
+
 export const cor = {
-  ruim: '#b00020',
-  bom: '#0a6b2d',
-  atencao: '#8a5a00',
-  fundoRuim: '#fdeaec',
-  fundoAtencao: '#fff4d6',
-  fundoBom: '#eaf6ee',
-  borda: '#ddd',
-  texto: '#333',
-  fraco: '#666',
-  fundoFraco: '#f7f7f7',
+  ruim: PALETA.vermelho,
+  bom: PALETA.verde,
+  atencao: PALETA.ocre,
+  fundoRuim: comAlfa(PALETA.vermelho, 0.08),
+  fundoAtencao: comAlfa(PALETA.ocre, 0.1),
+  fundoBom: comAlfa(PALETA.verde, 0.08),
+  marca: PALETA.oliva,
+  borda: comAlfa(PALETA.cinza, 0.18),
+  texto: PALETA.cinza,
+  fraco: comAlfa(PALETA.cinza, 0.72),
+  fundoFraco: PALETA.creme,
 } as const;
 
 export const s = {
+  // A família vem do `body` (Montserrat, em marca.css) — não repetida aqui, para
+  // haver um lugar só que decide tipografia.
   main: {
-    fontFamily: 'system-ui, sans-serif',
     maxWidth: 980,
-    margin: '2rem auto',
+    margin: '0 auto 2rem',
     padding: '0 1rem',
     color: cor.texto,
   } as CSSProperties,
 
   h1: { fontSize: '1.4rem', marginBottom: '.2rem' } as CSSProperties,
-  h2: { fontSize: '1.1rem', marginTop: '1.6rem' } as CSSProperties,
+  h2: { fontSize: '1.05rem', marginTop: '1.6rem' } as CSSProperties,
   h3: { fontSize: '.98rem', margin: 0 } as CSSProperties,
 
   abas: { display: 'flex', gap: '.4rem', borderBottom: `1px solid ${cor.borda}`, marginTop: '1rem' } as CSSProperties,
   aba: (ativa: boolean): CSSProperties => ({
     padding: '.45rem .9rem',
     border: `1px solid ${ativa ? cor.borda : 'transparent'}`,
-    borderBottom: ativa ? '1px solid #fff' : `1px solid ${cor.borda}`,
+    borderBottom: ativa ? `1px solid ${PALETA.branco}` : `1px solid ${cor.borda}`,
     marginBottom: -1,
-    background: ativa ? '#fff' : 'transparent',
+    background: ativa ? PALETA.branco : 'transparent',
+    fontFamily: 'inherit',
     cursor: 'pointer',
     fontWeight: ativa ? 600 : 400,
     fontSize: '.9rem',
@@ -55,7 +90,7 @@ export const s = {
     border: `1px solid ${cor.borda}`,
     padding: '.9rem 1rem',
     marginTop: '.8rem',
-    background: '#fff',
+    background: PALETA.branco,
   } as CSSProperties,
 
   linha: { display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap' } as CSSProperties,
@@ -82,7 +117,15 @@ export const s = {
     marginTop: '.5rem',
   }),
 
-  botao: { padding: '.4rem .8rem', fontSize: '.88rem', cursor: 'pointer' } as CSSProperties,
+  botao: {
+    padding: '.4rem .8rem',
+    fontSize: '.88rem',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    background: PALETA.branco,
+    color: cor.texto,
+    border: `1px solid ${cor.borda}`,
+  } as CSSProperties,
 
   /**
    * Barra de resumo no topo de uma aba: a resposta antes da leitura.
@@ -97,7 +140,7 @@ export const s = {
     alignItems: 'baseline',
     padding: '.6rem .8rem',
     border: `1px solid ${cor.borda}`,
-    background: cor.fundoFraco,
+    background: PALETA.branco,
     marginTop: '1rem',
   } as CSSProperties,
 

@@ -102,9 +102,29 @@ export function App() {
   }
 
   return (
-    <main style={s.main}>
-      <h1 style={s.h1}>Middleware RM ↔ Toddle</h1>
-      <p style={s.fraco}>Plano de controle: agenda, de-para e auditoria.</p>
+    <>
+      {/* Cabeçalho de marca: bloco de cor sólida com recorte reto e a lâmina em
+          S da EAV sangrando pelas laterais. É o ÚNICO lugar da tela com
+          grafismo — abaixo daqui o espaço é todo do dado. */}
+      <header className="eav-header">
+        <span className="eav-onda" aria-hidden="true" />
+        <span className="eav-onda eav-onda--espelhada" aria-hidden="true" />
+        <div style={{ maxWidth: 980, margin: '0 auto' }}>
+          {/* O acento Spectral vive no TÍTULO, numa palavra — é lá que o
+              encontro serifada + bastão se lê. Em texto de 0.85rem ele não
+              passa de um itálico esquisito.
+
+              O par de sistemas vira sobrelinha: identifica o contexto sem
+              disputar a linha principal. E o subtítulo antigo ("agenda, de-para
+              e auditoria") saiu porque as abas logo abaixo já dizem isso. */}
+          <p className="eav-sobrelinha">Middleware RM ↔ Toddle</p>
+          <h1 className="eav-title">
+            Plano de <em>controle</em>
+          </h1>
+        </div>
+      </header>
+
+      <main style={{ ...s.main, marginTop: '1.5rem' }}>
 
       {estado === 'carregando' && <p>Consultando a API…</p>}
 
@@ -172,7 +192,8 @@ export function App() {
           {aba === 'saude' && <Saude aoErrar={tratar} />}
         </>
       )}
-    </main>
+      </main>
+    </>
   );
 }
 
