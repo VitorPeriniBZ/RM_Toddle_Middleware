@@ -88,7 +88,11 @@ export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
   const ligados = situacoes.filter((x) => x === 'ligado').length;
   const problemas = situacoes.filter((x) => x === 'divergente').length;
   const atencao = situacoes.filter((x) => x === 'bloqueado' || x === 'revisao').length;
-  const tudoBem = problemas === 0 && painel.dlq.total === 0 && painel.orfaos.length === 0;
+  // "sem pendência" tem de significar NADA a fazer. Contar só divergência
+  // deixaria o selo verde ao lado de "1 atenção" e de um fluxo bloqueado — o
+  // sinal misturado que esta barra existe para acabar.
+  const tudoBem =
+    problemas === 0 && atencao === 0 && painel.dlq.total === 0 && painel.orfaos.length === 0;
 
   return (
     <>
