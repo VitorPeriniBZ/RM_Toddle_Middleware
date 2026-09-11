@@ -267,10 +267,12 @@ export interface JobAtivo {
 
 export interface RunNoGrafico {
   chave: string;
-  desfecho: 'succeeded' | 'failed' | 'executing';
+  /** `preso` = aberto e sem notícia de lote nenhum há 15 min. Ver /jobs na API. */
+  desfecho: 'succeeded' | 'failed' | 'executing' | 'preso';
   inicioEm: string;
   duracaoMs: number;
   lotes?: { feitos: number; total: number };
+  semNoticiaHaMs?: number;
 }
 
 export interface JobTerminado {
@@ -295,6 +297,7 @@ export interface FluxoDeJobs {
   terminados: JobTerminado[];
   /** Progresso por lote do fan-out de aluno. `null` nos demais. */
   lotesEmCurso: { feitos: number; total: number } | null;
+  runsPresos: RunNoGrafico[];
   historico: RunNoGrafico[];
   historicoSuficiente: boolean;
   minimoParaGrafico: number;

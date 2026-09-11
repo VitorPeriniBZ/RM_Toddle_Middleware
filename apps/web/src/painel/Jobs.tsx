@@ -107,8 +107,41 @@ function CartaoDeJobs({ fluxo }: { fluxo: FluxoDeJobs }) {
       </div>
 
       <Execucao fluxo={fluxo} />
+      <RunsPresos runs={fluxo.runsPresos} />
       <Terminados jobs={fluxo.terminados} />
       <Historico fluxo={fluxo} />
+    </div>
+  );
+}
+
+/**
+ * Run que ficou aberto e parou de dar notícia.
+ *
+ * Um run só fecha quando o último lote reporta. Se um lote morre — 429 do
+ * Toddle, worker derrubado no meio — ninguém fecha, e a linha fica `executing`
+ * para sempre, com o painel desenhando uma barra que cresce a cada recarga.
+ *
+ * Aqui isso vira um aviso com o que fazer, em vez de uma animação mentindo.
+ */
+function RunsPresos({ runs }: { runs: RunNoGrafico[] }) {
+  if (runs.length === 0) return null;
+  return (
+    <div style={s.aviso('ruim')}>
+      <strong>{runs.length} run(s) preso(s).</strong> Aberto(s) e sem notícia de lote nenhum —
+      ninguém vai fechá-los sozinho, e eles não indicam trabalho em andamento.
+      <ul style={{ margin: '.4rem 0 0', paddingLeft: '1.2rem' }}>
+        {runs.map((r) => (
+          <li key={r.chave} style={{ fontSize: '.85rem' }}>
+            <code style={s.mono}>{r.chave}</code> — começou {quando(r.inicioEm)}
+            {r.lotes && `, parou em ${r.lotes.feitos}/${r.lotes.total} lotes`}
+            {r.semNoticiaHaMs !== undefined && `, sem notícia há ${duracao(r.semNoticiaHaMs)}`}
+          </li>
+        ))}
+      </ul>
+      <div style={{ ...s.fraco, marginTop: '.4rem' }}>
+        O sync é idempotente: o próximo disparo refaz o que faltou. Este aviso é para o run não
+        ficar contando uma história de progresso que não está acontecendo.
+      </div>
     </div>
   );
 }
@@ -273,16 +306,19 @@ const TOM_DO_DESFECHO: Record<RunNoGrafico['desfecho'], string> = {
   succeeded: cor.bom,
   failed: cor.ruim,
   executing: cor.atencao,
+  preso: cor.ruim,
 };
 const GLIFO: Record<RunNoGrafico['desfecho'], string> = {
   succeeded: '✓',
   failed: '✕',
   executing: '⋯',
+  preso: '!',
 };
 const NOME_DO_DESFECHO: Record<RunNoGrafico['desfecho'], string> = {
   succeeded: 'sucesso',
   failed: 'falha',
   executing: 'em curso',
+  preso: 'preso',
 };
 
 function duracao(ms: number): string {
@@ -325,7 +361,16 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
     );
   }
 
-  const maior = Math.max(...runs.map((r) => r.duracaoMs), 1);
+  /**
+   * A escala sai dos runs TERMINADOS.
+   *
+   * Um run aberto cresce sem limite — um de 116 min achatou quarenta barras de
+   * 30s até virarem linha reta, e o gráfico parou de dizer qualquer coisa sobre
+   * os que terminaram. O aberto é desenhado na altura máxima e marcado, o que é
+   * honesto: ele está FORA da escala, não no topo dela.
+   */
+  const terminados = runs.filter((r) => r.desfecho === 'succeeded' || r.desfecho === 'failed');
+  const maior = Math.max(...(terminados.length ? terminados : runs).map((r) => r.duracaoMs), 1);
   const larguraBarra = 14;
   const vao = 2; // o espaçador de 2px entre marcas
   const alturaPlot = 64;
@@ -337,7 +382,7 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
       <div style={{ ...s.linha, justifyContent: 'space-between' }}>
         <span style={s.dadoRotulo}>duração por run</span>
         <span style={s.fraco}>
-          maior: {duracao(maior)} · {runs.length} run(s)
+          maior terminado: {duracao(maior)} · {runs.length} run(s)
         </span>
       </div>
 
@@ -362,7 +407,10 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
                 stroke={cor.borda} strokeWidth="1" />
 
           {runs.map((r, i) => {
-            const h = Math.max((r.duracaoMs / maior) * alturaPlot, 3);
+            const foraDaEscala = r.duracaoMs > maior;
+            const h = foraDaEscala
+              ? alturaPlot
+              : Math.max((r.duracaoMs / maior) * alturaPlot, 3);
             const x = i * (larguraBarra + vao);
             const y = alturaPlot + alturaGlifo - h;
             const preenchimento =
@@ -398,7 +446,7 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
 
       {/* Legenda: identidade nunca fica só na cor. */}
       <div style={{ ...s.linha, gap: '.9rem', marginTop: '.4rem' }}>
-        {(['succeeded', 'failed', 'executing'] as const).map((d) => (
+        {(['succeeded', 'failed', 'executing', 'preso'] as const).map((d) => (
           <span key={d} style={{ ...s.fraco, display: 'inline-flex', alignItems: 'center', gap: '.3rem' }}>
             <span style={{ color: TOM_DO_DESFECHO[d] }} aria-hidden="true">{GLIFO[d]}</span>
             {NOME_DO_DESFECHO[d]}

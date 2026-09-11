@@ -78,13 +78,33 @@ interface JobTerminado {
   manual: boolean;
 }
 
+/**
+ * `preso` é um quarto desfecho, e existe porque `executing` mente com o tempo.
+ *
+ * Um run só fecha quando o último lote reporta. Se um lote morre — 429 do
+ * Toddle, worker derrubado no meio — ninguém fecha, e a linha fica `executing`
+ * para sempre. O banco tem quatro runs assim desde agosto, provando que
+ * acontece.
+ *
+ * Sem distinguir, o painel desenhava "83% em curso" indefinidamente, com a
+ * barra crescendo a cada recarga. Isso é a tela mentindo, que é exatamente o
+ * que ela existe para não fazer.
+ *
+ * O sinal não é "começou há muito tempo" — é `updated_at` parado. Cada lote que
+ * termina move essa coluna (`acumularLote`); se ela não anda, ninguém está
+ * trabalhando.
+ */
+const MINUTOS_SEM_NOTICIA_PARA_PRESO = 15;
+
 interface RunNoGrafico {
   chave: string;
-  desfecho: 'succeeded' | 'failed' | 'executing';
+  desfecho: 'succeeded' | 'failed' | 'executing' | 'preso';
   inicioEm: string;
   duracaoMs: number;
   /** `lotesConcluidos/lotesEsperados`, quando o fluxo é fan-out. */
   lotes?: { feitos: number; total: number };
+  /** Só em `preso`: há quanto tempo nenhum lote reporta. */
+  semNoticiaHaMs?: number;
 }
 
 /** O mínimo de runs para um gráfico dizer alguma coisa sobre tendência. */
@@ -161,21 +181,28 @@ export const registrarRotasDeJobs: FastifyPluginAsync = async (app) => {
         const grafico: RunNoGrafico[] = runs.map((r) => {
           const total = Number(r.payload.lotesEsperados);
           const feitos = Number(r.resultado.lotesConcluidos);
+          const paradoHaMs = Date.now() - new Date(r.atualizadoEm).getTime();
+          const preso =
+            r.estado === 'executing' && paradoHaMs > MINUTOS_SEM_NOTICIA_PARA_PRESO * 60_000;
           return {
             chave: r.chave,
-            desfecho: r.estado as RunNoGrafico['desfecho'],
+            desfecho: preso ? 'preso' : (r.estado as RunNoGrafico['desfecho']),
             inicioEm: r.criadoEm,
-            // Run ainda executando não tem duração final: o que se pode dizer é
-            // há quanto tempo ele começou, e a tela rotula isso como "em curso".
-            duracaoMs: r.estado === 'executing' ? Date.now() - new Date(r.criadoEm).getTime() : r.duracaoMs,
+            // Run aberto não tem duração final: o que se pode dizer é há quanto
+            // tempo ele começou.
+            duracaoMs:
+              r.estado === 'executing' ? Date.now() - new Date(r.criadoEm).getTime() : r.duracaoMs,
+            ...(preso ? { semNoticiaHaMs: paradoHaMs } : {}),
             ...(Number.isFinite(total) && total > 0
               ? { lotes: { feitos: Number.isFinite(feitos) ? feitos : 0, total } }
               : {}),
           };
         });
 
-        // O run em curso do fan-out: a barra real do sync de aluno.
+        // A barra de progresso é só para run que está REALMENTE andando. Um run
+        // preso mostrando "83%" seria uma animação parada fingindo trabalho.
         const emCurso = grafico.find((g) => g.desfecho === 'executing');
+        const presos = grafico.filter((g) => g.desfecho === 'preso');
 
         return {
           flowKey: fluxo.key,
@@ -186,6 +213,8 @@ export const registrarRotasDeJobs: FastifyPluginAsync = async (app) => {
           terminados,
           /** Progresso por LOTE, quando o fluxo é fan-out e há run em curso. */
           lotesEmCurso: emCurso?.lotes ?? null,
+          /** Runs abertos que pararam de dar notícia. Precisam de decisão humana. */
+          runsPresos: presos,
           historico: grafico,
           historicoSuficiente: grafico.length >= MINIMO_PARA_GRAFICO,
           minimoParaGrafico: MINIMO_PARA_GRAFICO,
