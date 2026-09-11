@@ -45,7 +45,11 @@ export interface RmTeacher {
 
 /** Uma turma-disciplina com os professores alocados. */
 export interface RmTurmaDisc {
-  /** `ID_TURMADISC` — casa com o `rm_code` do mapeamento COURSE. */
+  /**
+   * `ID_TURMADISC` — identifica a linha NO RM. **Não** é mais o `rm_code` do
+   * mapeamento COURSE: identity renumera na cópia de base. A chave do de-para
+   * se monta com `chaveCourse(periodoLetivo, codTurma, codDisc)`.
+   */
   idTurmaDisc: string;
   codTurma: string;
   nomeTurma: string;

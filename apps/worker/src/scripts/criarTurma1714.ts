@@ -1,6 +1,6 @@
 import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
-import { fetchNotasFromRm } from '@rm-toddle/domain';
+import { chaveCourse, fetchNotasFromRm } from '@rm-toddle/domain';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
@@ -29,6 +29,8 @@ const cfg = tenantConfig;
  */
 
 const ID_TURMADISC = '1714';
+/** A turma-disciplina irmã, de onde se copia a convenção de título. */
+const ID_TURMADISC_IRMA = '1715';
 
 async function main(): Promise<void> {
   const executar = process.argv.includes('--executar');
@@ -51,9 +53,16 @@ async function main(): Promise<void> {
   }
 
   // ─── já existe? ───────────────────────────────────────────────────────────
-  const jaMapeada = await idMappingRepository.findByRmCode('COURSE', ID_TURMADISC);
+  // O de-para COURSE é chaveado por CODPERLET:CODTURMA:CODDISC. O IDTURMADISC
+  // continua sendo como se ACHA a turma no RM, mas não é mais como se a
+  // identifica no mapeamento — identity renumera na cópia de base.
+  const periodoLetivo = cfg.rm.escopo.periodoLetivo;
+  if (!periodoLetivo) throw new Error('RM_CODPERLET vazio: é parte da chave do de-para COURSE.');
+  const chaveDaTurma = chaveCourse(periodoLetivo, String(td.CODTURMA ?? ''), String(td.CODDISC ?? ''));
+
+  const jaMapeada = await idMappingRepository.findByRmCode('COURSE', chaveDaTurma);
   if (jaMapeada) {
-    console.log(`\n  IDTURMADISC ${ID_TURMADISC} já mapeada para ${jaMapeada.toddleId}. Nada a fazer.\n`);
+    console.log(`\n  ${chaveDaTurma} já mapeada para ${jaMapeada.toddleId}. Nada a fazer.\n`);
     return;
   }
 
@@ -72,9 +81,21 @@ async function main(): Promise<void> {
   const cursos = await idMappingRepository.listByType('COURSE', 'active');
   const nossos = new Map(cursos.map((c) => [c.toddleId, c.rmCode]));
   const classes = (await toddleClient.listClasses()).filter((c) => nossos.has(String(c.id)));
-  const irma = classes.find((c) => nossos.get(String(c.id)) === '1715');
+  // A irmã 1715 é OUTRA turma-disciplina. Com o de-para chaveado por
+  // CODPERLET:CODTURMA:CODDISC, o número 1715 não identifica mais nada no
+  // mapeamento — a chave dela tem de vir do RM, como a da 1714 veio.
+  const doRmIrma = await wsDataServerClient.readView(
+    'EduTurmaDiscData',
+    `STurmaDisc.IDTURMADISC=${ID_TURMADISC_IRMA} AND STurmaDisc.CODCOLIGADA=${cfg.rm.escopo.coligada}`,
+    'STURMADISC',
+    cfg.rm.escopo.filiais,
+  );
+  const tdIrma = doRmIrma[0];
+  if (!tdIrma) throw new Error(`IDTURMADISC ${ID_TURMADISC_IRMA} (a irmã) não existe no RM.`);
+  const chaveIrma = chaveCourse(periodoLetivo, String(tdIrma.CODTURMA ?? ''), String(tdIrma.CODDISC ?? ''));
+  const irma = classes.find((c) => nossos.get(String(c.id)) === chaveIrma);
   if (!irma) {
-    throw new Error('A turma irmã 1715 não foi encontrada — sem ela não sei a convenção do título.');
+    throw new Error(`A turma irmã ${chaveIrma} não foi encontrada no Toddle — sem ela não sei a convenção do título.`);
   }
   // "Math Higher Level — 10th grade A - 1ª série" -> sufixo após o travessão
   const sufixo = String(irma.title ?? '').split('—').slice(1).join('—').trim();
@@ -136,7 +157,7 @@ async function main(): Promise<void> {
 
   await idMappingRepository.upsert({
     entityType: 'COURSE',
-    rmCode: ID_TURMADISC,
+    rmCode: chaveDaTurma,
     toddleId: courseId,
     rmInternalId: null,
   });
