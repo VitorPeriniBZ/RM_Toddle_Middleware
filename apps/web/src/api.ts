@@ -196,6 +196,7 @@ export const api = {
 
   // ─── Agenda ───────────────────────────────────────────────────────────────
   painel: () => pedir<Painel>('/agenda'),
+  jobs: () => pedir<PainelDeJobs>('/jobs'),
   executarAgora: (flowKey: string, motivo?: string) =>
     pedir<{ enfileirado: boolean; jobId: string | null; fila: string; aplicacao: string }>(
       `/agenda/${flowKey}/executar`,
@@ -234,3 +235,47 @@ export const api = {
       `/propostas/${encodeURIComponent(id)}/decidir`, 'POST', { decisao, motivo },
     ),
 };
+
+/** ─── a aba Jobs ─────────────────────────────────────────────────────────── */
+
+export interface ProgressoDeJob {
+  fase: string;
+  /** Só existe junto com `total`. Ausente = a fase não tem denominador. */
+  feitos?: number;
+  total?: number;
+}
+
+export interface JobAtivo {
+  id: string | null;
+  nome: string;
+  progresso: ProgressoDeJob | null;
+  iniciadoEm: string | null;
+  tentativa: number;
+}
+
+export interface RunNoGrafico {
+  chave: string;
+  desfecho: 'succeeded' | 'failed' | 'executing';
+  inicioEm: string;
+  duracaoMs: number;
+  lotes?: { feitos: number; total: number };
+}
+
+export interface FluxoDeJobs {
+  flowKey: string;
+  rotulo: string;
+  fila: string;
+  contagem: { ativos: number; esperando: number; reservaDeCron: number };
+  ativos: JobAtivo[];
+  /** Progresso por lote do fan-out de aluno. `null` nos demais. */
+  lotesEmCurso: { feitos: number; total: number } | null;
+  historico: RunNoGrafico[];
+  historicoSuficiente: boolean;
+  minimoParaGrafico: number;
+}
+
+export interface PainelDeJobs {
+  fluxos: FluxoDeJobs[];
+  dlq: { total: number; recentes: Array<{ jobId?: string; jobName: string; failedAt: string; failedReason: string }> };
+  retencao: { concluidosNoRedisHoras: number; falhosNoRedisDias: number; duravelEm: string };
+}

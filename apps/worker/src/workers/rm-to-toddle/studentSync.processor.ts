@@ -70,7 +70,11 @@ export async function processStudentExtract(job: Job): Promise<{
   // 1. Lê o roster completo via Sentença SQL (SOAP) — email/dob/gênero já vêm
   //    no mesmo rowset (enrichmentByCode), sem segundo round-trip.
   const { contexts, enrichmentByCode } = await fetchStudentsFromRm();
-  await job.updateProgress({ phase: 'reading-rm', totalContexts: contexts.length });
+  // Formato único do projeto (`ProgressoDeJob`): `fase` sempre, `feitos`/`total`
+  // só com denominador. A leitura não tem — daí só a fase. O progresso do RUN
+  // inteiro de alunos não vem daqui: vem de `lotesConcluidos/lotesEsperados` no
+  // `job_run`, porque quem trabalha são os jobs de LOTE, que são outros jobs.
+  await job.updateProgress({ fase: 'lendo o roster do RM' });
 
   // Deduplica por RA: um aluno pode vir em várias linhas (curso/turma/período);
   // um contexto ATIVO tem prioridade sobre um inativo.

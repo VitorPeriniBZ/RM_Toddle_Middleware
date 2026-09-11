@@ -6,6 +6,7 @@ import { toddleClient } from '@rm-toddle/integrations';
 import { autenticar } from './auth';
 import { exigirPapel } from './autorizacao';
 import { registrarRotasDeAgenda } from './rotas/agenda';
+import { registrarRotasDeJobs } from './rotas/jobs';
 import { registrarRotasDeVinculos } from './rotas/vinculos';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
@@ -209,6 +210,7 @@ export function construirApp() {
   // são dois assuntos, e um arquivo de rotas que cresce sem divisão é onde a
   // próxima rota entra sem `exigirPapel` e ninguém percebe na revisão.
   void app.register(registrarRotasDeAgenda);
+  void app.register(registrarRotasDeJobs);
   void app.register(registrarRotasDeVinculos);
 
   return app;

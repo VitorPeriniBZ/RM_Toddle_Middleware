@@ -34,11 +34,16 @@ const dorme = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 /** Papel com que o professor entra na turma. Resolvido por NOME, não fixo. */
 const PAPEL_PROFESSOR = 'Class Teacher';
 
+/** Ver `packages/queues/src/progresso.ts`: só relata fração onde há denominador. */
+export type AoProgredirProfessores = (p: { fase: string; feitos?: number; total?: number }) => void;
+
 export interface OpcoesSyncProfessores {
   /** `false` = ensaio: monta o plano, loga e não escreve nada. */
   executar: boolean;
   /** Teto de POSTs de staff e de turmas vinculadas (canário). */
   limite?: number;
+  /** Opcional: o job usa para publicar `job.updateProgress`. O CLI ignora. */
+  aoProgredir?: AoProgredirProfessores;
 }
 
 export interface ResumoSyncProfessores {
@@ -65,10 +70,13 @@ export async function sincronizarProfessores(
 ): Promise<ResumoSyncProfessores> {
   const { executar } = opcoes;
   const limite = opcoes.limite ?? Infinity;
+  const progresso: AoProgredirProfessores = opcoes.aoProgredir ?? (() => undefined);
 
   // Guarda de organização: escrever na org errada é o pior erro possível aqui.
+  progresso({ fase: 'conferindo a organização do Toddle' });
   await toddleClient.assertTargetOrganization();
 
+  progresso({ fase: 'lendo professores e turmas do RM' });
   const { professores, turmaDiscs } = await fetchTeachersFromRm();
 
   // roleId varia por organização — resolver por nome mantém o white label.
@@ -83,6 +91,7 @@ export async function sincronizarProfessores(
     );
   }
 
+  progresso({ fase: 'lendo staff e vínculos do Toddle' });
   const staffMap = await idMappingRepository.listByType('STAFF', 'active');
   const courseMap = await idMappingRepository.listByType('COURSE', 'active');
   const staffPorCodProf = new Map(staffMap.map((m) => [m.rmCode, m.toddleId]));
@@ -230,7 +239,11 @@ export async function sincronizarProfessores(
 
   // 2. Criar staff. De-para gravado IMEDIATAMENTE após cada POST: morrer no
   //    meio não faz a próxima execução recriar.
-  for (const prof of criarStaff.slice(0, limite)) {
+  const aCriar = criarStaff.slice(0, limite);
+  let criados = 0;
+  for (const prof of aCriar) {
+    progresso({ fase: 'criando staff no Toddle', feitos: criados, total: aCriar.length });
+    criados += 1;
     const [primeiro, ...resto] = prof.nome.split(/\s+/);
     try {
       // `createStaff` já extrai e valida o id (a resposta o aninha em `staff`).
@@ -261,7 +274,11 @@ export async function sincronizarProfessores(
     porTurma.get(v.classId)!.push(v);
   }
 
-  for (const [classId, lista] of [...porTurma.entries()].slice(0, limite)) {
+  const turmasAVincular = [...porTurma.entries()].slice(0, limite);
+  let vinculadas = 0;
+  for (const [classId, lista] of turmasAVincular) {
+    progresso({ fase: 'vinculando professor à turma', feitos: vinculadas, total: turmasAVincular.length });
+    vinculadas += 1;
     try {
       await comPaciencia(() =>
         toddleClient.addStaffToClass(classId, lista.map((v) => ({ id: v.staffId, roleId: papel.roleId }))),

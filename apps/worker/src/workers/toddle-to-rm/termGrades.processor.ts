@@ -64,7 +64,12 @@ export async function processTermGradesSync(job: Job): Promise<Record<string, un
     return { desligado: true };
   }
 
-  const r = await sincronizarAvaliacoes({ executar: true, quem: `job:${job.name}` });
+  const r = await sincronizarAvaliacoes({
+    executar: true,
+    quem: `job:${job.name}`,
+    // Só relata onde há denominador de verdade. Ver queues/progresso.ts.
+    aoProgredir: (p) => void job.updateProgress(p),
+  });
 
   // ─── não escreveu: cada motivo é um desfecho legítimo ─────────────────────
   if (!r.escrita) {

@@ -66,6 +66,13 @@ const cfg = tenantConfig;
  * processo do RM e ato humano.
  */
 
+/**
+ * Relata progresso. Chamado só onde há denominador de verdade — ver
+ * `packages/queues/src/progresso.ts`. A leitura do Toddle e do RM não tem:
+ * ali só se sabe dizer a fase.
+ */
+export type AoProgredir = (p: { fase: string; feitos?: number; total?: number }) => void;
+
 export interface OpcoesSincronizacaoAvaliacoes {
   /** `false` = ensaio: tudo é calculado, nada é enviado ao RM. */
   executar: boolean;
@@ -77,6 +84,8 @@ export interface OpcoesSincronizacaoAvaliacoes {
   exigirEtapaLiberada?: boolean;
   /** Quem operou, gravado no pedido de aprovação. */
   quem?: string;
+  /** Opcional: o job usa para publicar `job.updateProgress`. O CLI ignora. */
+  aoProgredir?: AoProgredir;
 }
 
 export interface RelatorioAvaliacoes {
@@ -148,6 +157,8 @@ export async function sincronizarAvaliacoes(
   const dataRef = op.dataRef ?? new Date().toISOString().slice(0, 10);
   const chaveRun = `aval:${cfg.slug}:${codFilial}:${op.turma ?? 'todas'}:${dataRef}`;
 
+  const progresso: AoProgredir = op.aoProgredir ?? (() => undefined);
+  progresso({ fase: 'conferindo a organização do Toddle' });
   await toddleClient.assertTargetOrganization();
 
   // ─── de-para, só ATIVOS ───────────────────────────────────────────────────
@@ -174,6 +185,7 @@ export async function sincronizarAvaliacoes(
   }
 
   // ─── alvos no RM ──────────────────────────────────────────────────────────
+  progresso({ fase: 'lendo etapas e avaliações do RM' });
   const etapas = await RmGradeTargets.carregar(turmasEmEscopo, codFilial);
   const alvos = await RmAssessmentTargets.carregar(turmasEmEscopo, codFilial);
 
@@ -202,6 +214,7 @@ export async function sincronizarAvaliacoes(
   //
   // O filtro por `classIds` é o que mantém isto barato: sem ele a leitura traz
   // os 223 assignments do sandbox, 222 deles de turmas de demonstração.
+  progresso({ fase: 'lendo avaliações do Toddle' });
   const idsDasNossas = classes.map((c) => String(c.id));
   const assignments = await toddleClient.listAssignments({
     curriculumProgramId: curriculos[0],
@@ -394,7 +407,10 @@ export async function sincronizarAvaliacoes(
   // aqui pula o grupo em vez de escrever nota órfã.
   const provasOk = new Set<string>();
   const provasQueFalharam: Array<{ chave: string; resposta: string }> = [];
+  let feitasA = 0;
   for (const pr of provasNecessarias) {
+    progresso({ fase: 'criando avaliações no RM', feitos: feitasA, total: provasNecessarias.length });
+    feitasA += 1;
     const chave = `${pr.idTurmaDisc}|${pr.codEtapa}|${pr.codProva}`;
     const r = await wsDataServerClient.saveRecord('EduProvasData', montaXmlProva(pr), contexto);
     if (r.ok) {
@@ -414,7 +430,10 @@ export async function sincronizarAvaliacoes(
   const recusadas: Array<{ chave: string; resposta: string }> = [];
   let chamadas = 0;
 
+  let feitosB = 0;
   for (const l of lotes) {
+    progresso({ fase: 'escrevendo notas no RM', feitos: feitosB, total: lotes.length });
+    feitosB += 1;
     const chaveProva = `${l.idTurmaDisc}|${l.codEtapa}|${l.codProva}`;
     const precisava = provasNecessarias.some(
       (pr) => `${pr.idTurmaDisc}|${pr.codEtapa}|${pr.codProva}` === chaveProva,
@@ -444,6 +463,7 @@ export async function sincronizarAvaliacoes(
   // O SaveRecord responde HTTP 200 mesmo recusando, e o EduNotaEtapaData provou
   // que ele também aceita e DESCARTA. Aqui a releitura confere chave E valor —
   // é esta conferência, e não o `ok`, que autoriza dizer que a nota chegou.
+  progresso({ fase: 'conferindo por releitura' });
   const depois = await RmAssessmentTargets.carregar(turmasEmEscopo, codFilial);
   let conferidas = 0;
   const divergentes: Array<{ chave: string; enviado: string; noRm: string }> = [];

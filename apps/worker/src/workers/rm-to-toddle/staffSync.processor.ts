@@ -44,7 +44,13 @@ export async function processStaffSync(job: Job): Promise<ResumoSyncProfessores>
 
   let resumo: ResumoSyncProfessores;
   try {
-    resumo = await sincronizarProfessores({ executar: true });
+    // O progresso vai para o job a cada passo com denominador — é o que a aba
+    // "Jobs" desenha como barra. Onde não há denominador (as leituras), só a
+    // fase viaja, e a tela mostra o nome sem barra. Ver queues/progresso.ts.
+    resumo = await sincronizarProfessores({
+      executar: true,
+      aoProgredir: (p) => void job.updateProgress(p),
+    });
   } catch (err) {
     // Falha na LEITURA (RM fora, credencial, Sentença) nunca chegava a `resumo`.
     // Sem isto o run ficaria preso em `executing` sem dizer por quê.
