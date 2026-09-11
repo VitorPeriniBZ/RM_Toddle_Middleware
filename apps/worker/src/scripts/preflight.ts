@@ -6,7 +6,19 @@ import {
   rmSoapConfigurado,
   tenantConfig,
 } from '@rm-toddle/config';
-import { FLOW, FLUXOS_EM_ORDEM } from '@rm-toddle/queues';
+/**
+ * Import PROFUNDO, e não do index do pacote. NÃO "arrume" isto.
+ *
+ * `@rm-toddle/queues` abre a conexão Redis no topo de `connection.ts`, e o index
+ * reexporta esse módulo. Importar do index aqui faz o preflight NUNCA ENCERRAR —
+ * e o preflight roda no container `init` do deploy, então o deploy fica em
+ * "Waiting" para sempre. Aconteceu em 11/09/2026, e a armadilha já estava
+ * documentada em `cronProfessor.ts` desde antes.
+ *
+ * `fluxos.ts` só depende de `names.ts`, que é constante pura: nenhum efeito
+ * colateral, nenhum socket.
+ */
+import { FLOW, FLUXOS_EM_ORDEM } from '@rm-toddle/queues/src/fluxos';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
 const cfg = tenantConfig;
