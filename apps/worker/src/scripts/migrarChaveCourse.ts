@@ -31,7 +31,7 @@
  * rodar duas vezes não quebra.
  */
 import { idMappingRepository, pgPool, registrarEvento } from '@rm-toddle/db';
-import { chaveCourse, fetchTeachersFromRm, pareceChaveLegada } from '@rm-toddle/domain';
+import { chaveCourse, fetchTeachersFromRm, lerChaveCourse, pareceChaveLegada } from '@rm-toddle/domain';
 import { tenantConfig } from '@rm-toddle/config';
 
 const cfg = tenantConfig;
@@ -103,10 +103,23 @@ async function main(): Promise<void> {
   const traduzir: Traducao[] = [];
   const jaMigrados: string[] = [];
   const semCorrespondencia: Array<{ rmCode: string; estado: string }> = [];
+  /**
+   * Existe uma TERCEIRA convenção no banco, anterior às duas: `rm_code` =
+   * `CODTURMA` puro, de quando o modelo era um curso por turma. As 12 linhas
+   * assim estão arquivadas com "modelo trocado para 1:1 com STURMADISC" e não
+   * têm disciplina — não há como expressá-las na chave nova, e não devem ser
+   * migradas: são o registro histórico de um modelo morto.
+   *
+   * Contá-las como "já migradas" seria mentir no relatório, que foi o que a
+   * primeira versão deste script fez. Uma linha ATIVA em convenção
+   * desconhecida, essa sim, bloqueia: ninguém sabe o que ela significa.
+   */
+  const outraConvencao: Array<{ rmCode: string; estado: string }> = [];
 
   for (const m of linhas) {
     if (!pareceChaveLegada(m.rmCode)) {
-      jaMigrados.push(m.rmCode);
+      if (lerChaveCourse(m.rmCode)) jaMigrados.push(m.rmCode);
+      else outraConvencao.push({ rmCode: m.rmCode, estado: m.estado });
       continue;
     }
     const achado = porId.get(m.rmCode.trim());
@@ -124,10 +137,28 @@ async function main(): Promise<void> {
     });
   }
 
-  p(`já no formato novo : ${jaMigrados.length}`);
-  p(`a traduzir         : ${traduzir.length}`);
-  p(`SEM correspondência: ${semCorrespondencia.length}`);
+  p(`já no formato novo    : ${jaMigrados.length}`);
+  p(`a traduzir            : ${traduzir.length}`);
+  p(`SEM correspondência   : ${semCorrespondencia.length}`);
+  p(`em outra convenção    : ${outraConvencao.length}`);
   p();
+
+  const ativasEmOutra = outraConvencao.filter((o) => o.estado === 'active');
+  if (outraConvencao.length > 0) {
+    p('rm_code que não é IDTURMADISC nem CODPERLET:CODTURMA:CODDISC:');
+    for (const o of outraConvencao.slice(0, 20)) p(`   ${o.rmCode}  (${o.estado})`);
+    if (ativasEmOutra.length === 0) {
+      p('   -> todas ARQUIVADAS. É o modelo antigo de um curso por turma, sem');
+      p('      disciplina: não cabe na chave nova e fica como registro histórico.');
+    }
+    p();
+  }
+  if (ativasEmOutra.length > 0) {
+    p(`ABORTA: ${ativasEmOutra.length} linha(s) ATIVA(s) em convenção desconhecida.`);
+    p('Migrar sem saber o que elas significam é o que esta migração evita.');
+    process.exitCode = 1;
+    return;
+  }
 
   if (semCorrespondencia.length > 0) {
     p('IDTURMADISC que não existe mais no RM (ou está fora do escopo lido):');
@@ -144,6 +175,24 @@ async function main(): Promise<void> {
 
   if (traduzir.length === 0) {
     p('Nada a fazer — o de-para já está na chave nova.');
+    return;
+  }
+
+  // A chave de destino já pertence a outra linha? A constraint
+  // `id_mapping_rm_uq` pegaria isso, mas no MEIO da transação — e um erro de
+  // constraint não diz qual par colidiu. Checar antes transforma um stack trace
+  // em duas linhas de relatório.
+  const destinos = new Map<string, string[]>();
+  for (const t of traduzir) destinos.set(t.para, [...(destinos.get(t.para) ?? []), t.de]);
+  const ocupadas = new Set([...jaMigrados, ...outraConvencao.map((o) => o.rmCode)]);
+  const conflitos = [
+    ...[...destinos.entries()].filter(([, des]) => des.length > 1).map(([k, des]) => `${k} <- ${des.join(', ')}`),
+    ...[...destinos.keys()].filter((k) => ocupadas.has(k)).map((k) => `${k} já existe em outra linha`),
+  ];
+  if (conflitos.length > 0) {
+    p(`ABORTA: ${conflitos.length} conflito(s) na chave de destino.`);
+    for (const c of conflitos.slice(0, 20)) p(`   ${c}`);
+    process.exitCode = 1;
     return;
   }
 
