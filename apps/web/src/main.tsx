@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import './marca.css';
 import { App } from './App';
 
 const raiz = document.getElementById('root');

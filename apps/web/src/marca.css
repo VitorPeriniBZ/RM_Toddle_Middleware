@@ -1,0 +1,171 @@
+/**
+ * Identidade visual da Escola Americana de Vitória, aplicada ao plano de
+ * controle.
+ *
+ * ─── O QUE ESTA FOLHA DECIDE, E O QUE ELA NÃO MEXE ──────────────────────────
+ *
+ * Esta é uma ferramenta INTERNA de operação, densa de propósito: o valor dela é
+ * caber muita informação verdadeira numa tela e deixar a divergência saltar.
+ * Marca aqui é identidade, não decoração — nada aqui pode roubar espaço de
+ * dado nem competir com o vermelho de "divergente".
+ *
+ * Por isso a aplicação é deliberadamente contida:
+ *   - o grafismo de onda aparece UMA vez, no cabeçalho, e não se repete;
+ *   - a paleta da marca assume as cores SEMÂNTICAS (bom/ruim/atenção), em vez
+ *     de acrescentar uma segunda paleta ao lado delas — duas paletas brigando
+ *     é o caminho mais curto para o vermelho virar enfeite;
+ *   - a densidade dos cartões e tabelas fica exatamente como estava.
+ *
+ * A versão sem marca vive na branch `white-label`.
+ *
+ * ─── AS CORES SEMÂNTICAS SÃO DA PALETA, NÃO GENÉRICAS ───────────────────────
+ *
+ * `bom` é o Verde #408F38 (Infantil), `ruim` é o Vermelho #AB2A25
+ * (Fundamental), `atenção` é o Ocre #A67206 — a versão de profundidade do
+ * Amarelo, escolhida em vez do #FBB216 porque amarelo puro sobre branco não
+ * alcança contraste AA em texto. Os fundos suaves são os mesmos tons com alfa,
+ * para nenhum hex escapar da paleta.
+ */
+
+:root {
+  /* Cores proprietárias sólidas — diretrizes de maio/2026. */
+  --eav-amarelo: #fbb216;
+  --eav-oliva: #a9a52b; /* institucional da marca-mãe */
+  --eav-verde: #408f38;
+  --eav-vermelho: #ab2a25;
+  --eav-roxo: #7a4180;
+  --eav-azul: #27467c;
+
+  /* Profundidade */
+  --eav-ocre: #a67206;
+  --eav-verde-floresta: #284200;
+  --eav-vinho: #510a12;
+  --eav-marinho: #12123f;
+  --eav-preto: #0c0309;
+
+  /* Neutros */
+  --eav-creme: #f0eee6;
+  --eav-branco: #ffffff;
+  --eav-cinza: #3d3c3b;
+
+  /* Marca-mãe: o plano de controle é institucional, não de um segmento. */
+  --brand-primary: var(--eav-oliva);
+  --brand-accent: var(--eav-verde-floresta);
+
+  --font-title: 'Poppins', system-ui, sans-serif;
+  --font-serif: 'Spectral', Georgia, serif;
+  --font-body: 'Montserrat', system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--eav-creme);
+  font-family: var(--font-body);
+  color: var(--eav-cinza);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-title);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Uma palavra-chave em Spectral itálico — o encontro serifada + bastão que
+   torna o título reconhecível como EAV. Um acento, nunca o título inteiro. */
+.eav-title em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 500;
+  color: var(--brand-primary);
+}
+
+/**
+ * Cabeçalho de marca.
+ *
+ * Bloco de cor sólida com recorte reto, como manda o sistema — e a lâmina em S
+ * sangrando pela direita, recortada pelo próprio bloco. É o único lugar da tela
+ * onde o grafismo aparece.
+ */
+.eav-header {
+  position: relative;
+  overflow: hidden;
+  background: var(--brand-primary);
+  color: var(--eav-branco);
+  padding: 1.1rem 1.25rem;
+}
+
+.eav-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--eav-branco);
+  position: relative;
+  z-index: 1;
+}
+
+.eav-header .eav-title em {
+  color: var(--eav-branco);
+}
+
+/* Sobrelinha: o par de sistemas, miúdo e espaçado, acima do título. */
+.eav-sobrelinha {
+  margin: 0 0 0.1rem;
+  font-family: var(--font-title);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--eav-creme);
+  position: relative;
+  z-index: 1;
+}
+
+.eav-header h1 {
+  font-size: 1.5rem;
+}
+
+/**
+ * A lâmina oficial, recolorida por máscara. O traçado vem do arquivo das
+ * diretrizes (`/wave-eav.svg`) — não é uma curva redesenhada no olho, que é
+ * justamente o que faria a peça deixar de parecer da marca.
+ *
+ * `aria-hidden` no elemento: é ornamento, e leitor de tela não deve anunciá-lo.
+ */
+.eav-onda {
+  position: absolute;
+  top: -55%;
+  right: 3%;
+  height: 240%;
+  aspect-ratio: 503 / 1077;
+  /* Cor SÓLIDA com opacidade uniforme — a lâmina é um bloco de cor recortado
+     pelo header, não um esmaecimento. Opacidade que varia dentro da forma
+     viraria degradê, e degradê é o que a marca substituiu. */
+  background: var(--eav-verde-floresta);
+  opacity: 0.28;
+  -webkit-mask: url('/wave-eav.svg') no-repeat center / contain;
+  mask: url('/wave-eav.svg') no-repeat center / contain;
+  pointer-events: none;
+}
+
+/* Espelhada, fecha o "V" da marca do outro lado. Mais discreta: duas lâminas
+   com o mesmo peso competiriam entre si e com o título. */
+.eav-onda--espelhada {
+  right: auto;
+  left: 1%;
+  top: -40%;
+  height: 200%;
+  transform: scaleX(-1);
+  background: var(--eav-creme);
+  opacity: 0.22;
+}
+
+/* O foco tem de continuar visível sobre o creme e sobre o bloco de cor. */
+:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+.eav-header :focus-visible {
+  outline-color: var(--eav-branco);
+}
