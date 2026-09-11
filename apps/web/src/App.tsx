@@ -4,6 +4,7 @@ import { cor, s } from './estilos';
 import { Agenda } from './painel/Agenda';
 import { DePara } from './painel/DePara';
 import { Auditoria } from './painel/Auditoria';
+import { Jobs } from './painel/Jobs';
 
 /**
  * A tela: login, e três assuntos.
@@ -37,7 +38,7 @@ declare global {
 }
 
 type Estado = 'carregando' | 'deslogado' | 'logado' | 'erro';
-type Aba = 'agenda' | 'de-para' | 'auditoria' | 'saude';
+type Aba = 'agenda' | 'jobs' | 'de-para' | 'auditoria' | 'saude';
 
 export function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
@@ -176,6 +177,7 @@ export function App() {
           <div style={s.abas}>
             {([
               ['agenda', 'Agenda'],
+              ['jobs', 'Jobs'],
               ['de-para', 'De-para'],
               ['auditoria', 'Auditoria'],
               ['saude', 'Saúde'],
@@ -187,6 +189,7 @@ export function App() {
           </div>
 
           {aba === 'agenda' && <Agenda aoErrar={tratar} />}
+          {aba === 'jobs' && <Jobs aoErrar={tratar} />}
           {aba === 'de-para' && <DePara aoErrar={tratar} />}
           {aba === 'auditoria' && <Auditoria aoErrar={tratar} />}
           {aba === 'saude' && <Saude aoErrar={tratar} />}

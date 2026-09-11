@@ -389,6 +389,69 @@ export async function ultimosRunsPorTipo(tipos: string[]): Promise<Record<string
   );
 }
 
+export interface RunNoHistorico extends RunResumo {
+  /** O payload de abertura. É dele que sai `lotesEsperados`. */
+  payload: Record<string, unknown>;
+  /** `updated_at - created_at`, em ms. Só faz sentido em run já fechado. */
+  duracaoMs: number;
+}
+
+/**
+ * Os últimos N runs de cada tipo — o histórico, não só o último.
+ *
+ * ─── POR QUE ISTO EXISTE, E O QUE ELE NÃO PODE PROMETER ─────────────────────
+ *
+ * `job_run` tem chave única `(tenant_id, chave)` e `abrirRun` faz UPSERT nela.
+ * Então "uma linha por execução" depende inteiramente da chave incluir algo que
+ * muda a cada disparo — e inclui: os agendados usam o timestamp do scheduler
+ * (`repeat:staff.sync:1789068600000`), e os manuais o jobId.
+ *
+ * A consequência é que o histórico ACUMULA daqui para frente, mas não existe
+ * retroativamente: rodar este SELECT hoje devolve poucas linhas porque poucos
+ * runs foram registrados até agora, não porque a consulta esteja errada. Quem
+ * desenha gráfico com isto precisa dizer "ainda sem histórico" em vez de
+ * desenhar um gráfico vazio que parece quebrado.
+ *
+ * `payload` vem junto porque é dele que sai o denominador do progresso de
+ * aluno (`lotesEsperados`); sem ele a barra não teria como ser real.
+ */
+export async function historicoDeRuns(
+  tipos: string[],
+  limitePorTipo = 30,
+): Promise<Record<string, RunNoHistorico[]>> {
+  if (tipos.length === 0) return {};
+  const { rows } = await pgPool.query<{
+    tipo: string; chave: string; estado: EstadoRun;
+    payload: Record<string, unknown>; resultado: Record<string, unknown>;
+    config_version: string | null; created_at: Date; updated_at: Date;
+  }>(
+    `SELECT tipo, chave, estado, payload, resultado, config_version, created_at, updated_at
+       FROM (
+         SELECT *, row_number() OVER (PARTITION BY tipo ORDER BY created_at DESC) AS n
+           FROM job_run
+          WHERE tenant_id = $1 AND tipo = ANY($2::text[])
+       ) x
+      WHERE n <= $3
+      ORDER BY tipo, created_at DESC`,
+    [await tenantId(), tipos, Math.min(Math.max(limitePorTipo, 1), 200)],
+  );
+  const porTipo: Record<string, RunNoHistorico[]> = {};
+  for (const r of rows) {
+    (porTipo[r.tipo] ??= []).push({
+      tipo: r.tipo,
+      chave: r.chave,
+      estado: r.estado,
+      payload: r.payload ?? {},
+      resultado: r.resultado ?? {},
+      configVersion: r.config_version,
+      criadoEm: new Date(r.created_at).toISOString(),
+      atualizadoEm: new Date(r.updated_at).toISOString(),
+      duracaoMs: new Date(r.updated_at).getTime() - new Date(r.created_at).getTime(),
+    });
+  }
+  return porTipo;
+}
+
 /** Quando cada tipo teve o último run `succeeded`. Ausente = nunca teve. */
 export async function ultimoSucessoPorTipo(tipos: string[]): Promise<Record<string, string>> {
   if (tipos.length === 0) return {};
