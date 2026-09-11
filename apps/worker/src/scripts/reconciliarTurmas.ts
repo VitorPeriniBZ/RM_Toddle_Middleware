@@ -1,6 +1,6 @@
 import { env, logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository, pgPool } from '@rm-toddle/db';
-import { chaveCourse } from '@rm-toddle/domain';
+import { chaveCourse, criarResolvedorDeCourse } from '@rm-toddle/domain';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
@@ -81,9 +81,27 @@ async function main(): Promise<void> {
   const chaveDe = (r: { CODTURMA?: string; CODDISC?: string }): string =>
     chaveCourse(periodoLetivo, String(r.CODTURMA ?? ''), String(r.CODDISC ?? ''));
 
+  // ─── AS DUAS CONVENÇÕES CONVIVEM ENQUANTO O DE-PARA MIGRA ────────────────
+  //
+  // Procurar só pela chave natural num de-para ainda em IDTURMADISC não acha
+  // NADA — e aqui isso não dá erro: dá um relatório dizendo que todas as 186
+  // turmas são novas. Rodado com `--executar`, duplicaria o de-para inteiro.
+  // O resolvedor aceita as duas, e o relatório volta a dizer a verdade.
+  const alvoDe = (r: { IDTURMADISC?: string; CODTURMA?: string; CODDISC?: string }) => ({
+    idTurmaDisc: String(r.IDTURMADISC ?? ''),
+    codTurma: String(r.CODTURMA ?? ''),
+    codDisc: String(r.CODDISC ?? ''),
+  });
+  const estaMapeada = criarResolvedorDeCourse(ativos, periodoLetivo);
+  const estaArquivada = criarResolvedorDeCourse(arquivados, periodoLetivo);
+  logger.info(
+    { ativos: estaMapeada.retrato, arquivados: estaArquivada.retrato },
+    'De-para COURSE: convenções de chave presentes',
+  );
+
   const perletsMapeados = new Map<string, number>();
   for (const r of doRm) {
-    if (mapeadas.has(chaveDe(r))) {
+    if (estaMapeada(alvoDe(r)).toddleId) {
       perletsMapeados.set(r.IDPERLET, (perletsMapeados.get(r.IDPERLET) ?? 0) + 1);
     }
   }
@@ -141,9 +159,9 @@ async function main(): Promise<void> {
       alteradoEm: soData(r.RECMODIFIEDON),
     };
 
-    if (mapeadas.has(chave)) {
+    if (estaMapeada(alvoDe(r)).toddleId) {
       achados.push({ ...base, situacao: ativaNoRm ? 'OK' : 'INATIVADA_NO_RM' });
-    } else if (jaArquivadas.has(chave)) {
+    } else if (estaArquivada(alvoDe(r)).toddleId) {
       if (ativaNoRm) achados.push({ ...base, situacao: 'REATIVADA_NO_RM' });
     } else if (ativaNoRm) {
       achados.push({ ...base, situacao: alunos > 0 ? 'NOVA_COM_ALUNOS' : 'NOVA_SEM_ALUNOS' });

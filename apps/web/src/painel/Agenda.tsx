@@ -88,18 +88,36 @@ export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
   useEffect(() => { void carregar(); }, []);
 
   /**
-   * Enquanto houver execução em voo, recarrega sozinho.
+   * Recarrega SEMPRE — depressa enquanto algo roda, devagar quando não.
    *
-   * Sem isto o botão "Sincronizar agora" ficaria travado até alguém apertar
-   * Atualizar — a trava nasceria correta e depois envelheceria, que é a mesma
-   * classe de mentira que esta tela existe para não cometer. Quando nada está
-   * rodando, não fica pedindo à toa.
+   * A versão anterior só recarregava com job em voo, e isso produziu o defeito
+   * que esta tela existe para não cometer: um selo vermelho "DIVERGENTE"
+   * (observado no Redis ≠ desejado no banco) ficou na tela DEPOIS de a agenda
+   * já ter sido aplicada e os dois lados já concordarem. A divergência era real
+   * por alguns segundos; a tela a manteve indefinidamente, porque nada estava
+   * rodando e portanto nada a fazia recarregar. Quem olhou viu um alarme falso e
+   * foi investigar produção.
+   *
+   * Qualquer estado transitório tem esse problema — aplicação de cron, revisão
+   * confirmada, fluxo religado por outra pessoa. A trava nasce certa e
+   * envelhece. Um painel de controle que envelhece em silêncio é pior que um
+   * painel sem atualização automática, porque ninguém desconfia dele.
+   *
+   * Em aba oculta não pede nada: o navegador estrangula o timer de qualquer
+   * forma, e a primeira coisa que acontece ao voltar é um recarregamento.
    */
   const algoRodando = painelTemExecucao(painel);
   useEffect(() => {
-    if (!algoRodando) return;
-    const t = setInterval(() => void carregar(), 5_000);
-    return () => clearInterval(t);
+    const periodo = algoRodando ? 5_000 : 30_000;
+    const tick = (): void => {
+      if (document.visibilityState === 'visible') void carregar();
+    };
+    const t = setInterval(tick, periodo);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', tick);
+    };
   }, [algoRodando]);
 
   if (!painel) return <p style={s.fraco}>{carregando ? 'Lendo a agenda…' : '—'}</p>;

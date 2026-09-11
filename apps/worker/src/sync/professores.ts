@@ -1,6 +1,11 @@
 import { logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository } from '@rm-toddle/db';
-import { chaveCourse, fetchTeachersFromRm, type RmTeacher, type RmTurmaDisc } from '@rm-toddle/domain';
+import {
+  criarResolvedorDeCourse,
+  fetchTeachersFromRm,
+  type RmTeacher,
+  type RmTurmaDisc,
+} from '@rm-toddle/domain';
 import { comPaciencia, toddleClient } from '@rm-toddle/integrations';
 
 /**
@@ -62,6 +67,14 @@ export interface ResumoSyncProfessores {
    * pendência real: sem `classId` não há onde pendurar o professor.
    */
   turmas_nao_mapeadas: number;
+  /**
+   * Quantas turmas só casaram pela chave ANTIGA (IDTURMADISC).
+   *
+   * É o medidor da migração: enquanto for > 0, o de-para ainda não migrou e a
+   * tolerância às duas convenções não pode sair. Zero, com turmas vinculadas,
+   * é a condição para a fase de contração.
+   */
+  turmas_pela_chave_legada: number;
   falhas: Array<{ o_que: string; alvo: string; erro: string }>;
 }
 
@@ -95,14 +108,21 @@ export async function sincronizarProfessores(
   const staffMap = await idMappingRepository.listByType('STAFF', 'active');
   const courseMap = await idMappingRepository.listByType('COURSE', 'active');
   const staffPorCodProf = new Map(staffMap.map((m) => [m.rmCode, m.toddleId]));
-  // O de-para COURSE é chaveado por CODPERLET:CODTURMA:CODDISC, não por
-  // IDTURMADISC: identity renumera na cópia de base e o vínculo passaria a
-  // apontar para outra disciplina em silêncio. Ver domain/chaveCourse.ts.
-  const classPorTurmaDisc = new Map(courseMap.map((m) => [m.rmCode, m.toddleId]));
   const periodoLetivo = tenantConfig.rm.escopo.periodoLetivo;
   if (!periodoLetivo) {
     throw new Error('RM_CODPERLET vazio: é parte da chave do de-para COURSE e sem ele o vínculo não resolve.');
   }
+
+  // O de-para COURSE está migrando de IDTURMADISC para CODPERLET:CODTURMA:CODDISC
+  // — a identity renumera na cópia de base, e o vínculo passaria a apontar para
+  // outra disciplina em silêncio. O resolvedor aceita as DUAS convenções, para
+  // que a troca da chave não tenha uma janela em que nada casa. Foi essa janela
+  // que produziu `turmas_nao_mapeadas: 186` com o job terminando em sucesso.
+  const resolverCourse = criarResolvedorDeCourse(courseMap, periodoLetivo);
+  logger.info(
+    { ...resolverCourse.retrato, total: courseMap.length },
+    'De-para COURSE: convenções de chave presentes',
+  );
 
   const staffNoToddle = new Map<string, string>(); // email -> staffId
   for (let pagina = 1; pagina <= 20; pagina += 1) {
@@ -132,6 +152,8 @@ export async function sincronizarProfessores(
   const semEmail: RmTeacher[] = [];
   const vincular: Array<{ classId: string; staffId: string; codProf: string; idTurmaDisc: string; rotulo: string }> = [];
   const turmasNaoMapeadas: RmTurmaDisc[] = [];
+  /** Quantas ainda dependem da convenção antiga: a fase de expansão acaba quando isto zera. */
+  let resolvidasPelaChaveLegada = 0;
   const turmasGerenciadas: string[] = [];
 
   for (const prof of professores.values()) {
@@ -153,8 +175,9 @@ export async function sincronizarProfessores(
     // está SÓ aqui?" é a reconciliação, que lê o mesmo `td.gerenciada`.
     if (td.gerenciada) { turmasGerenciadas.push(td.idTurmaDisc); continue; }
 
-    const classId = classPorTurmaDisc.get(chaveCourse(periodoLetivo, td.codTurma, td.codDisc));
+    const { toddleId: classId, convencao } = resolverCourse(td);
     if (!classId) { turmasNaoMapeadas.push(td); continue; }
+    if (convencao === 'legada') resolvidasPelaChaveLegada += 1;
     const jaNaTurma = staffPorClass.get(classId) ?? new Set<string>();
 
     for (const codProf of td.codProfs) {
@@ -215,6 +238,7 @@ export async function sincronizarProfessores(
     pulados_sem_email: semEmail.length,
     turmas_gerenciadas: turmasGerenciadas.length,
     turmas_nao_mapeadas: turmasNaoMapeadas.length,
+    turmas_pela_chave_legada: resolvidasPelaChaveLegada,
     falhas: [],
   };
 
