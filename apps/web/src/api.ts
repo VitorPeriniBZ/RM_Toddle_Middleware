@@ -182,7 +182,14 @@ export const api = {
   authConfig: () => pedir<AuthConfig>('/auth/config'),
   health: () => pedir<{
     ok: boolean; authMode: string; tenant: string; configVersion: string;
-    dependencias: Array<{ nome: string; ok: boolean; erro?: string }>;
+    dependencias: Array<{
+      nome: string;
+      ok: boolean;
+      /** `limitado` = rate limit. NÃO é queda — ver o /health na API. */
+      estado: 'ok' | 'limitado' | 'falha';
+      erro?: string;
+      liberaEmSegundos?: number;
+    }>;
   }>('/health'),
   config: () => pedir<Record<string, string>>('/config'),
   resumo: () => pedir<{

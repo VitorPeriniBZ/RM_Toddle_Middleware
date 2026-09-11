@@ -84,7 +84,8 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     avisoAoExecutarAgora:
       'Lê os alunos do RM e CRIA ou ATUALIZA cadastro no Toddle — inclusive aluno ' +
       'novo, que passa a existir lá. Não apaga ninguém. Leva alguns minutos e não ' +
-      'dá para interromper depois de começar.',
+      'dá para interromper depois de começar. CONSOME COTA: o Toddle limita por ' +
+      'janela de 300s, e rodar isto perto do horário agendado derruba os dois.',
   },
   [FLOW.PROFESSORES]: {
     key: FLOW.PROFESSORES,
@@ -96,7 +97,8 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
     avisoAoExecutarAgora:
       'Lê os professores do RM e CRIA staff no Toddle. Criar staff é IRREVERSÍVEL: ' +
       'o e-mail vira a identidade da conta, e conta com e-mail errado só pode ser ' +
-      'arquivada, nunca corrigida. Também vincula professor a turma.',
+      'arquivada, nunca corrigida. Também vincula professor a turma. CONSOME COTA ' +
+      'da janela de 300s do Toddle.',
   },
   [FLOW.NOTAS]: {
     key: FLOW.NOTAS,
