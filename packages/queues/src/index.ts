@@ -5,3 +5,4 @@ export * from './queues';
 export * from './deadLetter';
 export * from './fluxos';
 export * from './schedulers';
+export * from './execucaoEmVoo';
