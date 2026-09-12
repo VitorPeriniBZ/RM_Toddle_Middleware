@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, ApiError, setIdToken, type AuthConfig } from './api';
+import { api, ApiError, getIdToken, setIdToken, type AuthConfig } from './api';
 import { cor, s } from './estilos';
 import { Agenda } from './painel/Agenda';
 import { DePara } from './painel/DePara';
@@ -10,10 +10,27 @@ import { Jobs } from './painel/Jobs';
  * A tela: login, e três assuntos.
  *
  * O token fica em memória, NÃO em localStorage. Token em localStorage é legível
- * por qualquer script na página e sobrevive ao fechamento da aba; recarregar e
- * logar de novo é um preço baixo para um sistema que muda o horário de um job que
- * escreve em registro acadêmico. Quando houver sessão de servidor, ela substitui
- * isto.
+ * por qualquer script na página e sobrevive ao fechamento da aba, e isto aqui
+ * muda o horário de um job que escreve em registro acadêmico.
+ *
+ * ─── POR QUE A SESSÃO PARECIA CURTA, E O QUE FOI FEITO ──────────────────────
+ *
+ * Duas causas, e nenhuma delas era um prazo baixo que desse para aumentar:
+ *
+ *   1. a "sessão" É o ID token do Google, e ele expira em 1 HORA — prazo do
+ *      Google, que nós não configuramos;
+ *   2. estando só em memória, qualquer recarregar de página a perdia.
+ *
+ * A correção aqui não mexe em nenhum prazo: faz a RENOVAÇÃO ficar invisível. O
+ * One Tap com `auto_select` devolve credencial nova sem clique enquanto a sessão
+ * do Google no navegador durar (dias), e um relógio pede a renovação alguns
+ * minutos ANTES da hora — então a sessão não cai no meio de uma tarefa, e
+ * recarregar não faz voltar para o botão.
+ *
+ * O que isto NÃO é: sessão de servidor. Um cookie HttpOnly com prazo próprio e
+ * revogação continua sendo a correção de fundo — é o que permite deslogar
+ * alguém de verdade. Fica de fora aqui de propósito: trocar o modelo de
+ * autenticação merece o seu próprio PR.
  *
  * ─── O 403 É PARTE DO CAMINHO, NÃO UM ERRO ──────────────────────────────────
  *
@@ -29,8 +46,15 @@ declare global {
     google?: {
       accounts: {
         id: {
-          initialize: (o: { client_id: string; callback: (r: { credential: string }) => void }) => void;
+          initialize: (o: {
+            client_id: string;
+            callback: (r: { credential: string }) => void;
+            auto_select?: boolean;
+            cancel_on_tap_outside?: boolean;
+          }) => void;
           renderButton: (el: HTMLElement, o: Record<string, unknown>) => void;
+          /** One Tap. Com `auto_select`, entrega credencial sem clique. */
+          prompt: (ouvinte?: (n: { isNotDisplayed: () => boolean; isSkippedMoment: () => boolean }) => void) => void;
         };
       };
     };
@@ -46,6 +70,16 @@ export function App() {
   const [erro, setErro] = useState<string | null>(null);
   const [semAcesso, setSemAcesso] = useState<{ comoLiberar?: string; erro?: string } | null>(null);
   const [aba, setAba] = useState<Aba>('agenda');
+  // Muda a cada credencial aceita, para rearmar o relógio de renovação.
+  const [renovacoes, setRenovacoes] = useState(0);
+
+  function aceitarCredencial(credencial: string): void {
+    setIdToken(credencial);
+    setSemAcesso(null);
+    setEstado('logado');
+    setErro(null);
+    setRenovacoes((n) => n + 1);
+  }
 
   // 1. Descobre o modo de autenticação com a própria API.
   useEffect(() => {
@@ -70,15 +104,48 @@ export function App() {
 
     window.google.accounts.id.initialize({
       client_id: authConfig.clientId,
+      // Sem clique quando o Google já sabe quem é. A sessão do Google no
+      // navegador dura dias; era só a NOSSA que caía a cada recarregar.
+      auto_select: true,
+      // O One Tap não pode sumir porque a pessoa clicou na tela — se sumir, ela
+      // fica sem nenhum caminho de volta a não ser recarregar.
+      cancel_on_tap_outside: false,
       callback: (resposta) => {
-        setIdToken(resposta.credential);
-        setSemAcesso(null);
-        setEstado('logado');
-        setErro(null);
+        aceitarCredencial(resposta.credential);
       },
     });
     window.google.accounts.id.renderButton(alvo, { theme: 'outline', size: 'large', locale: 'pt-BR' });
+    // O botão fica renderizado como alternativa: se o One Tap não aparecer
+    // (bloqueado, várias contas, terceira visita seguida dispensada), ainda há
+    // onde clicar. Uma tela que dependesse SÓ do One Tap poderia não ter saída.
+    window.google.accounts.id.prompt();
   }, [estado, authConfig]);
+
+  /**
+   * Renova ANTES de expirar.
+   *
+   * Sem isto, a sessão morre no meio de uma tarefa e a pessoa descobre pelo 401
+   * — que é o pior momento, porque costuma ser bem na hora de salvar. O relógio
+   * é armado a partir do `exp` do próprio token, não de um prazo que a gente
+   * suponha: se o Google mudar a validade, isto acompanha sozinho.
+   */
+  useEffect(() => {
+    if (estado !== 'logado' || !authConfig?.clientId) return;
+    const token = getIdToken();
+    if (!token) return;
+
+    const expiraEm = expiracaoDoToken(token);
+    if (!expiraEm) return;
+
+    // Cinco minutos de folga: tempo de a renovação acontecer sem que nenhuma
+    // requisição pegue o token já vencido.
+    const daquiAMs = expiraEm - Date.now() - 5 * 60_000;
+    const t = setTimeout(() => {
+      window.google?.accounts.id.prompt();
+    }, Math.max(daquiAMs, 1_000));
+
+    return () => clearTimeout(t);
+  }, [estado, authConfig, renovacoes]);
 
   /**
    * Tratamento único de erro das abas.
@@ -303,4 +370,24 @@ function Saude({ aoErrar }: { aoErrar: (e: unknown) => void }) {
       </div>
     </>
   );
+}
+
+/**
+ * Quando este ID token expira, em ms de época. `null` se não der para saber.
+ *
+ * Lê o `exp` do payload SEM verificar assinatura — de propósito: aqui isto só
+ * decide a hora de renovar. Quem valida o token é a API, que confere assinatura,
+ * emissor, audiência e domínio. Confiar neste `exp` para autorizar qualquer
+ * coisa seria confiar num campo que o navegador pode ter adulterado.
+ */
+function expiracaoDoToken(token: string): number | null {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    const exp = (JSON.parse(json) as { exp?: unknown }).exp;
+    return typeof exp === 'number' ? exp * 1_000 : null;
+  } catch {
+    return null;
+  }
 }
