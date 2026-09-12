@@ -84,7 +84,13 @@ function imprimir(r: RelatorioAvaliacoes, executar: boolean): void {
   p('── plano ─────────────────────────────────────────────────────────');
   p(`  projetáveis                     ${r.projecao.projetaveis}`);
   p(`  recusados na projeção           ${r.projecao.recusados}`);
-  for (const [m, n] of Object.entries(r.projecao.porMotivo)) p(`      ${m.padEnd(28)} ${n}`);
+  for (const [m, n] of Object.entries(r.projecao.porMotivo)) {
+    p(`      ${m.padEnd(28)} ${n}`);
+    // O texto da recusa, não só a contagem: é ele que diz o que fazer, e ele
+    // existia sem que ninguém o visse.
+    const exemplo = r.projecao.exemploPorMotivo?.[m];
+    if (exemplo) for (const linha of quebrar(exemplo, 92)) p(`        ${linha}`);
+  }
   if (r.projecao.colisoes) {
     p(`  COLISÃO                         ${r.projecao.colisoes} chave(s) com dois valores`);
   }
@@ -189,3 +195,19 @@ main().catch(async (err) => {
   await pgPool.end().catch(() => undefined);
   process.exitCode = 1;
 });
+
+/** Quebra texto em linhas de até `largura`, sem cortar palavra. */
+function quebrar(texto: string, largura: number): string[] {
+  const linhas: string[] = [];
+  let atual = '';
+  for (const palavra of texto.split(' ')) {
+    if (atual && `${atual} ${palavra}`.length > largura) {
+      linhas.push(atual);
+      atual = palavra;
+    } else {
+      atual = atual ? `${atual} ${palavra}` : palavra;
+    }
+  }
+  if (atual) linhas.push(atual);
+  return linhas;
+}

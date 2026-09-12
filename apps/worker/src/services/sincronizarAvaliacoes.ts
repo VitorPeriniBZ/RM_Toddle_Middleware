@@ -110,6 +110,17 @@ export interface RelatorioAvaliacoes {
     projetaveis: number;
     recusados: number;
     porMotivo: Record<string, number>;
+    /**
+     * Um exemplo de recusa POR MOTIVO, com o texto inteiro.
+     *
+     * O relatório mostrava só a contagem, e a contagem não endereça ninguém:
+     * "JANELA_INCOMPATIVEL 558" não diz qual data mexer nem em qual sistema. O
+     * texto da recusa diz — e antes disto ele existia e ninguém o lia.
+     *
+     * Um por motivo, não todos: 558 linhas iguais afogariam o relatório, e a
+     * 559ª não acrescenta nada à 1ª.
+     */
+    exemploPorMotivo: Record<string, string>;
     colisoes: number;
   };
   decisoes: { porVeredito: Record<string, number>; aEscrever: number; pendencias: number };
@@ -386,6 +397,7 @@ export async function sincronizarAvaliacoes(
       projetaveis: proj.projetados.length,
       recusados: proj.recusados.length,
       porMotivo: proj.porMotivo,
+      exemploPorMotivo: primeiroPorMotivo(proj.recusados),
       colisoes: proj.colisoes.length,
     },
     decisoes: {
@@ -565,4 +577,11 @@ export async function sincronizarAvaliacoes(
       notasNoRm: { antes: alvos.totalNotas, depois: depois.totalNotas },
     },
   };
+}
+
+/** O primeiro `detalhe` de cada motivo. Ver `exemploPorMotivo`. */
+function primeiroPorMotivo(recusados: readonly { motivo: string; detalhe: string }[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of recusados) if (!out[r.motivo]) out[r.motivo] = r.detalhe;
+  return out;
 }
