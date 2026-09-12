@@ -14,6 +14,9 @@ import {
   type VereditoPendente,
 } from '@rm-toddle/db';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
+// Import DEEP de propósito: o index de `queues` abre o Redis ao ser carregado,
+// e estes serviços rodam em CLI que precisa encerrar. Ver importDoIndex.test.ts.
+import { FLOW } from '@rm-toddle/queues/src/fluxos';
 import {
   achataAvaliacoes,
   ambiguidadesDeEtapa,
@@ -432,7 +435,9 @@ export async function sincronizarAvaliacoes(
     estado: 'succeeded' | 'failed',
   ): Promise<RelatorioAvaliacoes> {
     const runId = await abrirRun({
-      tipo: 'avaliacao_toddle_para_rm',
+      // O `tipo` do run É a chave do fluxo — é assim que a tela acha a
+      // execução. Ver a nota em FLOW.NOTAS abaixo.
+      tipo: FLOW.NOTAS,
       chave: chaveRun,
       configVersion: versao,
       payload: { codFilial, dataRef, operadoPor: op.quem ?? null, semEscrita: true },
@@ -487,7 +492,7 @@ export async function sincronizarAvaliacoes(
 
   // ─── ESCRITA ──────────────────────────────────────────────────────────────
   const runId = await abrirRun({
-    tipo: 'avaliacao_toddle_para_rm',
+    tipo: FLOW.NOTAS,
     chave: chaveRun,
     configVersion: versao,
     payload: {
