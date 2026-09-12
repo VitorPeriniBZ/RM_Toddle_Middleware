@@ -1,6 +1,7 @@
 import { logger, tenantConfig } from '@rm-toddle/config';
 import { wsDataServerClient } from '@rm-toddle/integrations';
 import { chaveNaturalNotaAvaliacao } from './provaXml';
+import { canonizarNota } from './notaCanonica';
 
 const cfg = tenantConfig;
 
@@ -107,7 +108,10 @@ export class RmAssessmentTargets {
           codEtapa: String(row.CODETAPA),
           codProva: String(row.CODPROVA),
           ra: row.RA,
-          nota: row.NOTA ?? null,
+          // Canônica JÁ NA LEITURA: o RM devolve "9.0000" e o Toddle "9".
+          // Comparar os dois como texto marcava toda nota nossa como
+          // "editada por fora". Ver `notaCanonica`.
+          nota: canonizarNota(row.NOTA),
           descProva: row.DESCPROVA ?? null,
         };
         notasPorChave.set(

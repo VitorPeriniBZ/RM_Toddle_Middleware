@@ -65,6 +65,56 @@ const dorme = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 let conexao: IORedis | null = null;
 
+/**
+ * Quantos comandos estão EM VOO agora. O socket fica `ref` enquanto isto é > 0.
+ * Ver a nota abaixo: é o contador que torna o `unref` correto.
+ */
+let comandosEmVoo = 0;
+
+function sockete(): { ref?: () => void; unref?: () => void } | undefined {
+  return (conexao as unknown as { stream?: { ref?: () => void; unref?: () => void } })?.stream;
+}
+
+/**
+ * Roda um comando com o socket REFERENCIADO, e devolve ao estado ocioso no fim.
+ *
+ * ─── POR QUE ISTO EXISTE (e por que `unref` sozinho estava ERRADO) ──────────
+ *
+ * Um socket `unref`ado não segura o event loop NEM ENQUANTO ESPERA RESPOSTA.
+ * Se ele for a única coisa pendente, o Node considera que não há mais nada a
+ * fazer e ENCERRA no meio do `await` — sem erro, sem exceção, com exit code 13
+ * e a promessa nunca resolvida.
+ *
+ * Foi exatamente o que aconteceu: `npm run escrever:avaliacoes` encerrava em
+ * 0,9 s, com exit 0 e SEM IMPRIMIR RELATÓRIO NENHUM. Um comando que some em
+ * silêncio é pior que um que trava, porque quem olha conclui "não tinha nada a
+ * fazer" — e foi essa a conclusão errada que se tirou do fluxo de notas.
+ *
+ * A versão anterior deste arquivo afirmava que o `setTimeout` da espera
+ * segurava o loop. Segura — mas só enquanto o limitador DORME. Durante o
+ * `PTTL` e o `EVAL`, que é a maior parte do tempo, não havia nada referenciado.
+ *
+ * A correção não é abrir mão do `unref` (sem ele, todo CLI pendura de novo): é
+ * referenciar enquanto há trabalho e soltar quando não há. Ocioso, o socket não
+ * segura ninguém; em voo, ele segura — que é o comportamento que se quer dos
+ * dois lados.
+ */
+async function comSocketVivo<T>(fn: () => Promise<T>): Promise<T> {
+  // A conexão PRIMEIRO: na primeira chamada ela ainda não existe, e referenciar
+  // antes de criá-la não referencia nada. O `connect` chegaria com um comando já
+  // em voo, não soltaria o socket, e o processo penduraria para sempre — o modo
+  // de falha oposto, e igualmente real. Medido.
+  redis();
+  if (comandosEmVoo === 0) sockete()?.ref?.();
+  comandosEmVoo += 1;
+  try {
+    return await fn();
+  } finally {
+    comandosEmVoo -= 1;
+    if (comandosEmVoo === 0) sockete()?.unref?.();
+  }
+}
+
 /** A conexão nasce aqui, e só aqui. Ver a nota sobre preguiça no cabeçalho. */
 function redis(): IORedis {
   if (!conexao) {
@@ -84,11 +134,11 @@ function redis(): IORedis {
     // que já travou o preflight neste projeto — basta um esquecido, e quem
     // esquece é sempre o script novo.
     //
-    // `unref` é seguro para a espera: enquanto o limitador aguarda vaga existe
-    // um `setTimeout` pendente, e ESSE segura o loop. O processo só encerra
-    // quando não há mais nada a fazer, que é o comportamento desejado.
+    // O `connect` pode chegar com um comando JÁ em voo (o primeiro deles é o
+    // que abriu a conexão). Soltar o socket ali mataria esse comando, então só
+    // se solta quando de fato não há nada pendente.
     conexao.on('connect', () => {
-      (conexao as unknown as { stream?: { unref?: () => void } })?.stream?.unref?.();
+      if (comandosEmVoo === 0) sockete()?.unref?.();
     });
   }
   return conexao;
@@ -172,17 +222,19 @@ export async function aguardarVagaNoToddle(rotulo = 'toddle'): Promise<void> {
   for (;;) {
     let esperaMs = 0;
     try {
-      const restanteCooldown = await redis().pttl(chaveDoCooldown());
+      const restanteCooldown = await comSocketVivo(() => redis().pttl(chaveDoCooldown()));
       if (restanteCooldown > 0) {
         esperaMs = restanteCooldown;
       } else {
-        const r = (await redis().eval(
-          SCRIPT_BALDE,
-          1,
-          chaveDoBalde(),
-          String(capacidade),
-          String(janelaMs),
-          String(Date.now()),
+        const r = (await comSocketVivo(() =>
+          redis().eval(
+            SCRIPT_BALDE,
+            1,
+            chaveDoBalde(),
+            String(capacidade),
+            String(janelaMs),
+            String(Date.now()),
+          ),
         )) as [number, number];
         if (r[0] === 1) return;
         esperaMs = r[1];
@@ -221,8 +273,8 @@ export async function registrarRateLimitDoToddle(segundos: number): Promise<void
   if (!env.TODDLE_RATE_LIMIT_ATIVO) return;
   const ms = Math.max(segundos, 1) * 1_000;
   try {
-    const novo = await redis().set(chaveDoCooldown(), '1', 'PX', ms, 'NX');
-    await redis().hset(chaveDoBalde(), 'tokens', 0, 'em', Date.now());
+    const novo = await comSocketVivo(() => redis().set(chaveDoCooldown(), '1', 'PX', ms, 'NX'));
+    await comSocketVivo(() => redis().hset(chaveDoBalde(), 'tokens', 0, 'em', Date.now()));
     if (novo) {
       logger.warn(
         { segundos, organizacao: tenantConfig.toddle.organizationId },
@@ -237,7 +289,7 @@ export async function registrarRateLimitDoToddle(segundos: number): Promise<void
 /** Quanto falta do cooldown, em ms. `0` = liberado. Para diagnóstico e tela. */
 export async function cooldownRestanteMs(): Promise<number> {
   try {
-    const t = await redis().pttl(chaveDoCooldown());
+    const t = await comSocketVivo(() => redis().pttl(chaveDoCooldown()));
     return t > 0 ? t : 0;
   } catch {
     return 0;

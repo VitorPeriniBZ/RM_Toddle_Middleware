@@ -29,5 +29,7 @@ export * from './assessmentProjection';
 export * from './notaXml';
 export * from './rmTeacherSource';
 export * from './chaveCourse';
+export * from './notaCanonica';
+export * from './resolvedorCourse';
 export * from './rmWriteDecision';
 export * from './volumeGuard';

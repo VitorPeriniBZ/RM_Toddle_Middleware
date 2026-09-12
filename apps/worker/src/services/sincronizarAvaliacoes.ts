@@ -17,6 +17,7 @@ import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 import {
   achataAvaliacoes,
   avaliarVolume,
+  canonizarNota,
   decidirEscrita,
   hashValor,
   montaLotesNotasAvaliacao,
@@ -260,7 +261,7 @@ export async function sincronizarAvaliacoes(
     decisoes.set(
       x.origemId,
       decidirEscrita(
-        { chaveNatural: x.chaveRm, valor: String(x.linha.nota) },
+        { chaveNatural: x.chaveRm, valor: canonizarNota(x.linha.nota) },
         noRm ? { valor: noRm.nota } : null,
         proveniencia.get(chaveDoMapa(x.chaveRm)) ?? null,
       ),
@@ -291,9 +292,9 @@ export async function sincronizarAvaliacoes(
       porque:
         `${d.porque}. Nota de AVALIAÇÃO (CODPROVA ${x.linha.codProva}); o ReadView do RM não ` +
         'expõe autoria, então "existe e não é nossa" é o veredito conservador.',
-      valorDesejado: String(x.linha.nota),
+      valorDesejado: canonizarNota(x.linha.nota),
       valorNoRm: alvos.notasPorChave.get(x.chaveRm)?.nota ?? null,
-      hashDesejado: hashValor(String(x.linha.nota)),
+      hashDesejado: hashValor(canonizarNota(x.linha.nota)),
       origemId: x.origemId,
     });
     if (abriu) pendenciasAbertas += 1;
@@ -453,7 +454,10 @@ export async function sincronizarAvaliacoes(
     await registrarEscrita({
       entidade: 'NOTA',
       chaveNatural: x.chaveRm,
-      payloadHash: hashValor(String(x.linha.nota)),
+      // Canônico, e igual ao que `decidirEscrita` vai comparar na próxima
+      // passada. Gravar aqui a forma crua era o que fazia toda nota nossa
+      // reaparecer como "editada por fora". Ver `notaCanonica`.
+      payloadHash: hashValor(canonizarNota(x.linha.nota)),
       runId,
     });
   }
