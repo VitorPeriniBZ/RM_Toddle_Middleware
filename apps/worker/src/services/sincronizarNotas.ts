@@ -14,6 +14,9 @@ import {
   type VereditoPendente,
 } from '@rm-toddle/db';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
+// Import DEEP de propósito: o index de `queues` abre o Redis ao ser carregado,
+// e estes serviços rodam em CLI que precisa encerrar. Ver importDoIndex.test.ts.
+import { FLOW } from '@rm-toddle/queues/src/fluxos';
 import {
   achataTermGrades,
   avaliarVolume,
@@ -479,7 +482,7 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
 
   // ─── ESCRITA ──────────────────────────────────────────────────────────────
   const runId = await abrirRun({
-    tipo: 'nota_toddle_para_rm',
+    tipo: FLOW.NOTAS,
     chave: chaveRun,
     configVersion: versao,
     payload: {
