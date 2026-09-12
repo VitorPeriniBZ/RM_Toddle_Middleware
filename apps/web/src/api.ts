@@ -26,10 +26,27 @@ export interface AuthConfig {
   clientId: string | null;
 }
 
-/** Token do Google em memória. Deliberadamente NÃO em localStorage: ver App.tsx. */
-let idToken: string | null = null;
-export function setIdToken(t: string | null): void { idToken = t; }
-export function getIdToken(): string | null { return idToken; }
+/**
+ * A autenticação é um COOKIE, não um header.
+ *
+ * Antes, o ID token do Google ficava aqui em memória e ia em toda requisição.
+ * Isso amarrava a sessão ao prazo do Google (1 hora) e a perdia a cada
+ * recarregar de página — e não havia como deslogar ninguém.
+ *
+ * Agora o token do Google é apresentado UMA vez em `POST /auth/sessao` e o que
+ * circula é um cookie `HttpOnly`, que o JavaScript desta página nem enxerga —
+ * estritamente melhor que guardar em `localStorage`, que qualquer script lê.
+ *
+ * `credentials: 'include'` em todas as chamadas é o que faz o navegador mandar
+ * esse cookie para a API em outra origem (Vite na 5173, API na 3333).
+ */
+export async function abrirSessao(idTokenDoGoogle: string): Promise<{ expiraEm: string; papeis: string[] }> {
+  return pedir('/auth/sessao', 'POST', undefined, { Authorization: `Bearer ${idTokenDoGoogle}` });
+}
+
+export async function encerrarSessao(): Promise<void> {
+  await pedir('/auth/sair', 'POST');
+}
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly corpo: unknown, mensagem: string) {
@@ -37,14 +54,21 @@ export class ApiError extends Error {
   }
 }
 
-async function pedir<T>(rota: string, metodo = 'GET', corpoEnviado?: unknown): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (idToken) headers.Authorization = `Bearer ${idToken}`;
+async function pedir<T>(
+  rota: string,
+  metodo = 'GET',
+  corpoEnviado?: unknown,
+  headersExtra: Record<string, string> = {},
+): Promise<T> {
+  const headers: Record<string, string> = { ...headersExtra };
   if (corpoEnviado !== undefined) headers['Content-Type'] = 'application/json';
 
   const r = await fetch(BASE + rota, {
     method: metodo,
     headers,
+    // Manda o cookie de sessão. Sem isto o navegador o omite em origem
+    // diferente, e toda chamada volta 401 sem explicação aparente.
+    credentials: 'include',
     body: corpoEnviado === undefined ? undefined : JSON.stringify(corpoEnviado),
   });
   const texto = await r.text();
