@@ -48,6 +48,11 @@ export async function encerrarSessao(): Promise<void> {
   await pedir('/auth/sair', 'POST');
 }
 
+/** Há sessão válida? Lança `ApiError` 401 quando não há. */
+export async function quemSouEu(): Promise<{ subject: string; email: string | null }> {
+  return pedir('/auth/eu');
+}
+
 export class ApiError extends Error {
   constructor(readonly status: number, readonly corpo: unknown, mensagem: string) {
     super(mensagem);

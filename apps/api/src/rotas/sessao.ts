@@ -110,6 +110,30 @@ export async function registrarRotasDeSessao(app: FastifyInstance): Promise<void
     return { ok: true };
   });
 
+  /**
+   * "Já estou logado?" — a pergunta que a tela precisa fazer ao abrir.
+   *
+   * Sem esta rota, a tela não tem como saber que existe uma sessão: antes o
+   * token vivia na memória do navegador e sumia a cada recarregar, então
+   * "recarregou = deslogado" era verdade. Com a sessão no servidor deixou de
+   * ser, e a tela continuava mandando todo mundo para o botão do Google com um
+   * cookie válido no bolso — que é exatamente o incômodo que a sessão de
+   * servidor existe para acabar.
+   *
+   * Responde 401 quando não há sessão (o hook de autenticação cuida disso), e a
+   * tela usa isso para decidir entre a agenda e a tela de login.
+   */
+  app.get('/auth/eu', async (req, reply) => {
+    const subject = req.identidade?.subject;
+    if (!subject) return reply.code(401).send({ erro: 'sem sessão' });
+    return {
+      subject,
+      email: req.identidade?.email ?? null,
+      expiraEm: req.sessao?.expiraEm ?? null,
+      ociosoAte: req.sessao?.ociosoAte ?? null,
+    };
+  });
+
   /** Os acessos abertos da própria pessoa. Para ela reconhecer o que não é dela. */
   app.get('/auth/sessoes', async (req, reply) => {
     const subject = req.identidade?.subject;

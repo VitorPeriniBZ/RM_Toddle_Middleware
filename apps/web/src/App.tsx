@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { abrirSessao, api, ApiError, encerrarSessao, type AuthConfig } from './api';
+import { abrirSessao, api, ApiError, encerrarSessao, quemSouEu, type AuthConfig } from './api';
 import { cor, s } from './estilos';
 import { Agenda } from './painel/Agenda';
 import { DePara } from './painel/DePara';
@@ -85,14 +85,32 @@ export function App() {
     }
   }
 
-  // 1. Descobre o modo de autenticação com a própria API.
+  // 1. Descobre o modo de autenticação e SE JÁ EXISTE SESSÃO.
+  //
+  // Perguntar ao servidor é o passo que faltava. Enquanto o token vivia na
+  // memória do navegador, "recarregou = deslogado" era verdade e bastava mandar
+  // para o login. Com a sessão no servidor deixou de ser: o cookie sobrevive ao
+  // recarregar, e não perguntar fazia a tela pedir login com uma sessão válida
+  // no bolso — o incômodo que a sessão de servidor existe para acabar.
   useEffect(() => {
     api.authConfig()
-      .then((c) => {
+      .then(async (c) => {
         setAuthConfig(c);
         // No modo localhost não há login: a API dispensa token (e só escuta em
         // 127.0.0.1). Serve para desenvolver sem depender do Google.
-        setEstado(c.authMode === 'localhost' ? 'logado' : 'deslogado');
+        if (c.authMode === 'localhost') {
+          setEstado('logado');
+          return;
+        }
+        try {
+          await quemSouEu();
+          setEstado('logado');
+        } catch {
+          // Qualquer falha aqui é "não tem sessão": não vale distinguir 401 de
+          // rede caída, porque nos dois casos o caminho é o mesmo — a tela de
+          // login, que também falharia se a API estivesse fora.
+          setEstado('deslogado');
+        }
       })
       .catch((e) => {
         setEstado('erro');
