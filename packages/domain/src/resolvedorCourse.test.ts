@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { criarResolvedorDeCourse } from './resolvedorCourse';
+import { criarResolvedorDeCourse, falhaDeCoberturaDoDePara } from './resolvedorCourse';
 
 const PERLET = '2026';
 const td = (idTurmaDisc: string, codTurma: string, codDisc: string) => ({
@@ -51,21 +51,49 @@ describe('resolvedor de COURSE nas duas convenções', () => {
     expect(r.retrato).toEqual({ natural: 1, legada: 1, desconhecida: 0 });
   });
 
-  // A razão de a chave ter mudado: a identity é renumerada na cópia de base. Se
-  // a legada ganhasse da natural, o vínculo migrado voltaria a apontar para a
-  // disciplina errada — o defeito original, de volta.
-  it('a chave natural vence a legada quando as duas casariam', () => {
+  // Duas linhas para a mesma turma apontando para o MESMO curso é duplicata
+  // benigna — a migração pode ter rodado duas vezes. Resolve e segue.
+  it('aceita duas linhas concordantes para a mesma turma', () => {
     const r = criarResolvedorDeCourse(
       [
-        { rmCode: '2026:EAVHS10IA:HS0001', toddleId: 'c-certo' },
-        { rmCode: '1266', toddleId: 'c-renumerado' },
+        { rmCode: '2026:EAVHS10IA:HS0001', toddleId: 'c-mesmo' },
+        { rmCode: '1266', toddleId: 'c-mesmo' },
       ],
       PERLET,
     );
     expect(r(td('1266', 'EAVHS10IA', 'HS0001'))).toEqual({
-      toddleId: 'c-certo',
+      toddleId: 'c-mesmo',
       convencao: 'natural',
     });
+  });
+
+  // Escolher em silêncio seria inventar uma verdade: preferir a natural vincula
+  // o professor à turma errada se a linha natural estiver errada, e preferir a
+  // legada recria o defeito da renumeração. Não há resposta certa a escolher.
+  it('LANÇA quando as duas convenções apontam para cursos DIFERENTES', () => {
+    const r = criarResolvedorDeCourse(
+      [
+        { rmCode: '2026:EAVHS10IA:HS0001', toddleId: 'c-um' },
+        { rmCode: '1266', toddleId: 'c-outro' },
+      ],
+      PERLET,
+    );
+    expect(() => r(td('1266', 'EAVHS10IA', 'HS0001'))).toThrow(/contraditório/);
+  });
+
+  // "Contém dois-pontos" não é o teste: estas TÊM o separador e não são chaves.
+  // Aceitá-las como naturais encheria o índice de chaves que nunca casam e
+  // esvaziaria o balde que sinaliza linha torta.
+  it('não confunde chave natural malformada com chave natural', () => {
+    const r = criarResolvedorDeCourse(
+      [
+        { rmCode: '2026::HS0001', toddleId: 'c-a' },
+        { rmCode: '2026:EAVHS10IA', toddleId: 'c-b' },
+        { rmCode: '2026:EAVHS10IA:HS0001:extra', toddleId: 'c-c' },
+      ],
+      PERLET,
+    );
+    expect(r.retrato).toEqual({ natural: 0, legada: 0, desconhecida: 3 });
   });
 
   it('não acha o que não existe, e diz que não achou', () => {
@@ -85,5 +113,34 @@ describe('resolvedor de COURSE nas duas convenções', () => {
   it('recusa período letivo vazio, em vez de não casar nada em silêncio', () => {
     expect(() => criarResolvedorDeCourse([], '')).toThrow(/periodoLetivo vazio/);
     expect(() => criarResolvedorDeCourse([], '   ')).toThrow(/periodoLetivo vazio/);
+  });
+});
+
+describe('falhaDeCoberturaDoDePara', () => {
+  const retrato = { natural: 0, legada: 186, desconhecida: 0 };
+
+  // O incidente de 11/09/2026, exatamente como aconteceu.
+  it('acusa quando NENHUMA das turmas em escopo resolveu', () => {
+    const m = falhaDeCoberturaDoDePara(0, 186, { natural: 0, legada: 0, desconhecida: 0 });
+    expect(m).toMatch(/não resolveu NENHUMA das 186/);
+    // A mensagem tem de dizer onde olhar, senão o alarme não endereça nada.
+    expect(m).toMatch(/Convenções presentes/);
+  });
+
+  // Uma turma nova no RM que ainda não existe no Toddle é rotina. Falhar aqui
+  // deixaria o fluxo vermelho por dias, e alarme sempre aceso não é alarme.
+  it('não acusa quando algumas resolveram e outras não', () => {
+    expect(falhaDeCoberturaDoDePara(185, 1, retrato)).toBeNull();
+    expect(falhaDeCoberturaDoDePara(1, 185, retrato)).toBeNull();
+  });
+
+  it('não acusa quando está tudo mapeado', () => {
+    expect(falhaDeCoberturaDoDePara(186, 0, retrato)).toBeNull();
+  });
+
+  // Escopo vazio não é falha de de-para: é não ter o que fazer. Acusar aqui
+  // faria o job falhar em férias.
+  it('não acusa com escopo vazio', () => {
+    expect(falhaDeCoberturaDoDePara(0, 0, { natural: 0, legada: 0, desconhecida: 0 })).toBeNull();
   });
 });

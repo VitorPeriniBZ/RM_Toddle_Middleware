@@ -2,6 +2,7 @@ import { logger, tenantConfig } from '@rm-toddle/config';
 import { idMappingRepository } from '@rm-toddle/db';
 import {
   criarResolvedorDeCourse,
+  falhaDeCoberturaDoDePara,
   fetchTeachersFromRm,
   type RmTeacher,
   type RmTurmaDisc,
@@ -67,6 +68,8 @@ export interface ResumoSyncProfessores {
    * pendência real: sem `classId` não há onde pendurar o professor.
    */
   turmas_nao_mapeadas: number;
+  /** Quantas turmas o de-para resolveu. Zero, com turmas em escopo, faz o job FALHAR. */
+  turmas_mapeadas: number;
   /**
    * Quantas turmas só casaram pela chave ANTIGA (IDTURMADISC).
    *
@@ -154,6 +157,8 @@ export async function sincronizarProfessores(
   const turmasNaoMapeadas: RmTurmaDisc[] = [];
   /** Quantas ainda dependem da convenção antiga: a fase de expansão acaba quando isto zera. */
   let resolvidasPelaChaveLegada = 0;
+  /** Quantas turmas o de-para resolveu. Zero com turmas em escopo é falha, não notícia. */
+  let turmasMapeadas = 0;
   const turmasGerenciadas: string[] = [];
 
   for (const prof of professores.values()) {
@@ -177,6 +182,7 @@ export async function sincronizarProfessores(
 
     const { toddleId: classId, convencao } = resolverCourse(td);
     if (!classId) { turmasNaoMapeadas.push(td); continue; }
+    turmasMapeadas += 1;
     if (convencao === 'legada') resolvidasPelaChaveLegada += 1;
     const jaNaTurma = staffPorClass.get(classId) ?? new Set<string>();
 
@@ -233,11 +239,20 @@ export async function sincronizarProfessores(
     );
   }
 
+  // A regra e o porquê dela moram em `falhaDeCoberturaDoDePara`, com testes.
+  const semCobertura = falhaDeCoberturaDoDePara(
+    turmasMapeadas,
+    turmasNaoMapeadas.length,
+    resolverCourse.retrato,
+  );
+  if (semCobertura) throw new Error(semCobertura);
+
   const resumo: ResumoSyncProfessores = {
     mapeados: 0, criados: 0, vinculados: 0,
     pulados_sem_email: semEmail.length,
     turmas_gerenciadas: turmasGerenciadas.length,
     turmas_nao_mapeadas: turmasNaoMapeadas.length,
+    turmas_mapeadas: turmasMapeadas,
     turmas_pela_chave_legada: resolvidasPelaChaveLegada,
     falhas: [],
   };

@@ -69,6 +69,11 @@ export async function processStaffSync(job: Job): Promise<ResumoSyncProfessores>
     pulados_sem_email: resumo.pulados_sem_email,
     turmas_gerenciadas: resumo.turmas_gerenciadas,
     turmas_nao_mapeadas: resumo.turmas_nao_mapeadas,
+    turmas_mapeadas: resumo.turmas_mapeadas,
+    // O medidor da migração da chave do COURSE: enquanto for > 0, o de-para não
+    // migrou e a tolerância às duas convenções não pode sair. Vai no resultado
+    // do run, não só no log — contador que ninguém lê não é controle.
+    turmas_pela_chave_legada: resumo.turmas_pela_chave_legada,
     falhas: resumo.falhas.length,
   };
 
