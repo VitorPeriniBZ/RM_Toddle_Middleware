@@ -103,6 +103,18 @@ export async function abrirRun(args: AbrirRunArgs): Promise<string | null> {
        VALUES ($1, $2, 'executing', $3, $4, $5, $6)
        ON CONFLICT (tenant_id, chave) DO UPDATE
          SET estado     = 'executing',
+             -- O tipo TAMBEM e atualizado, e isto nao e zelo: sem ele, o tipo
+             -- gravado na PRIMEIRA vez que a chave apareceu fica para sempre, e
+             -- nenhuma correcao de codigo o alcanca enquanto a chave durar.
+             --
+             -- Custou uma investigacao inteira em 12/09/2026: a via de nota
+             -- passou a gravar o run com a chave do fluxo (term-grades.sync),
+             -- o deploy subiu, o job rodou -- e a tela continuou dizendo
+             -- "ultimo sucesso: nunca", porque a linha daquele dia tinha
+             -- nascido antes com o tipo velho e o UPSERT a preservava. A chave
+             -- do run inclui a data, entao o engano duraria ate a virada do
+             -- dia: tempo de sobra para alguem concluir que o conserto falhou.
+             tipo       = EXCLUDED.tipo,
              payload    = EXCLUDED.payload,
              resultado  = EXCLUDED.resultado,
              updated_at = now()
