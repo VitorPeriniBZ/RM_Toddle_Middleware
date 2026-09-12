@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ambiguidadesDeEtapa,
   chaveNaturalNota,
   janelaCompativel,
   projetaNota,
@@ -231,5 +232,97 @@ describe('chaveNaturalNota', () => {
   it('usa a ordem do xs:unique do XSD, e o tipo é sempre N', () => {
     expect(chaveNaturalNota({ codColigada: '1', codEtapa: '3', idTurmaDisc: '99', ra: 'RA1' }))
       .toBe('1|3|N|99|RA1');
+  });
+});
+
+/**
+ * O caso real, medido em 12/09/2026: o T2 do Toddle cruza a etapa 2 E a etapa 3
+ * do RM. As duas passam no teste de cruzamento, e nada no sistema diria que há
+ * duas respostas possíveis.
+ */
+describe('ambiguidadesDeEtapa', () => {
+  const ETAPAS = [
+    { codEtapa: '1', dtInicio: '2026-02-03', dtFim: '2026-05-15' },
+    { codEtapa: '2', dtInicio: '2026-05-18', dtFim: '2026-09-04' },
+    { codEtapa: '3', dtInicio: '2026-09-09', dtFim: '2026-12-11' },
+  ];
+  const DE_PARA = new Map([
+    ['gp-t1', '1'],
+    ['gp-t2', '2'],
+    ['gp-t3', '3'],
+  ]);
+
+  it('acusa o T2 real, que cruza a etapa 2 e a etapa 3', () => {
+    const janelas = new Map([['gp-t2', { inicio: '2026-06-23', fim: '2026-09-22' }]]);
+    const [a] = ambiguidadesDeEtapa(janelas, ETAPAS, DE_PARA);
+
+    expect(a.gradingPeriodId).toBe('gp-t2');
+    expect(a.candidatas.map((c) => c.codEtapa)).toEqual(['2', '3']);
+    expect(a.mapeadaPara).toBe('2');
+    // 09/09 a 22/09 = 14 dias inclusivos. É o tamanho do risco, e ele aparece.
+    expect(a.candidatas.find((c) => c.codEtapa === '3')?.diasDeSobreposicao).toBe(14);
+  });
+
+  // A maior sobreposição vem primeiro para quem lê, mas a função NÃO escolhe:
+  // escolher seria trocar uma heurística por outra, e o dado que falta é
+  // semântico, não temporal.
+  it('ordena por tamanho da sobreposição, sem escolher nenhuma', () => {
+    const janelas = new Map([['gp-t2', { inicio: '2026-06-23', fim: '2026-09-22' }]]);
+    const [a] = ambiguidadesDeEtapa(janelas, ETAPAS, DE_PARA);
+    expect(a.candidatas[0].codEtapa).toBe('2');
+    expect(a.candidatas[0].diasDeSobreposicao).toBeGreaterThan(
+      a.candidatas[1].diasDeSobreposicao,
+    );
+  });
+
+  it('não acusa período que cruza uma etapa só', () => {
+    const janelas = new Map([['gp-t3', { inicio: '2026-09-23', fim: '2026-11-20' }]]);
+    expect(ambiguidadesDeEtapa(janelas, ETAPAS, DE_PARA)).toEqual([]);
+  });
+
+  it('não acusa período que não cruza nenhuma', () => {
+    const janelas = new Map([['gp-x', { inicio: '2027-01-05', fim: '2027-01-30' }]]);
+    expect(ambiguidadesDeEtapa(janelas, ETAPAS, DE_PARA)).toEqual([]);
+  });
+
+  // Sem de-para a ambiguidade é pior, não melhor: ninguém sequer declarou qual
+  // é a certa. Tem de aparecer, e dizendo que está sem.
+  it('acusa também quando não há de-para para o período', () => {
+    const janelas = new Map([['gp-orfao', { inicio: '2026-06-23', fim: '2026-09-22' }]]);
+    const [a] = ambiguidadesDeEtapa(janelas, ETAPAS, new Map());
+    expect(a.mapeadaPara).toBe('(sem de-para)');
+    expect(a.candidatas).toHaveLength(2);
+  });
+});
+
+/**
+ * Este motivo respondeu por 558 de 558 recusas. A frase antiga dizia o que
+ * aconteceu e não o que fazer — e quem lia não sabia qual data mexer, em qual
+ * dos dois sistemas. Uma recusa que não endereça ninguém deixa o fluxo parado
+ * com cara de problema técnico, quando é cadastral e tem dono.
+ */
+describe('a recusa por janela diz o que fazer', () => {
+  const etapa = { dtInicio: '2026-05-18', dtFim: '2026-09-04' };
+  const janela = { inicio: '2026-06-23', fim: '2026-09-22' };
+
+  it('janela fechada: nomeia a data e os dois caminhos de conserto', () => {
+    const r = janelaCompativel('2026-09-12', etapa, janela);
+    expect(r.ok).toBe(false);
+    expect(r.porque).toContain('FECHOU em 2026-09-04');
+    expect(r.porque).toContain('no Toddle, encerre este período em 2026-09-04');
+    expect(r.porque).toContain('no RM, estenda a etapa');
+    expect(r.porque).toContain('decisão de calendário');
+  });
+
+  it('janela ainda não aberta: diz a data em que abre', () => {
+    const r = janelaCompativel('2026-06-01', etapa, janela);
+    expect(r.ok).toBe(false);
+    expect(r.porque).toContain('ABRE em 2026-06-23');
+  });
+
+  it('dentro da janela segue passando, sem recado nenhum', () => {
+    const r = janelaCompativel('2026-08-01', etapa, janela);
+    expect(r.ok).toBe(true);
+    expect(r.porque).not.toContain('FECHOU');
   });
 });

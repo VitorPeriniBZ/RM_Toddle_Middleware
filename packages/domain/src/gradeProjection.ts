@@ -167,12 +167,28 @@ export function janelaCompativel(
   }
 
   if (dataRef < inicioSobreposicao || dataRef > fimSobreposicao) {
+    // ─── A RECUSA TEM DE DIZER O QUE FAZER ─────────────────────────────────
+    //
+    // Este motivo respondia por 558 de 558 recusas, e a frase dizia só o que
+    // aconteceu. Quem lia ficava sabendo que havia um problema de data e não
+    // sabia qual data mexer, em qual dos dois sistemas. Uma recusa que não
+    // endereça ninguém é um beco: o fluxo fica parado e a causa parece técnica,
+    // quando é cadastral e tem dono.
+    const fechou = dataRef > fimSobreposicao;
+    const oQueFazer = fechou
+      ? `A janela FECHOU em ${fimSobreposicao}. Para voltar a escrever: no Toddle, ` +
+        `encerre este período em ${etapa.dtFim} (a data em que o RM fechou a etapa); ou, ` +
+        'no RM, estenda a etapa até o fim do período do Toddle. É decisão de calendário ' +
+        'da escola, não de código.'
+      : `A janela ABRE em ${inicioSobreposicao}. Até lá não há etapa do RM que corresponda ` +
+        'a este período do Toddle — ou se espera a data, ou se alinham os calendários.';
+
     return {
       ok: false,
       porque:
         `em ${dataRef} o ordinal aponta para a etapa errada: a sobreposição entre ` +
         `Toddle ${janela.inicio}→${janela.fim} e RM ${etapa.dtInicio}→${etapa.dtFim} é ` +
-        `${inicioSobreposicao}→${fimSobreposicao}`,
+        `${inicioSobreposicao}→${fimSobreposicao}. ${oQueFazer}`,
     };
   }
 
@@ -380,4 +396,78 @@ export function projetaLoteNotas(
   );
 
   return { projetados, recusados, porMotivo, colisoes };
+}
+
+/** Um período do Toddle que se sobrepõe a MAIS DE UMA etapa do RM. */
+export interface AmbiguidadeDeEtapa {
+  gradingPeriodId: string;
+  janela: JanelaToddle;
+  /** As etapas do RM com que ele se cruza, e o tamanho de cada cruzamento. */
+  candidatas: { codEtapa: string; inicio: string; fim: string; diasDeSobreposicao: number }[];
+  /** Para qual o de-para aponta hoje. */
+  mapeadaPara: string;
+}
+
+/**
+ * Acusa os períodos do Toddle que se sobrepõem a mais de uma etapa do RM.
+ *
+ * ─── POR QUE ISTO É ALARME, E NÃO ESCOLHA ───────────────────────────────────
+ *
+ * `janelaCompativel` recusa quando as janelas NÃO se cruzam — ausência de
+ * cruzamento prova incompatibilidade. Mas a presença dele não prova o contrário,
+ * e é aí que mora o perigo: medido em 12/09/2026, o T2 do Toddle (23/06→22/09)
+ * se cruza com a etapa 2 do RM (18/05→04/09) **e** com a etapa 3 (09/09→11/12),
+ * esta última por 14 dias. As duas "passam" no teste de cruzamento.
+ *
+ * Se o de-para apontasse T2 para a etapa 3, nada no sistema reclamaria e a nota
+ * do segundo trimestre entraria no terceiro. O de-para é explícito e hoje está
+ * certo — mas nada o VERIFICA, e um calendário reajustado no portal do Toddle
+ * pode criar a ambiguidade sem ninguém perceber.
+ *
+ * Escolher automaticamente o maior cruzamento seria trocar uma heurística por
+ * outra. O dado que falta é semântico — a secretaria dizendo que aquele período
+ * é aquela etapa — e não outra data. Então isto não escolhe: conta e mostra.
+ */
+export function ambiguidadesDeEtapa(
+  janelaDoPeriodo: ReadonlyMap<string, JanelaToddle>,
+  etapas: readonly { codEtapa: string; dtInicio: string; dtFim: string }[],
+  dePara: ReadonlyMap<string, string>,
+): AmbiguidadeDeEtapa[] {
+  const porEtapa = new Map<string, { codEtapa: string; dtInicio: string; dtFim: string }>();
+  for (const e of etapas) if (!porEtapa.has(e.codEtapa)) porEtapa.set(e.codEtapa, e);
+
+  const achados: AmbiguidadeDeEtapa[] = [];
+
+  for (const [gradingPeriodId, janela] of janelaDoPeriodo) {
+    const candidatas: AmbiguidadeDeEtapa['candidatas'] = [];
+
+    for (const e of porEtapa.values()) {
+      const inicio = janela.inicio > e.dtInicio ? janela.inicio : e.dtInicio;
+      const fim = janela.fim < e.dtFim ? janela.fim : e.dtFim;
+      if (inicio > fim) continue;
+      candidatas.push({
+        codEtapa: e.codEtapa,
+        inicio: e.dtInicio,
+        fim: e.dtFim,
+        diasDeSobreposicao: diasEntre(inicio, fim),
+      });
+    }
+
+    if (candidatas.length > 1) {
+      achados.push({
+        gradingPeriodId,
+        janela,
+        candidatas: candidatas.sort((a, b) => b.diasDeSobreposicao - a.diasDeSobreposicao),
+        mapeadaPara: dePara.get(gradingPeriodId) ?? '(sem de-para)',
+      });
+    }
+  }
+
+  return achados;
+}
+
+/** Dias inclusivos entre duas datas `YYYY-MM-DD`. */
+function diasEntre(de: string, ate: string): number {
+  const ms = Date.parse(`${ate}T00:00:00Z`) - Date.parse(`${de}T00:00:00Z`);
+  return Math.round(ms / 86_400_000) + 1;
 }

@@ -16,6 +16,7 @@ import {
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 import {
   achataAvaliacoes,
+  ambiguidadesDeEtapa,
   avaliarVolume,
   canonizarNota,
   decidirEscrita,
@@ -217,19 +218,41 @@ export async function sincronizarAvaliacoes(
   // os 223 assignments do sandbox, 222 deles de turmas de demonstração.
   progresso({ fase: 'lendo avaliações do Toddle' });
   const idsDasNossas = classes.map((c) => String(c.id));
-  const assignments = await toddleClient.listAssignments({
-    curriculumProgramId: curriculos[0],
-    academicYearId: academicYearId || undefined,
-    classIds: idsDasNossas,
-    maxRecords: 5_000,
-  });
-  const resultados = assignments.length
-    ? await toddleClient.listStudentAssignments({
-        curriculumProgramId: curriculos[0],
-        assignmentIds: assignments.map((a) => String(a.id)),
+
+  // ─── TODOS OS CURRÍCULOS, NÃO O PRIMEIRO ─────────────────────────────────
+  //
+  // Isto lia `curriculos[0]`. Com um currículo só — o caso de hoje — dá no
+  // mesmo; com dois, as avaliações do segundo simplesmente não eram lidas, sem
+  // erro e sem contador. A nota do professor sumia entre a tela dele e o RM, e o
+  // relatório diria "nada a escrever" com toda a confiança.
+  //
+  // O laço das janelas logo acima já percorria todos; só estas duas leituras
+  // ficaram para trás.
+  const assignments: Awaited<ReturnType<typeof toddleClient.listAssignments>> = [];
+  const resultados: Awaited<ReturnType<typeof toddleClient.listStudentAssignments>> = [];
+
+  for (const curriculo of curriculos) {
+    const doCurriculo = await toddleClient.listAssignments({
+      curriculumProgramId: curriculo,
+      academicYearId: academicYearId || undefined,
+      classIds: idsDasNossas,
+      maxRecords: 5_000,
+    });
+    if (doCurriculo.length === 0) continue;
+    assignments.push(...doCurriculo);
+    resultados.push(
+      ...(await toddleClient.listStudentAssignments({
+        curriculumProgramId: curriculo,
+        assignmentIds: doCurriculo.map((a) => String(a.id)),
         maxRecords: 20_000,
-      })
-    : [];
+      })),
+    );
+  }
+
+  logger.info(
+    { curriculos: curriculos.length, assignments: assignments.length, resultados: resultados.length },
+    'Avaliações lidas do Toddle (todos os currículos em escopo)',
+  );
 
   const origem = achataAvaliacoes(assignments, resultados);
 
@@ -247,6 +270,28 @@ export async function sincronizarAvaliacoes(
     dataReferencia: dataRef,
     exigirEtapaLiberada: op.exigirEtapaLiberada ?? env.NOTA_EXIGIR_ETAPA_LIBERADA,
   };
+  // ─── AMBIGUIDADE DE ETAPA: ACUSAR, NUNCA ESCOLHER ────────────────────────
+  //
+  // `janelaCompativel` recusa quando as janelas não se cruzam. A presença de
+  // cruzamento, porém, não prova que a etapa é a certa: medido em 12/09/2026, o
+  // T2 do Toddle cruza a etapa 2 do RM E a etapa 3, esta por 14 dias. Se o
+  // de-para apontasse para a errada, nada reclamaria e a nota do 2º trimestre
+  // entraria no 3º. O de-para está certo hoje — e nada o verifica.
+  const ambiguas = ambiguidadesDeEtapa(janelaDoPeriodo, [...etapas.etapas.values()], periodoParaEtapa);
+  for (const a of ambiguas) {
+    logger.warn(
+      {
+        gradingPeriodId: a.gradingPeriodId,
+        janelaToddle: `${a.janela.inicio}→${a.janela.fim}`,
+        mapeadaPara: `CODETAPA ${a.mapeadaPara}`,
+        candidatas: a.candidatas.map((c) => `CODETAPA ${c.codEtapa} (${c.diasDeSobreposicao}d)`),
+      },
+      'ETAPA AMBÍGUA: este período do Toddle se sobrepõe a mais de uma etapa do RM. O de-para ' +
+        'decide qual vale, e nada o verifica — se ele apontar para a errada, a nota entra no ' +
+        'trimestre errado sem erro nenhum. Alinhar os calendários elimina a ambiguidade.',
+    );
+  }
+
   const proj = projetaLoteAvaliacoes(origem.avaliacoes, origem.notas, ctx);
 
   // ─── 2. DECISÃO, por linha ────────────────────────────────────────────────
