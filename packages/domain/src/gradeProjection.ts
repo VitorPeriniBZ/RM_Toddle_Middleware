@@ -175,13 +175,23 @@ export function janelaCompativel(
     // endereça ninguém é um beco: o fluxo fica parado e a causa parece técnica,
     // quando é cadastral e tem dono.
     const fechou = dataRef > fimSobreposicao;
-    const oQueFazer = fechou
-      ? `A janela FECHOU em ${fimSobreposicao}. Para voltar a escrever: no Toddle, ` +
-        `encerre este período em ${etapa.dtFim} (a data em que o RM fechou a etapa); ou, ` +
-        'no RM, estenda a etapa até o fim do período do Toddle. É decisão de calendário ' +
-        'da escola, não de código.'
-      : `A janela ABRE em ${inicioSobreposicao}. Até lá não há etapa do RM que corresponda ` +
-        'a este período do Toddle — ou se espera a data, ou se alinham os calendários.';
+    // Os dois calendários concordam no fim? Então não há o que alinhar: o
+    // período simplesmente ACABOU, e dizer "alinhe as datas" mandaria alguém
+    // procurar uma divergência que não existe.
+    const calendariosBatem = janela.fim === etapa.dtFim;
+
+    const oQueFazer = !fechou
+      ? `A janela ABRE em ${inicioSobreposicao}. Até lá não há etapa do RM que corresponda ` +
+        'a este período do Toddle — ou se espera a data, ou se alinham os calendários.'
+      : calendariosBatem
+        ? `Este período ENCERROU em ${fimSobreposicao}, e o Toddle e o RM concordam nisso. ` +
+          'Não há nada a alinhar: nota deste período não é mais gravável. Uma nota lançada ' +
+          'hoje pertence ao período seguinte, e essa passa.'
+        : `A janela FECHOU em ${fimSobreposicao}, porque os dois calendários DIVERGEM: o ` +
+          `período do Toddle vai até ${janela.fim} e a etapa do RM fechou em ${etapa.dtFim}. ` +
+          `Para voltar a escrever: no Toddle, encerre este período em ${etapa.dtFim}; ou, no ` +
+          'RM, estenda a etapa até o fim do período do Toddle. É decisão de calendário da ' +
+          'escola, não de código.';
 
     return {
       ok: false,

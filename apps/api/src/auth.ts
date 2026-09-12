@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { env, logger } from '@rm-toddle/config';
+import { sessaoAtiva, tocarSessao, type Sessao } from '@rm-toddle/db';
 
 /**
  * Autenticação da API.
@@ -36,7 +37,31 @@ export interface Identidade {
 declare module 'fastify' {
   interface FastifyRequest {
     identidade?: Identidade;
+    /** A sessão de servidor que autenticou esta requisição, quando houver. */
+    sessao?: Sessao;
   }
+}
+
+/**
+ * Opções do cookie de sessão.
+ *
+ * Existe UMA função para isto porque `clearCookie` só apaga o cookie se receber
+ * os MESMOS atributos do `setCookie` que o criou. Duplicar esses atributos em
+ * dois lugares e deixá-los divergir produz um logout que não desloga.
+ *
+ * `path: '/'` e ausência de `domain` não são estilo: o prefixo `__Host-` do nome
+ * EXIGE os dois, e sem eles o navegador descarta o cookie em silêncio. Cookie
+ * com Domain vazaria para todos os subdomínios e deixaria qualquer subdomínio
+ * comprometido sobrescrever a sessão.
+ */
+export function opcoesDoCookie(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    httpOnly: true,
+    secure: env.COOKIE_SEGURO,
+    sameSite: 'lax' as const,
+    path: '/',
+    ...extra,
+  };
 }
 
 /** Domínios aceitos, do .env. */
@@ -60,14 +85,50 @@ export async function autenticar(req: FastifyRequest, reply: FastifyReply): Prom
     return;
   }
 
+  // ─── A SESSÃO DE SERVIDOR VEM PRIMEIRO ───────────────────────────────────
+  //
+  // O cookie é o caminho normal. O `Bearer` continua aceito porque é como a
+  // sessão NASCE (a tela manda o ID token do Google uma vez, em POST /auth/sessao)
+  // e porque scripts e o healthcheck não têm cookie.
+  const cru = req.cookies?.[env.COOKIE_NOME];
+  if (cru) {
+    const sessao = await sessaoAtiva(cru);
+    if (sessao) {
+      req.identidade = { subject: sessao.subject, email: sessao.email ?? undefined };
+      req.sessao = sessao;
+      // Sem `await`: manter a sessão viva não deve atrasar a resposta, e falhar
+      // aqui só significa que ela desliza no próximo request.
+      void tocarSessao(sessao, env.SESSAO_OCIOSA_MS);
+      return;
+    }
+    // Cookie morto no navegador não tem por que continuar sendo enviado.
+    void reply.clearCookie(env.COOKIE_NOME, opcoesDoCookie());
+  }
+
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
-    await reply.code(401).send({ erro: 'Authorization: Bearer <id_token do Google> ausente' });
+    await reply.code(401).send({ erro: 'sessão ausente ou expirada — entre de novo' });
     return;
   }
 
+  const identidade = await verificarTokenDoGoogle(header.slice(7), reply);
+  if (identidade) req.identidade = identidade;
+}
+
+/**
+ * Verifica um ID token do Google e devolve a identidade, ou `null` — tendo JÁ
+ * respondido o erro na `reply`.
+ *
+ * Vive à parte porque é usado em dois lugares com propósitos diferentes: aqui,
+ * como fallback de autenticação para quem não tem cookie (scripts), e em
+ * `POST /auth/sessao`, onde o token é apresentado UMA vez para a sessão nascer.
+ */
+export async function verificarTokenDoGoogle(
+  token: string,
+  reply: FastifyReply,
+): Promise<Identidade | null> {
   try {
-    const { payload } = await jwtVerify(header.slice(7), JWKS, {
+    const { payload } = await jwtVerify(token, JWKS, {
       issuer: ['https://accounts.google.com', 'accounts.google.com'],
       audience: env.GOOGLE_CLIENT_ID,
     });
@@ -81,15 +142,15 @@ export async function autenticar(req: FastifyRequest, reply: FastifyReply): Prom
         erro: 'Conta fora dos domínios autorizados',
         detalhe: hd ? `domínio "${hd}" não está em GOOGLE_ALLOWED_HD` : 'token sem claim hd (conta pessoal?)',
       });
-      return;
+      return null;
     }
 
     if (!payload.sub) {
       await reply.code(401).send({ erro: 'Token sem claim sub — sem identidade estável' });
-      return;
+      return null;
     }
 
-    req.identidade = {
+    return {
       subject: payload.sub,
       email: typeof payload.email === 'string' ? payload.email : undefined,
       nome: typeof payload.name === 'string' ? payload.name : undefined,
@@ -98,5 +159,6 @@ export async function autenticar(req: FastifyRequest, reply: FastifyReply): Prom
   } catch (erro) {
     logger.warn({ erro: erro instanceof Error ? erro.message : erro }, 'Falha ao verificar token');
     await reply.code(401).send({ erro: 'Token inválido, expirado ou de audience diferente' });
+    return null;
   }
 }

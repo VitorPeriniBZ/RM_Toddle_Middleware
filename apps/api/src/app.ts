@@ -1,10 +1,12 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
 import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
 import { pgPool, idMappingRepository, ENTITY_TYPES, type EntityType } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
 import { autenticar } from './auth';
 import { exigirPapel } from './autorizacao';
+import { registrarRotasDeSessao } from './rotas/sessao';
 import { registrarRotasDeAgenda } from './rotas/agenda';
 import { registrarRotasDeJobs } from './rotas/jobs';
 import { registrarRotasDeVinculos } from './rotas/vinculos';
@@ -116,16 +118,88 @@ export function construirApp() {
    * dependendo de como a página foi aberta.
    */
   const origensPermitidas = env.WEB_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+  // O cookie de sessão precisa ser lido em toda requisição (`autenticar`) e
+  // escrito no login. Registrado ANTES do hook de autenticação.
+  void app.register(cookie);
+
   void app.register(cors, {
     origin: origensPermitidas,
-    methods: ['GET', 'POST', 'PUT'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Authorization', 'Content-Type'],
+    // Sem isto o navegador NÃO manda o cookie de sessão numa origem diferente
+    // (a UI do Vite roda na 5173). Só vale com allowlist — e é por isso que
+    // `origin` acima nunca pode virar "*": as duas coisas juntas seriam um
+    // convite para qualquer site usar a sessão de quem estiver logado.
+    credentials: true,
+  });
+
+  /*
+   * ─── CSRF: CHECAGEM DE ORIGEM NOS MÉTODOS QUE MUDAM ESTADO ───────────────
+   *
+   * Enquanto a autenticação era um header `Authorization`, CSRF não existia: o
+   * navegador não anexa header sozinho. Com a sessão em COOKIE ele anexa, e
+   * qualquer página aberta no navegador de quem está logado poderia disparar um
+   * POST para cá.
+   *
+   * `SameSite=lax` cobre o caso comum e tem buracos reais: subdomínio conta como
+   * "same-site", e cliente antigo pode ignorar o atributo.
+   *
+   * `Sec-Fetch-Site` é preenchido pelo NAVEGADOR e não pode ser forjado por
+   * página web — `same-site` é recusado de propósito: subdomínio não é esta
+   * aplicação.
+   *
+   * O que isto NÃO é: defesa contra cookie roubado. Um `curl` escolhe os headers
+   * que quiser. Contra isso serve a revogação de sessão.
+   */
+  app.addHook('onRequest', async (req, reply) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return;
+
+    // ─── BEARER NÃO PRECISA DESTA CHECAGEM ───────────────────────────────
+    //
+    // CSRF existe porque o navegador anexa o COOKIE sozinho. Ele nunca anexa um
+    // header `Authorization` sozinho — quem o manda teve de escrevê-lo. Então
+    // requisição que se autentica por Bearer e NÃO traz cookie de sessão não é
+    // um alvo possível, e exigir Origin dela só quebraria script e CI.
+    const temCookie = Boolean(req.cookies?.[env.COOKIE_NOME]);
+    if (!temCookie && req.headers.authorization?.startsWith('Bearer ')) return;
+
+    const fetchSite = req.headers['sec-fetch-site'];
+    if (fetchSite === 'same-origin' || fetchSite === 'none') return;
+
+    const origem = req.headers.origin;
+    if (origem && origensPermitidas.includes(origem)) return;
+
+    if (fetchSite) {
+      logger.warn({ rota: req.url, fetchSite, origem }, 'CSRF: origem recusada');
+      return reply.code(403).send({ erro: 'csrf', detalhe: 'origem não autorizada para esta operação' });
+    }
+
+    // Sem Sec-Fetch-*: compara o host do Origin/Referer com o nosso. Ausência
+    // dos dois é RECUSA — deixar passar aqui abriria exatamente o desvio que
+    // esta checagem existe para fechar.
+    const referer = req.headers.referer;
+    const bruto = origem ?? referer;
+    if (!bruto) {
+      return reply.code(403).send({ erro: 'csrf', detalhe: 'requisição sem Origin nem Referer' });
+    }
+    try {
+      if (new URL(bruto).host !== req.headers.host) {
+        return reply.code(403).send({ erro: 'csrf', detalhe: 'host de origem diferente' });
+      }
+    } catch {
+      return reply.code(403).send({ erro: 'csrf', detalhe: 'Origin/Referer ilegível' });
+    }
+    return undefined;
   });
 
   // Autentica tudo, exceto o health check — que precisa responder para o
-  // orquestrador mesmo quando a autenticação está mal configurada.
+  // orquestrador mesmo quando a autenticação está mal configurada — e a criação
+  // de sessão, que é onde a autenticação COMEÇA (ela valida o token do Google
+  // por conta própria).
   app.addHook('onRequest', async (req, reply) => {
-    const publicas = ['/health', '/auth/config'];
+    const publicas = ['/health', '/auth/config', '/auth/sessao', '/auth/sair'];
+    // `/auth/sair` é pública de propósito: ela lê o cookie por conta própria e
+    // revoga por ele, porque sair da conta não pode falhar por falta de sessão.
     if (publicas.some((r) => req.url === r || req.url.startsWith(r + '?'))) return;
     await autenticar(req, reply);
   });
@@ -282,6 +356,7 @@ export function construirApp() {
   // (busca, duplicata, órfão, proposta, decisão). Em módulos separados porque
   // são dois assuntos, e um arquivo de rotas que cresce sem divisão é onde a
   // próxima rota entra sem `exigirPapel` e ninguém percebe na revisão.
+  void app.register(registrarRotasDeSessao);
   void app.register(registrarRotasDeAgenda);
   void app.register(registrarRotasDeJobs);
   void app.register(registrarRotasDeVinculos);

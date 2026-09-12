@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, ApiError, getIdToken, setIdToken, type AuthConfig } from './api';
+import { abrirSessao, api, ApiError, encerrarSessao, type AuthConfig } from './api';
 import { cor, s } from './estilos';
 import { Agenda } from './painel/Agenda';
 import { DePara } from './painel/DePara';
@@ -9,28 +9,17 @@ import { Jobs } from './painel/Jobs';
 /**
  * A tela: login, e três assuntos.
  *
- * O token fica em memória, NÃO em localStorage. Token em localStorage é legível
- * por qualquer script na página e sobrevive ao fechamento da aba, e isto aqui
- * muda o horário de um job que escreve em registro acadêmico.
+ * ─── A SESSÃO É DO SERVIDOR ─────────────────────────────────────────────────
  *
- * ─── POR QUE A SESSÃO PARECIA CURTA, E O QUE FOI FEITO ──────────────────────
+ * O ID token do Google é apresentado UMA vez, em `POST /auth/sessao`, e some
+ * daqui: ele só serviu para provar quem é. O que circula depois é um cookie
+ * `HttpOnly` que este JavaScript nem enxerga — estritamente melhor que
+ * `localStorage`, que qualquer script da página lê.
  *
- * Duas causas, e nenhuma delas era um prazo baixo que desse para aumentar:
- *
- *   1. a "sessão" É o ID token do Google, e ele expira em 1 HORA — prazo do
- *      Google, que nós não configuramos;
- *   2. estando só em memória, qualquer recarregar de página a perdia.
- *
- * A correção aqui não mexe em nenhum prazo: faz a RENOVAÇÃO ficar invisível. O
- * One Tap com `auto_select` devolve credencial nova sem clique enquanto a sessão
- * do Google no navegador durar (dias), e um relógio pede a renovação alguns
- * minutos ANTES da hora — então a sessão não cai no meio de uma tarefa, e
- * recarregar não faz voltar para o botão.
- *
- * O que isto NÃO é: sessão de servidor. Um cookie HttpOnly com prazo próprio e
- * revogação continua sendo a correção de fundo — é o que permite deslogar
- * alguém de verdade. Fica de fora aqui de propósito: trocar o modelo de
- * autenticação merece o seu próprio PR.
+ * O que isso conserta, além da segurança: a sessão deixou de durar o que o
+ * Google decide (1 hora) e de sumir a cada recarregar de página. E passou a
+ * existir um jeito de DESLOGAR alguém, que antes não havia — um token copiado
+ * valia até vencer, e nada podia encurtar isso.
  *
  * ─── O 403 É PARTE DO CAMINHO, NÃO UM ERRO ──────────────────────────────────
  *
@@ -70,15 +59,30 @@ export function App() {
   const [erro, setErro] = useState<string | null>(null);
   const [semAcesso, setSemAcesso] = useState<{ comoLiberar?: string; erro?: string } | null>(null);
   const [aba, setAba] = useState<Aba>('agenda');
-  // Muda a cada credencial aceita, para rearmar o relógio de renovação.
-  const [renovacoes, setRenovacoes] = useState(0);
 
-  function aceitarCredencial(credencial: string): void {
-    setIdToken(credencial);
-    setSemAcesso(null);
-    setEstado('logado');
-    setErro(null);
-    setRenovacoes((n) => n + 1);
+  /**
+   * Troca o ID token do Google por uma SESSÃO de servidor.
+   *
+   * O token do Google some daqui em seguida — ele só serviu para provar quem é.
+   * O que passa a valer é um cookie HttpOnly que esta página nem enxerga, e que
+   * o servidor pode revogar.
+   */
+  async function aceitarCredencial(credencial: string): Promise<void> {
+    try {
+      await abrirSessao(credencial);
+      setSemAcesso(null);
+      setEstado('logado');
+      setErro(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 403) {
+        const corpo = e.corpo as { erro?: string; comoLiberar?: string } | null;
+        setSemAcesso({ erro: corpo?.erro ?? e.message, comoLiberar: corpo?.comoLiberar });
+        setEstado('logado');
+        return;
+      }
+      setErro(e instanceof Error ? e.message : String(e));
+      setEstado('deslogado');
+    }
   }
 
   // 1. Descobre o modo de autenticação com a própria API.
@@ -111,7 +115,7 @@ export function App() {
       // fica sem nenhum caminho de volta a não ser recarregar.
       cancel_on_tap_outside: false,
       callback: (resposta) => {
-        aceitarCredencial(resposta.credential);
+        void aceitarCredencial(resposta.credential);
       },
     });
     window.google.accounts.id.renderButton(alvo, { theme: 'outline', size: 'large', locale: 'pt-BR' });
@@ -121,31 +125,14 @@ export function App() {
     window.google.accounts.id.prompt();
   }, [estado, authConfig]);
 
-  /**
-   * Renova ANTES de expirar.
+  /*
+   * Não há mais relógio de renovação aqui.
    *
-   * Sem isto, a sessão morre no meio de uma tarefa e a pessoa descobre pelo 401
-   * — que é o pior momento, porque costuma ser bem na hora de salvar. O relógio
-   * é armado a partir do `exp` do próprio token, não de um prazo que a gente
-   * suponha: se o Google mudar a validade, isto acompanha sozinho.
+   * A versão anterior renovava o ID token do Google antes da hora, porque a
+   * sessão ERA esse token e ele vive 1 hora. Agora a sessão é do servidor: o
+   * prazo de inatividade desliza sozinho a cada requisição, e o teto absoluto é
+   * decisão dele. A tela não tem o que renovar.
    */
-  useEffect(() => {
-    if (estado !== 'logado' || !authConfig?.clientId) return;
-    const token = getIdToken();
-    if (!token) return;
-
-    const expiraEm = expiracaoDoToken(token);
-    if (!expiraEm) return;
-
-    // Cinco minutos de folga: tempo de a renovação acontecer sem que nenhuma
-    // requisição pegue o token já vencido.
-    const daquiAMs = expiraEm - Date.now() - 5 * 60_000;
-    const t = setTimeout(() => {
-      window.google?.accounts.id.prompt();
-    }, Math.max(daquiAMs, 1_000));
-
-    return () => clearTimeout(t);
-  }, [estado, authConfig, renovacoes]);
 
   /**
    * Tratamento único de erro das abas.
@@ -156,7 +143,6 @@ export function App() {
    */
   function tratar(e: unknown): void {
     if (e instanceof ApiError && e.status === 401) {
-      setIdToken(null);
       setEstado('deslogado');
       setErro('Sessão expirada — entre de novo.');
       return;
@@ -370,24 +356,4 @@ function Saude({ aoErrar }: { aoErrar: (e: unknown) => void }) {
       </div>
     </>
   );
-}
-
-/**
- * Quando este ID token expira, em ms de época. `null` se não der para saber.
- *
- * Lê o `exp` do payload SEM verificar assinatura — de propósito: aqui isto só
- * decide a hora de renovar. Quem valida o token é a API, que confere assinatura,
- * emissor, audiência e domínio. Confiar neste `exp` para autorizar qualquer
- * coisa seria confiar num campo que o navegador pode ter adulterado.
- */
-function expiracaoDoToken(token: string): number | null {
-  try {
-    const payload = token.split('.')[1];
-    if (!payload) return null;
-    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-    const exp = (JSON.parse(json) as { exp?: unknown }).exp;
-    return typeof exp === 'number' ? exp * 1_000 : null;
-  } catch {
-    return null;
-  }
 }

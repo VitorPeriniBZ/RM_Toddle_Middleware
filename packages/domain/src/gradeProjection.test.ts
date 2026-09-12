@@ -305,13 +305,28 @@ describe('a recusa por janela diz o que fazer', () => {
   const etapa = { dtInicio: '2026-05-18', dtFim: '2026-09-04' };
   const janela = { inicio: '2026-06-23', fim: '2026-09-22' };
 
-  it('janela fechada: nomeia a data e os dois caminhos de conserto', () => {
+  it('calendários DIVERGEM: nomeia as duas datas e os dois caminhos de conserto', () => {
     const r = janelaCompativel('2026-09-12', etapa, janela);
     expect(r.ok).toBe(false);
-    expect(r.porque).toContain('FECHOU em 2026-09-04');
+    expect(r.porque).toContain('DIVERGEM');
+    expect(r.porque).toContain('Toddle vai até 2026-09-22');
+    expect(r.porque).toContain('etapa do RM fechou em 2026-09-04');
     expect(r.porque).toContain('no Toddle, encerre este período em 2026-09-04');
     expect(r.porque).toContain('no RM, estenda a etapa');
-    expect(r.porque).toContain('decisão de calendário');
+  });
+
+  // Depois de alinhar os calendários, a recusa continua — e tem de: o período
+  // acabou mesmo. Mas mandar "alinhe as datas" aqui faria alguém procurar uma
+  // divergência que não existe mais.
+  it('calendários JÁ ALINHADOS: diz que o período acabou, sem mandar alinhar nada', () => {
+    const alinhada = { inicio: '2026-06-23', fim: '2026-09-04' };
+    const r = janelaCompativel('2026-09-12', etapa, alinhada);
+    expect(r.ok).toBe(false);
+    expect(r.porque).toContain('ENCERROU em 2026-09-04');
+    expect(r.porque).toContain('concordam');
+    expect(r.porque).toContain('período seguinte');
+    expect(r.porque).not.toContain('DIVERGEM');
+    expect(r.porque).not.toContain('estenda a etapa');
   });
 
   it('janela ainda não aberta: diz a data em que abre', () => {

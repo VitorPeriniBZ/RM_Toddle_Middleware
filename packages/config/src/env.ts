@@ -162,6 +162,30 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   NODE_ENV: z.string().default('development'),
 
+  // ─── SESSÃO DO PLANO DE CONTROLE ─────────────────────────────────────────
+  //
+  // Antes a "sessão" era o ID token do Google guardado em memória: 1 hora de
+  // prazo (do Google, não nosso) e perdida a cada recarregar de página. E não
+  // havia como deslogar ninguém.
+  //
+  // Com a sessão no banco, cortar um acesso é imediato — então estes prazos são
+  // decisão de EXPERIÊNCIA, não de contenção, e podem ser generosos.
+
+  /** Sem uso por este tempo, a sessão morre. 8h cobre um dia de trabalho inteiro. */
+  SESSAO_OCIOSA_MS: z.coerce.number().int().positive().default(8 * 60 * 60 * 1000),
+  /** Teto de vida, mesmo em uso contínuo. NÃO desliza. */
+  SESSAO_ABSOLUTA_MS: z.coerce.number().int().positive().default(7 * 24 * 60 * 60 * 1000),
+  /**
+   * Teto menor para quem administra o tenant: é o cookie cujo roubo tem o pior
+   * resultado — mudar o horário de um job que escreve em registro acadêmico.
+   */
+  SESSAO_ABSOLUTA_ADMIN_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+  /**
+   * Liga `Secure` no cookie fora de produção. Em produção é IMPLÍCITO e não há
+   * como desligar — ver a checagem em `validarCoerencia`.
+   */
+  COOKIE_SECURE: z.enum(['true', 'false']).default('false'),
+
   // --- Alerta por AUSÊNCIA de sucesso (dead man's switch) ---
   //
   // URL de um monitor externo (Healthchecks.io, Uptime Kuma, ntfy com cron
@@ -402,6 +426,16 @@ if (raw.API_AUTH_MODE === 'localhost') {
   }
 }
 
+// ─── COOKIE DE SESSÃO: FAIL-CLOSED ──────────────────────────────────────────
+//
+// Produção IMPLICA `Secure`; a env só serve para LIGAR fora de produção. Fazer
+// `secure: COOKIE_SECURE === 'true'` deixaria uma env esquecida mandar o cookie
+// de sessão em texto plano, sem nenhum sinal de que algo está errado.
+const cookieSeguro = raw.NODE_ENV === 'production' || raw.COOKIE_SECURE === 'true';
+if (raw.NODE_ENV === 'production' && !cookieSeguro) {
+  erros.push('Cookie de sessão sem `Secure` em produção');
+}
+
 if (erros.length > 0) {
   // eslint-disable-next-line no-console
   console.error('Configuração inválida:\n' + erros.map((e) => ' - ' + e).join('\n'));
@@ -412,6 +446,18 @@ export const env = {
   ...raw,
   /** Base URL do Toddle: explícita ou montada pela região. */
   TODDLE_BASE_URL: raw.TODDLE_BASE_URL ?? `https://${raw.TODDLE_REGION}-production-apis.toddleapp.com`,
+
+  /** `Secure` no cookie de sessão. Produção implica; ver a checagem acima. */
+  COOKIE_SEGURO: cookieSeguro,
+  /**
+   * Nome do cookie.
+   *
+   * O prefixo `__Host-` é uma trava do lado do NAVEGADOR: ele recusa o cookie se
+   * não vier com Secure, Path=/ e SEM Domain. Nenhum erro de configuração no
+   * servidor consegue desfazer isso. Fora de produção (sem Secure) o prefixo é
+   * impossível, e aí vale o nome simples.
+   */
+  COOKIE_NOME: cookieSeguro ? '__Host-rmtoddle_sessao' : 'rmtoddle_sessao',
 };
 
 /** Fonte de dados do RM via SOAP (wsConsultaSQL) — usada no Fluxo 1. */
