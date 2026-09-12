@@ -1,5 +1,5 @@
 import { logger, tenantConfig } from '@rm-toddle/config';
-import { contarProveniencia, pgPool, resumoPendencias } from '@rm-toddle/db';
+import { contarProveniencia, pgPool, resumoPendencias, fecharRunPorChave } from '@rm-toddle/db';
 
 /** Config da escola atendida por este processo. */
 const cfg = tenantConfig;
@@ -11,6 +11,7 @@ const cfg = tenantConfig;
  *   npm run runs -- --limite 50
  *   npm run runs -- --tipo staff.sync
  *   npm run runs -- --so-problema
+ *   npm run runs -- fechar --chave <chave> --motivo "..."   # fecha run morta
  *
  * ─── POR QUE ESTE COMANDO EXISTE ────────────────────────────────────────────
  *
@@ -72,7 +73,72 @@ async function mostrarFila(p: (s?: string) => void): Promise<void> {
   }
 }
 
+/**
+ * Fecha à mão um run que ficou `executing` para sempre.
+ *
+ * ─── POR QUE ISTO PRECISA EXISTIR ───────────────────────────────────────────
+ *
+ * Um lote que esgota as tentativas vai para a DLQ e NUNCA fecha o run: quem
+ * fecharia é o processador, e ele não roda mais. A linha fica `executing` para
+ * sempre, e o painel a mostra como "presa" indefinidamente — um alarme que nunca
+ * apaga, que é como se ensina um time a ignorar o painel.
+ *
+ * Medido em 12/09/2026: `run-repeat-students-sync-1789138800000`, aberta desde
+ * 11/09 às 15:12, lote 3 na DLQ por 429 do Toddle. Um sync posterior completo
+ * (255 alunos, 0 falhas) já cobriu aqueles alunos — o run está morto, só a linha
+ * não sabe.
+ *
+ * Exige `--motivo` de propósito: fechar um run é afirmar que ele acabou, e essa
+ * afirmação tem de vir com quem disse e por quê, guardada no `resultado`. Sem o
+ * motivo, daqui a um mês a linha fechada não se distingue de uma que terminou
+ * sozinha — e o histórico passa a mentir, que é pior que a linha presa.
+ *
+ * Fecha como `failed`, nunca `succeeded`: o run NÃO fez o que ia fazer.
+ */
+async function fechar(chave: string, motivo: string): Promise<void> {
+  const { rows } = await pgPool.query<{ tipo: string; estado: string; criado: string }>(
+    `SELECT o.tipo, o.estado, o.created_at AS criado
+       FROM job_run o JOIN tenant t ON t.id = o.tenant_id
+      WHERE t.slug = $1 AND o.chave = $2`,
+    [cfg.slug, chave],
+  );
+
+  const run = rows[0];
+  if (!run) {
+    logger.error({ chave }, 'Run não encontrada');
+    process.exitCode = 1;
+    return;
+  }
+  // Fechar uma run que já fechou reescreveria o resultado dela — e o `resultado`
+  // é a única evidência do que aquele run fez.
+  if (run.estado !== 'executing') {
+    logger.error({ chave, estado: run.estado }, 'Esta run já está fechada — nada a fazer');
+    process.exitCode = 1;
+    return;
+  }
+
+  await fecharRunPorChave(chave, 'failed', {
+    fechadoManualmente: true,
+    motivo,
+    fechadoEm: new Date().toISOString(),
+  });
+  logger.warn({ chave, tipo: run.tipo, abertaDesde: run.criado, motivo }, 'Run FECHADA à mão como `failed`');
+}
+
 async function main(): Promise<void> {
+  if (process.argv.includes('fechar')) {
+    const chave = arg('chave');
+    const motivo = arg('motivo');
+    if (!chave || !motivo) {
+      logger.error('Uso: npm run runs -- fechar --chave <chave> --motivo "por que ela morreu"');
+      process.exitCode = 1;
+    } else {
+      await fechar(chave, motivo);
+    }
+    await pgPool.end();
+    return;
+  }
+
   const limite = Number(arg('limite') ?? 20);
   const tipo = arg('tipo');
   const soProblema = process.argv.includes('--so-problema');
