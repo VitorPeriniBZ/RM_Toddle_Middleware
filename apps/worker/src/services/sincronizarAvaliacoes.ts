@@ -412,10 +412,51 @@ export async function sincronizarAvaliacoes(
     filaAberta: fila.abertas,
   };
 
+  // ─── PASSADA SEM ESCRITA TAMBÉM DEIXA PROVA ───────────────────────────────
+  //
+  // `abrirRun` só era chamado quando a via ia escrever de fato. Consequência:
+  // o job rodava no cron, terminava corretamente sem ter o que fazer, e NÃO
+  // gravava linha nenhuma em `job_run` — então a tela dizia "último sucesso:
+  // NUNCA" indefinidamente, e o alerta por ausência de sucesso ia disparar como
+  // se o fluxo estivesse morto.
+  //
+  // "Rodou e não havia o que escrever" é um desfecho legítimo e frequente (é o
+  // desfecho NORMAL fora das janelas de lançamento). Ele precisa aparecer, com
+  // o motivo, senão é indistinguível de "não rodou" — que é a confusão exata
+  // que este projeto já pagou caro para não repetir.
+  //
+  // O estado NÃO é sempre `succeeded`: teto recusado e aprovação pendente pedem
+  // gente, e pintá-los de verde os esconderia.
+  async function registrarPassada(
+    naoEscreveu: NonNullable<RelatorioAvaliacoes['naoEscreveu']>,
+    estado: 'succeeded' | 'failed',
+  ): Promise<RelatorioAvaliacoes> {
+    const runId = await abrirRun({
+      tipo: 'avaliacao_toddle_para_rm',
+      chave: chaveRun,
+      configVersion: versao,
+      payload: { codFilial, dataRef, operadoPor: op.quem ?? null, semEscrita: true },
+    });
+    await fecharRun(runId, estado, {
+      naoEscreveu,
+      projetaveis: proj.projetados.length,
+      recusados: proj.recusados.length,
+      porMotivo: proj.porMotivo,
+      // O texto do motivo, não só a contagem: é ele que diz o que fazer.
+      exemploPorMotivo: primeiroPorMotivo(proj.recusados),
+      aEscrever: resumoDecisoes.aEscrever,
+      pendencias: resumoDecisoes.pendencias,
+    });
+    return { ...base, naoEscreveu };
+  }
+
   // ─── os portões, antes de qualquer envio ──────────────────────────────────
+  //
+  // O ensaio NÃO registra run: é um humano olhando, não uma passada agendada, e
+  // gravá-lo faria o histórico mentir sobre quando o fluxo rodou sozinho.
   if (!op.executar) return { ...base, naoEscreveu: 'ensaio' };
-  if (lotes.length === 0) return { ...base, naoEscreveu: 'nada-a-escrever' };
-  if (volume.veredito === 'RECUSADO') return { ...base, naoEscreveu: 'recusado-pelo-teto' };
+  if (lotes.length === 0) return registrarPassada('nada-a-escrever', 'succeeded');
+  if (volume.veredito === 'RECUSADO') return registrarPassada('recusado-pelo-teto', 'failed');
   if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveRun))) {
     await pedirAprovacao({
       chave: chaveRun,
@@ -441,7 +482,7 @@ export async function sincronizarAvaliacoes(
         propostoPor: op.quem ?? null,
       },
     });
-    return { ...base, naoEscreveu: 'precisa-aprovacao' };
+    return registrarPassada('precisa-aprovacao', 'failed');
   }
 
   // ─── ESCRITA ──────────────────────────────────────────────────────────────
