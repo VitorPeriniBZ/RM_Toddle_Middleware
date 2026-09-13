@@ -49,7 +49,10 @@ export async function processStaffSync(job: Job): Promise<ResumoSyncProfessores>
     // fase viaja, e a tela mostra o nome sem barra. Ver queues/progresso.ts.
     resumo = await sincronizarProfessores({
       executar: true,
-      aoProgredir: (p) => void job.updateProgress(p),
+      // O `.catch` não é zelo: sem ele, uma queda do Redis no meio do job faria o
+      // erro do progresso sumir, a barra travaria na tela e quem olhasse não saberia
+      // se o job morreu ou só parou de reportar.
+      aoProgredir: (p) => void job.updateProgress(p).catch(() => undefined),
     });
   } catch (err) {
     // Falha na LEITURA (RM fora, credencial, Sentença) nunca chegava a `resumo`.

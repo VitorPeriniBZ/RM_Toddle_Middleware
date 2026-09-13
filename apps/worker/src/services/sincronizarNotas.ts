@@ -451,14 +451,45 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
     perguntasEmAberto: [...agrupadas.entries()].map(([chave, i]) => ({ chave, notas: i.n })),
   };
 
+  /**
+   * Passada sem escrita também deixa prova.
+   *
+   * Mesmo conserto que `sincronizarAvaliacoes` recebeu hoje, e que não tinha
+   * sido replicado aqui: sem isto, quem roda `escrever:notas` num dia sem nada
+   * a escrever — o caso COMUM — não deixa rastro em `job_run`, e a tela mostra o
+   * fluxo como se nunca tivesse rodado.
+   *
+   * O ensaio continua sem registrar: é um humano olhando, não passada agendada.
+   */
+  async function registrarPassada(
+    naoEscreveu: NonNullable<RelatorioNotas['naoEscreveu']>,
+    estado: 'succeeded' | 'failed',
+  ): Promise<RelatorioNotas> {
+    const runId = await abrirRun({
+      tipo: FLOW.NOTAS,
+      chave: chaveRun,
+      configVersion: versao,
+      payload: { codFilial, dataRef, operadoPor: op.quem ?? null, semEscrita: true },
+    });
+    await fecharRun(runId, estado, {
+      naoEscreveu,
+      projetaveis: projecao.projetados.length,
+      recusados: projecao.recusados.length,
+      porMotivo: projecao.porMotivo,
+      aEscrever: resumoDecisoes.aEscrever,
+      pendencias: resumoDecisoes.pendencias,
+    });
+    return { ...base, naoEscreveu };
+  }
+
   if (!op.executar) return { ...base, naoEscreveu: 'ensaio' };
-  if (lotes.length === 0) return { ...base, naoEscreveu: 'nada-a-escrever' };
+  if (lotes.length === 0) return registrarPassada('nada-a-escrever', 'succeeded');
 
   // ─── GATE DE APROVAÇÃO ────────────────────────────────────────────────────
   //
   // RECUSADO não tem porta: nem aprovação humana libera, porque o veredito
   // significa "isto não parece com o trabalho de um dia".
-  if (volume.veredito === 'RECUSADO') return { ...base, naoEscreveu: 'recusado-pelo-teto' };
+  if (volume.veredito === 'RECUSADO') return registrarPassada('recusado-pelo-teto', 'failed');
 
   if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveRun))) {
     await pedirAprovacao({

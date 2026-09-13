@@ -172,6 +172,25 @@ export function falhaDeCoberturaDoDePara(
   naoMapeadas: number,
   retrato: RetratoDoDePara,
 ): string | null {
+  // ─── ZERO EM ESCOPO É LEITURA FALHA, NÃO ESCOPO VAZIO ─────────────────────
+  //
+  // Esta guarda nasceu hoje e tinha um buraco do tamanho do defeito que ela
+  // existe para pegar: quando o RM devolve ZERO turma-disciplina, `naoMapeadas`
+  // também é zero, a guarda devolvia `null` e o job terminava SUCCEEDED com
+  // tudo zerado — o mesmo "0 de 186 e verde", só que uma camada acima.
+  //
+  // Uma escola em atividade sempre tem turma-disciplina. Zero significa Sentença
+  // apagada, credencial expirada, escopo errado ou leitura que virou lista vazia
+  // — nunca "não há turmas hoje".
+  if (mapeadas === 0 && naoMapeadas === 0) {
+    return (
+      'O RM não devolveu NENHUMA turma-disciplina em escopo. Isso não é escopo vazio: uma ' +
+      'escola em atividade sempre tem turma-disciplina. Suspeite da Sentença TODDLE.TURMADISC ' +
+      '(apagada ou renomeada), da credencial do RM (a senha já expirou antes, code FE005) e do ' +
+      'RM_CODFILIAL. Terminar como sucesso aqui esconderia uma integração parada.'
+    );
+  }
+
   if (naoMapeadas === 0) return null;
   if (mapeadas > 0) return null;
   return (

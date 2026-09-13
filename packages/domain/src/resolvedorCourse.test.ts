@@ -138,9 +138,15 @@ describe('falhaDeCoberturaDoDePara', () => {
     expect(falhaDeCoberturaDoDePara(186, 0, retrato)).toBeNull();
   });
 
-  // Escopo vazio não é falha de de-para: é não ter o que fazer. Acusar aqui
-  // faria o job falhar em férias.
-  it('não acusa com escopo vazio', () => {
-    expect(falhaDeCoberturaDoDePara(0, 0, { natural: 0, legada: 0, desconhecida: 0 })).toBeNull();
+  // O buraco que esta guarda tinha no dia em que nasceu: com o RM devolvendo
+  // ZERO turma-disciplina, `naoMapeadas` também é zero e ela deixava passar — o
+  // mesmo "0 de 186 e verde", uma camada acima. Uma escola em atividade sempre
+  // tem turma-disciplina.
+  it('acusa quando o RM não devolveu turma-disciplina NENHUMA', () => {
+    const m = falhaDeCoberturaDoDePara(0, 0, { natural: 0, legada: 0, desconhecida: 0 });
+    expect(m).toMatch(/não devolveu NENHUMA turma-disciplina/);
+    // A mensagem tem de endereçar onde olhar, senão o alarme não leva a lugar nenhum.
+    expect(m).toMatch(/TODDLE\.TURMADISC/);
+    expect(m).toMatch(/RM_CODFILIAL/);
   });
 });
