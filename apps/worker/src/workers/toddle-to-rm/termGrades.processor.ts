@@ -68,7 +68,10 @@ export async function processTermGradesSync(job: Job): Promise<Record<string, un
     executar: true,
     quem: `job:${job.name}`,
     // Só relata onde há denominador de verdade. Ver queues/progresso.ts.
-    aoProgredir: (p) => void job.updateProgress(p),
+    // O `.catch` não é zelo: sem ele, uma queda do Redis no meio do job faria o
+      // erro do progresso sumir, a barra travaria na tela e quem olhasse não saberia
+      // se o job morreu ou só parou de reportar.
+      aoProgredir: (p) => void job.updateProgress(p).catch(() => undefined),
   });
 
   // ─── não escreveu: cada motivo é um desfecho legítimo ─────────────────────
