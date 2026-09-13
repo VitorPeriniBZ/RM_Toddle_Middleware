@@ -89,6 +89,8 @@ export async function identidadeDeCli(quem: string): Promise<string> {
     `INSERT INTO user_identity (provider, subject, nome)
      VALUES ('cli', $1, $1)
      ON CONFLICT (provider, subject) DO UPDATE SET subject = EXCLUDED.subject
+       -- upsert-preserva: para ator de CLI, nome E o proprio subject (os dois
+       -- recebem $1), entao nao ha valor novo possivel a gravar.
      RETURNING id`,
     [quem.trim()],
   );
@@ -106,7 +108,9 @@ export async function pedirAprovacao(plano: PlanoParaAprovar): Promise<void> {
     `INSERT INTO operation (tenant_id, tipo, estado, payload, idempotency_key)
      VALUES ($1, $2, 'needs_review', $3, $4)
      ON CONFLICT (tenant_id, idempotency_key)
-     DO UPDATE SET estado = 'needs_review', payload = EXCLUDED.payload, updated_at = now()`,
+     DO UPDATE SET estado = 'needs_review', payload = EXCLUDED.payload, updated_at = now()
+       -- upsert-preserva: tipo e determinado pela chave de idempotencia, que e
+       -- a chave do run que propos — a mesma chave nao muda de tipo.`,
     [await tenantId(), plano.tipo, JSON.stringify(plano.payload), plano.chave],
   );
 }

@@ -182,6 +182,8 @@ export async function propor(
        DO UPDATE SET estado = 'needs_review', payload = EXCLUDED.payload,
                      source_snapshot = EXCLUDED.source_snapshot,
                      criado_por = EXCLUDED.criado_por, updated_at = now()
+       -- upsert-preserva: tipo e a constante TIPO_OPERACAO deste modulo — a
+       -- mesma chave nunca muda de tipo.
        RETURNING id`,
       [tid, TIPO_OPERACAO, JSON.stringify(p), JSON.stringify(snapshot), chave, criadoPor],
     );

@@ -115,6 +115,11 @@ export async function abrirRun(args: AbrirRunArgs): Promise<string | null> {
              -- do run inclui a data, entao o engano duraria ate a virada do
              -- dia: tempo de sobra para alguem concluir que o conserto falhou.
              tipo       = EXCLUDED.tipo,
+             -- A versao de config e a que ESTA execucao usou. Preservando a
+             -- primeira, um run reexecutado depois de mudar a configuracao
+             -- reportaria a versao antiga -- mesmo defeito do tipo, na
+             -- coluna que existe justamente para explicar o resultado.
+             config_version = EXCLUDED.config_version,
              payload    = EXCLUDED.payload,
              resultado  = EXCLUDED.resultado,
              updated_at = now()

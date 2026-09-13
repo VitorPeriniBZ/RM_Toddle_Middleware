@@ -13,7 +13,8 @@
 #
 # Então a regra é verificada, não pedida. Duas regras:
 #
-#   1. `process.env` só existe em packages/config/src/env.ts.
+#   1. `process.env` só existe em packages/config/src/env.ts — salvo para montar
+#      o ambiente de um processo filho, declarado com `env-do-filho: <motivo>`.
 #   2. Config de ESCOLA (credencial do RM, coligada, campus, período letivo,
 #      Sentenças, token e organização do Toddle, prefixo de sourceId, slug do
 #      tenant) não é lida de `env.` fora da camada de config.
@@ -29,8 +30,15 @@ cd "$(dirname "$0")/.."
 falhas=0
 
 # --- regra 1 ----------------------------------------------------------------
+#
+# A UMA exceção: montar o ambiente de um PROCESSO FILHO. Isso não é ler config —
+# é repassar PATH, HOME e afins para um `spawn`, sem os quais o filho nem inicia.
+# A exceção tem de ser DECLARADA na própria linha com `env-do-filho: <motivo>`,
+# pelo mesmo motivo de tudo o mais aqui: exceção que se declara é exceção que
+# alguém lê; exceção implícita vira a regra em duas semanas.
 fora=$(grep -rn 'process\.env' --include='*.ts' packages apps 2>/dev/null \
        | grep -v 'packages/config/src/env.ts' \
+       | grep -v 'env-do-filho:' \
        | grep -v node_modules || true)
 if [[ -n "$fora" ]]; then
   echo "FALHOU: process.env fora de packages/config/src/env.ts"
