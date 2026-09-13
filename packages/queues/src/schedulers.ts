@@ -88,11 +88,32 @@ export interface SchedulerObservado {
   desconhecido: boolean;
 }
 
+/**
+ * O que o Redis diz que está agendado — e o que NÃO deu para perguntar.
+ *
+ * ─── "NÃO HÁ" E "NÃO CONSEGUI PERGUNTAR" SÃO ESTADOS OPOSTOS ────────────────
+ *
+ * Antes, falha de leitura virava lista vazia. Os dois casos ficavam com a mesma
+ * representação, e o pior deles herdava a leitura do melhor: com o Redis
+ * inacessível, a tela concluía "nenhum scheduler agendado" e pintava DIVERGENTE
+ * — alarme falso, apontando para o fluxo errado, exatamente quando o operador
+ * mais precisa confiar no painel.
+ *
+ * Quem lê precisa poder dizer "não sei". Por isso a falha vem nomeada.
+ */
+export interface LeituraDeSchedulers {
+  observados: SchedulerObservado[];
+  /** Filas que não deu para ler. Não confunda com "fila sem scheduler". */
+  ilegiveis: { fila: string; erro: string }[];
+}
+
 /** O que o Redis diz que está agendado nas filas dos fluxos. Só leitura. */
-export async function observarSchedulers(): Promise<SchedulerObservado[]> {
+export async function observarSchedulers(): Promise<LeituraDeSchedulers> {
   // Uma fila pode servir mais de um fluxo no futuro; hoje é 1:1. Deduplicar
   // evita listar a mesma fila duas vezes se isso mudar.
   const filas = [...new Set(FLUXOS_EM_ORDEM.map((f) => f.fila))];
+
+  const ilegiveis: { fila: string; erro: string }[] = [];
 
   const porFila = await Promise.all(
     filas.map(async (fila) => {
@@ -110,13 +131,15 @@ export async function observarSchedulers(): Promise<SchedulerObservado[]> {
           desconhecido: !acharFluxo(s.key),
         }));
       } catch (err) {
-        logger.warn(
-          { err: (err as Error).message, fila },
-          'Não foi possível ler os schedulers desta fila — a tela mostrará "não observado"',
-        );
+        const erro = (err as Error).message;
+        // A falha VOLTA nomeada, em vez de virar lista vazia: quem lê tem de
+        // poder distinguir "esta fila não tem scheduler" de "não consegui
+        // perguntar a esta fila".
+        logger.warn({ err: erro, fila }, 'Não foi possível ler os schedulers desta fila');
+        ilegiveis.push({ fila, erro });
         return [];
       }
     }),
   );
-  return porFila.flat();
+  return { observados: porFila.flat(), ilegiveis };
 }

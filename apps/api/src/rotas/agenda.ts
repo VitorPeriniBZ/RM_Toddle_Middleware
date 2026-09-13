@@ -69,8 +69,11 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
    */
   app.get('/agenda', { preHandler: exigirPapel(['viewer']) }, async () => {
     const desejada = await listarAgenda();
-    const observados = await observarSchedulers();
-    const porId = new Map(observados.map((o) => [o.id, o]));
+    const leitura = await observarSchedulers();
+    const porId = new Map(leitura.observados.map((o) => [o.id, o]));
+    // Fila que não deu para ler não é fila sem scheduler. Quem não sabe tem de
+    // dizer que não sabe, senão a tela acusa divergência inventada.
+    const filasIlegiveis = new Set(leitura.ilegiveis.map((i) => i.fila));
     const tipos = FLUXOS_EM_ORDEM.map((f) => f.key);
     const runs = await ultimosRunsPorTipo(tipos);
     const sucessos = await ultimoSucessoPorTipo(tipos);
@@ -117,10 +120,21 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
       // comparando campos — e se tivesse, cada cliente da API deduziria à sua
       // maneira, e uma delas estaria errada.
       const divergencias: string[] = [];
-      if (linha?.ativo && !obs) divergencias.push('ligado no banco e AUSENTE no Redis');
-      if (!linha?.ativo && obs) divergencias.push('desligado no banco e PRESENTE no Redis');
-      if (linha && obs && linha.cron !== obs.cron) divergencias.push('cron diferente entre banco e Redis');
-      if (linha && obs && linha.timezone !== obs.tz) divergencias.push('fuso diferente entre banco e Redis');
+      // Não dá para comparar com o que não foi lido. Acusar divergência aqui
+      // apontaria para o fluxo errado — o problema é o Redis, não a agenda.
+      const naoObservavel = filasIlegiveis.has(fluxo.fila);
+
+      if (naoObservavel) {
+        divergencias.push(
+          'NÃO FOI POSSÍVEL LER O REDIS desta fila — o que está agendado é desconhecido, ' +
+            'e isto não é o mesmo que "sem agendamento"',
+        );
+      } else {
+        if (linha?.ativo && !obs) divergencias.push('ligado no banco e AUSENTE no Redis');
+        if (!linha?.ativo && obs) divergencias.push('desligado no banco e PRESENTE no Redis');
+        if (linha && obs && linha.cron !== obs.cron) divergencias.push('cron diferente entre banco e Redis');
+        if (linha && obs && linha.timezone !== obs.tz) divergencias.push('fuso diferente entre banco e Redis');
+      }
       if (linha?.erroAoAplicar) divergencias.push(`erro ao aplicar: ${linha.erroAoAplicar}`);
 
       /*
@@ -178,7 +192,10 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
       // Órfão é o registro que ninguém vê: id que não pertence a fluxo nenhum,
       // disparando para sempre sem aparecer em configuração alguma. A troca de
       // agenda produziu três, uma vez, e a reconciliação os varre.
-      orfaos: observados.filter((o) => o.desconhecido),
+      orfaos: leitura.observados.filter((o) => o.desconhecido),
+      // As filas que não deu para ler vão para a tela junto: sem isto, o painel
+      // afirmaria "0 órfãos" tendo perguntado a menos filas do que existe.
+      filasIlegiveis: leitura.ilegiveis,
       dlq: await resumoDaDlq(5),
     };
   });
