@@ -90,7 +90,9 @@ async function rodarScript(corpo: string): Promise<{ encerrouSozinho: boolean; s
 
   const filho = spawn(join(RAIZ, 'node_modules/.bin/tsx'), [arquivo], {
     cwd: RAIZ,
-    env: { ...process.env, TODDLE_RATE_LIMIT_ATIVO: 'true', REDIS_URL: urlDoProxy },
+    // Sem PATH e HOME o tsx nem inicia no filho — montar o ambiente de um spawn
+    // não é ler config, e a exceção é declarada na própria linha.
+    env: { ...process.env, TODDLE_RATE_LIMIT_ATIVO: 'true', REDIS_URL: urlDoProxy }, // env-do-filho: ambiente do spawn
   });
 
   let saida = '';

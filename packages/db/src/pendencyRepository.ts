@@ -151,7 +151,12 @@ export async function registrarPendencia(args: RegistrarPendenciaArgs): Promise<
                             WHEN write_pendency.hash_desejado <> EXCLUDED.hash_desejado
                               THEN NULL ELSE write_pendency.resolvido_em
                           END,
-         hash_desejado  = EXCLUDED.hash_desejado
+         hash_desejado  = EXCLUDED.hash_desejado,
+         -- Aponta para o run MAIS RECENTE que viu esta pendência. Mantido no
+         -- primeiro, ele mandaria quem investiga ler um run de dias atrás e
+         -- concluir que o problema é velho. COALESCE preserva o anterior
+         -- quando a passada atual não tem run (ensaio).
+         run_id         = COALESCE(EXCLUDED.run_id, write_pendency.run_id)
        RETURNING estado`,
       [
         await tenantId(),
