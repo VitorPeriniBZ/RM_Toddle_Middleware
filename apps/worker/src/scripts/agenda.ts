@@ -26,8 +26,8 @@ const p = (s = ''): void => console.log(s);
 
 async function main(): Promise<void> {
   const agenda = await listarAgenda();
-  const observados = await observarSchedulers();
-  const porId = new Map(observados.map((o) => [o.id, o]));
+  const leitura = await observarSchedulers();
+  const porId = new Map(leitura.observados.map((o) => [o.id, o]));
   const tipos = FLUXOS_EM_ORDEM.map((f) => f.key);
   const runs = await ultimosRunsPorTipo(tipos);
   const sucessos = await ultimoSucessoPorTipo(tipos);
@@ -91,7 +91,15 @@ async function main(): Promise<void> {
     p('');
   }
 
-  const orfaos = observados.filter((o) => o.desconhecido);
+  // Fila ilegível some do relatório se não for dita: o comando afirmaria
+  // "0 órfãos" tendo perguntado a menos filas do que existe.
+  if (leitura.ilegiveis.length > 0) {
+    p('  FILAS QUE NÃO DEU PARA LER (o agendado nelas é DESCONHECIDO, não vazio):');
+    for (const i of leitura.ilegiveis) p(`    ${i.fila}: ${i.erro}`);
+    p('');
+  }
+
+  const orfaos = leitura.observados.filter((o) => o.desconhecido);
   if (orfaos.length) {
     p('  SCHEDULERS ÓRFÃOS (id fora do catálogo — disparando sem aparecer em configuração):');
     for (const o of orfaos) p(`    ${o.id} na fila ${o.fila}, cron "${o.cron}"`);

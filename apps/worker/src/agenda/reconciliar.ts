@@ -156,12 +156,29 @@ export async function reconcileSchedulers(
     };
 
     const agenda = new Map((await listarAgenda()).map((a) => [a.flowKey, a]));
-    const observados = await observarSchedulers();
+    const leitura = await observarSchedulers();
+    const { observados } = leitura;
     const porId = new Map(observados.map((o) => [o.id, o]));
+    const filasIlegiveis = new Set(leitura.ilegiveis.map((i) => i.fila));
 
     for (const fluxo of FLUXOS_EM_ORDEM) {
       const desejado = agenda.get(fluxo.key);
       const observado = porId.get(fluxo.key);
+
+      // Fila ilegível: NÃO agir. Reconciliar é comparar desejado com observado,
+      // e aqui o observado é desconhecido — não vazio. Aplicar às cegas faria o
+      // reconciliador reescrever a agenda toda vez que o Redis piscasse, e
+      // reportar "aplicado" sem nunca ter comparado com nada.
+      if (filasIlegiveis.has(fluxo.fila)) {
+        const erro = leitura.ilegiveis.find((i) => i.fila === fluxo.fila)?.erro ?? 'desconhecido';
+        resultado.erros.push({ flowKey: fluxo.key, erro: `fila ilegível: ${erro}` });
+        logger.warn(
+          { flowKey: fluxo.key, fila: fluxo.fila, erro },
+          'Reconciliação PULADA: não foi possível ler os schedulers desta fila, e agir sem ' +
+            'saber o estado atual é pior que não agir',
+        );
+        continue;
+      }
 
       // Linha ausente = DESLIGADO. Não é caso de erro nem de default: é a
       // propriedade de segurança que veio do `NOTA_SYNC_ATIVO` — escrita
