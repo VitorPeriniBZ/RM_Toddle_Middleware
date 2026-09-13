@@ -370,7 +370,19 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
    * honesto: ele está FORA da escala, não no topo dela.
    */
   const terminados = runs.filter((r) => r.desfecho === 'succeeded' || r.desfecho === 'failed');
-  const maior = Math.max(...(terminados.length ? terminados : runs).map((r) => r.duracaoMs), 1);
+  /*
+   * Run SEM duração não entra na escala.
+   *
+   * Um run fechado à mão não tem duração de execução: o job morreu numa hora e
+   * alguém fechou a linha depois. Medido — uma run de alunos morta em 11/09 às
+   * 12:00, fechada no dia seguinte, entrava aqui como "1658 min", virava a maior
+   * barra do histórico e ACHATAVA todas as outras em linha reta. O gráfico
+   * passava a não dizer nada sobre os runs que de fato rodaram.
+   */
+  const comDuracao = (terminados.length ? terminados : runs).filter(
+    (r): r is typeof r & { duracaoMs: number } => r.duracaoMs !== null,
+  );
+  const maior = Math.max(...comDuracao.map((r) => r.duracaoMs), 1);
   const larguraBarra = 14;
   const vao = 2; // o espaçador de 2px entre marcas
   const alturaPlot = 64;
@@ -407,10 +419,16 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
                 stroke={cor.borda} strokeWidth="1" />
 
           {runs.map((r, i) => {
-            const foraDaEscala = r.duracaoMs > maior;
-            const h = foraDaEscala
-              ? alturaPlot
-              : Math.max((r.duracaoMs / maior) * alturaPlot, 3);
+            // Sem duração: desenha só o glifo do desfecho, na altura mínima. A
+            // marca continua ali (o run existiu e falhou), sem afirmar um tempo
+            // que ninguém mediu.
+            const semDuracao = r.duracaoMs === null;
+            const foraDaEscala = !semDuracao && r.duracaoMs > maior;
+            const h = semDuracao
+              ? 3
+              : foraDaEscala
+                ? alturaPlot
+                : Math.max((r.duracaoMs / maior) * alturaPlot, 3);
             const x = i * (larguraBarra + vao);
             const y = alturaPlot + alturaGlifo - h;
             const preenchimento =
@@ -438,7 +456,11 @@ function Historico({ fluxo }: { fluxo: FluxoDeJobs }) {
 
       {sobre !== null && runs[sobre] && (
         <div style={{ ...s.blocoTecnico, marginTop: '.3rem' }}>
-          {`${NOME_DO_DESFECHO[runs[sobre].desfecho]} · ${duracao(runs[sobre].duracaoMs)} · ${quando(runs[sobre].inicioEm)}`}
+          {`${NOME_DO_DESFECHO[runs[sobre].desfecho]} · ${
+            runs[sobre].duracaoMs === null
+              ? 'fechado à mão (sem duração medida)'
+              : duracao(runs[sobre].duracaoMs as number)
+          } · ${quando(runs[sobre].inicioEm)}`}
           {runs[sobre].lotes && ` · lotes ${runs[sobre].lotes!.feitos}/${runs[sobre].lotes!.total}`}
           {`\n${runs[sobre].chave}`}
         </div>

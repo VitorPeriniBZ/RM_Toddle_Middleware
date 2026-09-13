@@ -409,8 +409,18 @@ export async function ultimosRunsPorTipo(tipos: string[]): Promise<Record<string
 export interface RunNoHistorico extends RunResumo {
   /** O payload de abertura. É dele que sai `lotesEsperados`. */
   payload: Record<string, unknown>;
-  /** `updated_at - created_at`, em ms. Só faz sentido em run já fechado. */
-  duracaoMs: number;
+  /**
+   * `updated_at - created_at`, em ms — ou `null` quando não é duração.
+   *
+   * Run FECHADO À MÃO não tem duração: o job morreu numa hora e alguém fechou a
+   * linha depois, então a diferença mede o tempo até o conserto, não o tempo de
+   * execução. Medido: uma run de alunos que morreu em 11/09 às 12:00 e foi
+   * fechada no dia seguinte aparecia no gráfico como "1658 min", virando a
+   * maior barra do histórico e achatando todas as outras.
+   *
+   * `null` é a resposta honesta, e a tela sabe desenhar "sem duração".
+   */
+  duracaoMs: number | null;
 }
 
 /**
@@ -463,7 +473,10 @@ export async function historicoDeRuns(
       configVersion: r.config_version,
       criadoEm: new Date(r.created_at).toISOString(),
       atualizadoEm: new Date(r.updated_at).toISOString(),
-      duracaoMs: new Date(r.updated_at).getTime() - new Date(r.created_at).getTime(),
+      // Ver a nota em `duracaoMs`: fechamento manual não é duração de execução.
+      duracaoMs: (r.resultado as Record<string, unknown> | null)?.fechadoManualmente
+        ? null
+        : new Date(r.updated_at).getTime() - new Date(r.created_at).getTime(),
     });
   }
   return porTipo;
