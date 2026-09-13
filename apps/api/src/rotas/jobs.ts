@@ -100,7 +100,8 @@ interface RunNoGrafico {
   chave: string;
   desfecho: 'succeeded' | 'failed' | 'executing' | 'preso';
   inicioEm: string;
-  duracaoMs: number;
+  /** `null` quando não há duração de execução — ver `RunNoHistorico.duracaoMs`. */
+  duracaoMs: number | null;
   /** `lotesConcluidos/lotesEsperados`, quando o fluxo é fan-out. */
   lotes?: { feitos: number; total: number };
   /** Só em `preso`: há quanto tempo nenhum lote reporta. */
