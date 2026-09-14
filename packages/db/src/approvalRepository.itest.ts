@@ -3,6 +3,7 @@ import { tenantConfig } from '@rm-toddle/config';
 import {
   decidirOperacao, estaAprovado, identidadeDeCli, operacoesPendentes, pedirAprovacao,
 } from './approvalRepository';
+import { quantosPodemAprovar } from './accessRepository';
 import { abrirRun } from './runRepository';
 import { pgPool } from './pool';
 
@@ -15,7 +16,32 @@ import { pgPool } from './pool';
  * isso não se verifica sem banco.
  */
 
+/**
+ * ZERA os papéis do tenant da suíte antes de cada teste.
+ *
+ * ─── POR QUE APAGAR TUDO, E NÃO SÓ O QUE ESTE ARQUIVO CRIOU ─────────────────
+ *
+ * `quantosPodemAprovar` conta o TENANT INTEIRO, e é esse número que decide se a
+ * auto-aprovação é recusada. Limpar só o próprio prefixo deixa cada arquivo à
+ * mercê do que os outros esquecerem: três arquivos desta suíte criam papel de
+ * aprovação, e a falha resultante aparece como "expected true to be false", sem
+ * nada apontando para a causa. Foi assim que uma falha intermitente sobreviveu
+ * dias — passava dez vezes isolada e caía na suíte inteira.
+ *
+ * É seguro apagar tudo porque o tenant é EXCLUSIVO da suíte: o `globalSetup`
+ * recusa subir se `TENANT_SLUG` não for `integracao-teste`, justamente para que
+ * limpezas como esta nunca alcancem a escola de verdade.
+ */
+async function zerarPapeisDoTenantDeTeste(): Promise<void> {
+  await pgPool.query(
+    `delete from membership where tenant_id in
+       (select id from tenant where slug = $1)`,
+    [tenantConfig.slug],
+  );
+}
+
 const limpar = async (): Promise<void> => {
+  await zerarPapeisDoTenantDeTeste();
   // Ordem obrigatória: `approval.operation_id` é ON DELETE RESTRICT, e o
   // RESTRICT é proposital — aprovação órfã seria registro de decisão sem a
   // decisão.
@@ -36,6 +62,14 @@ const limpar = async (): Promise<void> => {
   // assim que produção passa a existir. E o dado aqui é trilha de auditoria de
   // escrita em ERP de cliente: exatamente o que não se apaga para deixar um teste
   // verde. Daí o prefixo, igual ao que `tipo` já usava.
+  // As memberships vêm ANTES das identidades (FK), e limpá-las é o que impede
+  // este arquivo de fazer com os outros o que os outros fizeram com ele: um
+  // `approver` esquecido aqui muda o comportamento de `decidirOperacao` em
+  // qualquer teste que rode depois.
+  await pgPool.query(
+    `delete from membership where user_identity_id in
+       (select id from user_identity where provider = 'cli' and subject like 'teste.gate:%')`,
+  );
   await pgPool.query(
     "delete from user_identity where provider = 'cli' and subject like 'teste.gate:%'",
   );
@@ -99,26 +133,100 @@ describe('recusa', () => {
   });
 });
 
+/**
+ * ─── A REGRA DEPENDE DE QUANTOS PODEM APROVAR, E ISSO É TESTADO DE PROPÓSITO ──
+ *
+ * `decidirOperacao` recusa a auto-aprovação quando o tenant tem 0 ou 2+
+ * identidades com papel de aprovação, e a PERMITE quando tem exatamente 1 — com
+ * uma pessoa só, exigir "outra pessoa" não protege ninguém.
+ *
+ * A versão anterior deste bloco não controlava esse número: ela herdava o estado
+ * do tenant da suíte, que normalmente tem ZERO membros, e passava por isso. Um
+ * único `tenant_admin` deixado por qualquer outro teste — ou por um
+ * `npm run conceder` — invertia o resultado e a falha aparecia como
+ * "expected true to be false", sem nada apontando para a causa.
+ *
+ * Aconteceu duas vezes, com dias de intervalo, e na primeira não foi
+ * reproduzida: rodada isolada, a suíte passava dez vezes seguidas. Foi
+ * acrescentar testes de acesso — que criam `tenant_admin` no mesmo tenant — que
+ * tornou o defeito determinístico e revelou que o problema nunca esteve no
+ * código de aprovação, e sim num teste que dependia de um número que ninguém
+ * declarava.
+ *
+ * Agora os três ramos são exercitados com o número FIXADO pelo próprio teste.
+ */
 describe('segregação de funções, onde ela significa algo', () => {
-  // A migration 006 diz "quem propõe não aprova a própria operação: garantido na
-  // aplicação". Run de cron tem `criado_por` NULL e não há de quem segregar;
-  // operação com proponente exige outra identidade.
-  it('quem propôs NÃO aprova, mas outra pessoa aprova', async () => {
-    const proponente = await identidadeDeCli('teste.gate:ana');
-    const chave = 'gate-proposto-1';
+  /**
+   * O tenant da suíte começa SEM ninguém capaz de aprovar.
+   *
+   * Verificado, não suposto: `quantosPodemAprovar` conta o tenant inteiro, então
+   * uma linha deixada por outro teste — ou por um `npm run conceder` — muda o
+   * ramo que estes três exercitam. Sem esta checagem, a falha aparece como
+   * "expected true to be false" e ninguém liga o ponto à causa. Aconteceu.
+   */
+  beforeEach(async () => {
+    expect(
+      await quantosPodemAprovar(),
+      'o tenant da suíte já tem identidade com papel de aprovação antes destes testes, e é ESSE ' +
+        'número que decide se a auto-aprovação é recusada. Limpe `membership` do tenant ' +
+        '`integracao-teste` — provavelmente sobrou de outro teste ou de um `npm run conceder`.',
+    ).toBe(0);
+  });
+
+  /** Dá `approver` a N identidades de CLI. */
+  async function comAprovadores(n: number): Promise<void> {
+    const { rows: t } = await pgPool.query<{ id: string }>(
+      'select id from tenant where slug = $1',
+      [tenantConfig.slug],
+    );
+    for (let i = 0; i < n; i += 1) {
+      const id = await identidadeDeCli(`teste.gate:aprovador${i}`);
+      await pgPool.query(
+        `insert into membership (user_identity_id, tenant_id, campus_id, papel)
+         values ($1, $2, NULL, 'approver')
+         on conflict (user_identity_id, tenant_id, papel) where campus_id is null do nothing`,
+        [id, t[0].id],
+      );
+    }
+  }
+
+  /** Cria a operação com proponente e devolve o id. */
+  async function operacaoDe(proponente: string, chave: string): Promise<string> {
+    const id = await identidadeDeCli(proponente);
     await pgPool.query(
       `insert into operation (tenant_id, tipo, estado, payload, idempotency_key, criado_por)
        select t.id, 'teste.gate', 'needs_review', '{}'::jsonb, $1, $2
          from tenant t where t.slug = $3`,
-      [chave, proponente, tenantConfig.slug],
+      [chave, id, tenantConfig.slug],
     );
-    const op = (await operacoesPendentes()).find((o) => o.chave === chave)!;
+    return (await operacoesPendentes()).find((o) => o.chave === chave)!.id;
+  }
 
-    const auto = await decidirOperacao(op.id, 'teste.gate:ana', 'approved', 'eu mesma');
+  it('ZERO aprovadores: recusa — ninguém configurou nada, e a regra não some em silêncio', async () => {
+    const op = await operacaoDe('teste.gate:ana', 'gate-proposto-0');
+    const auto = await decidirOperacao(op, 'teste.gate:ana', 'approved', 'eu mesma');
     expect(auto.ok).toBe(false);
     expect(auto.ok === false && auto.erro).toMatch(/não pode aprová-la/);
 
-    expect((await decidirOperacao(op.id, 'teste.gate:vitor', 'approved', 'revisei o plano da ana')).ok).toBe(true);
+    expect((await decidirOperacao(op, 'teste.gate:vitor', 'approved', 'revisei o plano da ana')).ok).toBe(true);
+  });
+
+  it('UM aprovador: permite — não há de quem segregar', async () => {
+    await comAprovadores(1);
+    const op = await operacaoDe('teste.gate:ana', 'gate-proposto-1');
+    // A exceção documentada. O controle que resta são os dois passos e o
+    // registro da decisão, que continuam valendo.
+    expect((await decidirOperacao(op, 'teste.gate:ana', 'approved', 'eu mesma')).ok).toBe(true);
+  });
+
+  it('DOIS aprovadores: recusa — agora a regra tem conteúdo', async () => {
+    await comAprovadores(2);
+    const op = await operacaoDe('teste.gate:ana', 'gate-proposto-2');
+    const auto = await decidirOperacao(op, 'teste.gate:ana', 'approved', 'eu mesma');
+    expect(auto.ok).toBe(false);
+    expect(auto.ok === false && auto.erro).toMatch(/2 identidades/);
+
+    expect((await decidirOperacao(op, 'teste.gate:vitor', 'approved', 'revisei o plano da ana')).ok).toBe(true);
   });
 });
 

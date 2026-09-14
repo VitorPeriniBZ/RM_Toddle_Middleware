@@ -9,6 +9,7 @@ import {
   quantosAdministram,
   revogarPapel,
 } from './accessRepository';
+import { tenantConfig } from '@rm-toddle/config';
 import { pgPool } from './pool';
 
 /**
@@ -24,9 +25,21 @@ import { pgPool } from './pool';
 const SUJEITO = (n: string) => `teste-acesso:${n}`;
 
 async function limpar(): Promise<void> {
+  /*
+   * TODA membership do tenant, não só a deste arquivo.
+   *
+   * `quantosPodemAprovar` e `quantosAdministram` contam o tenant inteiro, e é
+   * esse número que decide se a auto-aprovação é recusada e se o último
+   * administrador pode sair. Limpar só o próprio prefixo deixa cada arquivo à
+   * mercê do que os outros esquecerem — foi exatamente assim que a falha
+   * intermitente do gate de aprovação sobreviveu dias.
+   *
+   * Seguro porque o tenant é EXCLUSIVO da suíte: o `globalSetup` recusa subir se
+   * `TENANT_SLUG` não for `integracao-teste`.
+   */
   await pgPool.query(
-    `DELETE FROM membership WHERE user_identity_id IN
-       (SELECT id FROM user_identity WHERE subject LIKE 'teste-acesso:%')`,
+    'DELETE FROM membership WHERE tenant_id IN (SELECT id FROM tenant WHERE slug = $1)',
+    [tenantConfig.slug],
   );
   /*
    * `audit_event` NÃO é limpa, e a tentativa de limpá-la é que ensinou por quê:
@@ -122,23 +135,35 @@ describe('conceder', () => {
 
 describe('a guarda de tranca', () => {
   it('recusa remover o ÚLTIMO tenant_admin', async () => {
-    const { userIdentityId } = await semear('unico', 'tenant_admin');
-    const antes = await quantosAdministram();
-    expect(antes).toBeGreaterThanOrEqual(1);
+    /*
+     * A precondição é VERIFICADA, não suposta.
+     *
+     * `quantosAdministram` conta o tenant inteiro. A primeira versão deste teste
+     * fazia `if (antes === 1)` e, com um administrador sobrando de outro lugar,
+     * PULAVA a asserção passando verde — um teste que some quando o ambiente
+     * muda é pior que nenhum, porque parece cobertura. Agora a sobra derruba o
+     * teste e diz o que limpar.
+     */
+    expect(
+      await quantosAdministram(),
+      'o tenant da suíte já tem tenant_admin antes deste teste — a guarda do ÚLTIMO não pode ' +
+        'ser exercitada assim. Limpe `membership` do tenant `integracao-teste`.',
+    ).toBe(0);
 
-    if (antes === 1) {
-      await expect(
-        revogarPapel({ userIdentityId, papel: 'tenant_admin', ator: 'system/cli' }),
-      ).rejects.toBeInstanceOf(RecusaDeAcesso);
-      // E não removeu: a transação inteira voltou.
-      expect(await papeisDoUsuario(userIdentityId)).toContain('tenant_admin');
-    }
+    const { userIdentityId } = await semear('unico', 'tenant_admin');
+    expect(await quantosAdministram()).toBe(1);
+
+    await expect(
+      revogarPapel({ userIdentityId, papel: 'tenant_admin', ator: 'system/cli' }),
+    ).rejects.toBeInstanceOf(RecusaDeAcesso);
+    // E não removeu: a transação inteira voltou.
+    expect(await papeisDoUsuario(userIdentityId)).toContain('tenant_admin');
   });
 
   it('permite remover quando há OUTRO — é o tenant que não pode ficar órfão, não a pessoa', async () => {
     const a = await semear('admin-a', 'tenant_admin');
     const b = await semear('admin-b', 'tenant_admin');
-    expect(await quantosAdministram()).toBeGreaterThanOrEqual(2);
+    expect(await quantosAdministram()).toBe(2);
 
     await revogarPapel({ userIdentityId: a.userIdentityId, papel: 'tenant_admin', ator: 'system/cli' });
     expect(await papeisDoUsuario(a.userIdentityId)).not.toContain('tenant_admin');

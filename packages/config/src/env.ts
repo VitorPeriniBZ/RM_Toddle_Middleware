@@ -207,6 +207,7 @@ const envSchema = z.object({
   HEARTBEAT_URL_ALUNOS: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   HEARTBEAT_URL_PROFESSORES: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   HEARTBEAT_URL_NOTAS: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  HEARTBEAT_URL_FREQUENCIA: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   /** Timeout do ping. Curto de propósito: monitor lento não pode atrasar o job. */
   HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 
@@ -332,6 +333,54 @@ const envSchema = z.object({
   // (Comentario de LINHA de proposito: a sintaxe de cron tem `*/`, que fecharia
   // um comentario de bloco no meio da frase. Ja quebrou o build uma vez.)
   NOTA_SYNC_CRON: z.string().default('15,45 6-22 * * *'),
+
+  // --- Turma e disciplina, RM -> de-para (somente leitura) ------------------
+  //
+  // Não tem interruptor de escola porque não escreve nada: ele compara e relata.
+  // O Toddle não tem DELETE de turma, só arquivar — criar turma automaticamente
+  // seria a única ação irreversível deste projeto, e é a que ele não faz.
+  //
+  // 05:00 é escolhido, não sorteado: alunos roda 03:00/09:00, professores
+  // 03:30/09:30 e a nota das 06:00 às 22:00. Cinco da manhã é o único horário
+  // que não encosta em nenhum dos três na janela de 300s do Toddle.
+  TURMAS_SYNC_CRON: z.string().default('0 5 * * *'),
+
+  // --- Via de FREQUÊNCIA, Toddle -> RM (automática) ------------------------
+  //
+  // A SEGUNDA escrita agendada em registro acadêmico, e a mais delicada das
+  // duas: o TOTVS é a fonte de verdade da frequência e já tem ~14,6 mil faltas
+  // lançadas à mão. Escrever por cima de ausência marcada por um humano apaga
+  // trabalho de gente — por isso `decidirEscrita` existe, e por isso o default
+  // aqui é `false`.
+  /**
+   * Liga a via de frequência agendada. Default `false`, pelo mesmo motivo que
+   * `NOTA_SYNC_ATIVO`: escrita automática em registro acadêmico não pode chegar
+   * a uma escola nova por herança de default.
+   */
+  FREQ_SYNC_ATIVO: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  //
+  // 23:00, uma vez por dia. A chamada do Toddle é lançada ao longo do dia e não
+  // há webhook; rodar de madrugada pega o dia inteiro fechado, em vez de
+  // escrever meia aula e voltar depois.
+  //
+  // (Comentario de LINHA porque a sintaxe de cron tem `*/`, que fecharia um
+  // comentario de bloco no meio da frase.)
+  FREQ_SYNC_CRON: z.string().default('0 23 * * *'),
+  /**
+   * Quantos dias para trás a passada reprocessa.
+   *
+   * Não é "desde a última vez": a janela fixa torna cada passada IDEMPOTENTE e
+   * independente do histórico — perder uma noite não perde dado, porque a noite
+   * seguinte cobre o mesmo intervalo. O guarda de decisão já resolve o que
+   * mudou, então reprocessar é barato e não reescreve o que está igual.
+   *
+   * Três dias cobre o fim de semana: uma falha na sexta ainda é recuperada pela
+   * passada de segunda.
+   */
+  FREQ_SYNC_DIAS: z.coerce.number().int().positive().max(30).default(3),
 
   // --- Limitador de taxa COMPARTILHADO do Toddle ----------------------------
   //

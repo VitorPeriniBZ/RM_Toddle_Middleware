@@ -78,9 +78,24 @@ export default defineWorkspace([
       // máquina não vaza para cá.
       env: { TENANT_SLUG: 'integracao-teste' },
       globalSetup: ['./vitest.integracao.setup.ts'],
-      // Um banco, uma conexão: testes que mexem nas mesmas tabelas em paralelo
-      // produzem falha intermitente, que é pior que teste lento.
-      fileParallelism: false,
+      /*
+       * ─── A SERIALIZAÇÃO MORA NO SCRIPT, E NÃO AQUI ────────────────────────
+       *
+       * Havia um `fileParallelism: false` NESTE bloco, e ele não fazia nada: no
+       * Vitest 2 a opção é de RAIZ, e dentro de um projeto é ignorada em
+       * silêncio. Os arquivos de integração rodaram em paralelo contra o mesmo
+       * banco desde sempre, apagando as linhas uns dos outros no meio do teste.
+       *
+       * O sintoma foi um teste do gate de aprovação que falhava uma vez e passava
+       * dez — perseguido por dias, com dez passagens seguidas isoladas, porque
+       * rodar UM arquivo nunca reproduz. A causa nunca esteve no código de
+       * aprovação.
+       *
+       * Hoje a serialização é `--no-file-parallelism` em `npm run test:integracao`,
+       * onde ela de fato vale, e há um teste que confere se a bandeira continua
+       * lá (`packages/db/src/suiteSerializada.test.ts`). Não devolva a opção para
+       * cá: ela volta a ser um comentário que descreve algo que não acontece.
+       */
       testTimeout: 30_000,
     },
   },

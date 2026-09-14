@@ -77,4 +77,9 @@ export const heartbeat = {
     pingHeartbeat(env.HEARTBEAT_URL_PROFESSORES, resultado, { job: 'professores', ...contexto }),
   notas: (resultado: ResultadoRun, contexto?: Record<string, unknown>) =>
     pingHeartbeat(env.HEARTBEAT_URL_NOTAS, resultado, { job: 'notas', ...contexto }),
+  // A segunda escrita em registro acadêmico tem o próprio canal: somar as duas
+  // num monitor só faria a falha de uma ser confundida com a da outra, e são
+  // consertos diferentes.
+  frequencia: (resultado: ResultadoRun, contexto?: Record<string, unknown>) =>
+    pingHeartbeat(env.HEARTBEAT_URL_FREQUENCIA, resultado, { job: 'frequencia', ...contexto }),
 };
