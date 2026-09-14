@@ -225,7 +225,15 @@ async function main(): Promise<void> {
    * na lista logo acima — o mesmo defeito, no fluxo vizinho (PR #30).
    */
   const chaveDeAprovacao = `freq:${cfg.slug}:${codFilial}:${args.de}:${args.ate}:${args.turma ?? 'todas'}`;
-  const chaveRun = `${chaveDeAprovacao}:${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`;
+  /*
+   * UM instante serve a duas coisas: o sufixo que torna a chave do run única e
+   * o `created_at` da linha. `abrirRun` não é chamado aqui — acontece depois de
+   * ler o Toddle e o RM, e no caminho de saída antecipada acontece no fim — de
+   * modo que, sem passar este marco, a duração mediria o registro e não o
+   * trabalho.
+   */
+  const inicio = new Date();
+  const chaveRun = `${chaveDeAprovacao}:${inicio.toISOString().slice(11, 19).replace(/:/g, '')}`;
 
   logger.info(
     { ...configVersionDetalhe(), configVersion: versao, janela: `${args.de} → ${args.ate}`, codFilial, chaveRun, executar: args.executar },
@@ -502,6 +510,7 @@ async function main(): Promise<void> {
   const runId = await abrirRun({
     tipo: 'frequencia_toddle_para_rm',
     chave: chaveRun,
+    inicio,
     configVersion: versao,
     payload: {
       janela,

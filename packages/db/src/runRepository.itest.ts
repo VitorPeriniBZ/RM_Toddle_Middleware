@@ -107,3 +107,37 @@ describe('hashValor é o contrato compartilhado', () => {
     expect(hashValor(' a  b ')).toBe(hashValor('a b'));
   });
 });
+
+/**
+ * A duração é `updated_at - created_at`, e nem todo `abrirRun` acontece no
+ * começo do trabalho.
+ *
+ * Nos fluxos de nota ele é chamado DEPOIS de ler o Toddle e o RM, e no caminho
+ * de saída antecipada (`nada-a-escrever`) no FIM, só para registrar que a
+ * passada existiu. Sem o instante de início, a linha das 08:15 de 14/09/2026
+ * marcou 9 ms para uma passada que a fila cronometrou em 31 s.
+ */
+describe('a duração mede o trabalho, não o registro', () => {
+  it('o run nasce com o instante de início que recebeu', async () => {
+    const inicio = new Date(Date.now() - 31_000);
+    await abrirRun({
+      tipo: TIPO, chave: 'd1', configVersion: 'v1', payload: {}, inicio,
+    });
+    await fecharRunPorChave('d1', 'succeeded', {});
+    const { rows } = await pgPool.query<{ ms: number }>(
+      `select round(extract(epoch from (updated_at - created_at)) * 1000)::int ms
+         from job_run where chave = $1`, ['d1'],
+    );
+    // 31s de trabalho, e não os milissegundos entre abrir e fechar a linha.
+    expect(rows[0].ms).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('sem o instante, `created_at` é agora — o comportamento de sempre', async () => {
+    await abrirRun({ tipo: TIPO, chave: 'd2', configVersion: 'v1', payload: {} });
+    const { rows } = await pgPool.query<{ ms: number }>(
+      `select round(extract(epoch from (now() - created_at)) * 1000)::int ms
+         from job_run where chave = $1`, ['d2'],
+    );
+    expect(rows[0].ms).toBeLessThan(5_000);
+  });
+});

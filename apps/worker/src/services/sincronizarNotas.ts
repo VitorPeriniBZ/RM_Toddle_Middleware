@@ -271,7 +271,15 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
    * O instante do disparo é o que separa uma execução da seguinte.
    */
   const chaveDeAprovacao = `nota:${cfg.slug}:${codFilial}:${op.etapa ?? 'todas'}:${op.turma ?? 'todas'}:${dataRef}`;
-  const chaveRun = `${chaveDeAprovacao}:${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`;
+  /*
+   * UM instante serve a duas coisas: o sufixo que torna a chave do run única e
+   * o `created_at` da linha. `abrirRun` não é chamado aqui — acontece depois de
+   * ler o Toddle e o RM, e no caminho de saída antecipada acontece no fim — de
+   * modo que, sem passar este marco, a duração mediria o registro e não o
+   * trabalho.
+   */
+  const inicio = new Date();
+  const chaveRun = `${chaveDeAprovacao}:${inicio.toISOString().slice(11, 19).replace(/:/g, '')}`;
 
   await toddleClient.assertTargetOrganization();
 
@@ -491,6 +499,7 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
     const runId = await abrirRun({
       tipo: FLOW.NOTAS,
       chave: chaveRun,
+      inicio,
       configVersion: versao,
       payload: { codFilial, dataRef, operadoPor: op.quem ?? null, semEscrita: true },
     });
@@ -538,6 +547,7 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
   const runId = await abrirRun({
     tipo: FLOW.NOTAS,
     chave: chaveRun,
+    inicio,
     configVersion: versao,
     payload: {
       codFilial,
