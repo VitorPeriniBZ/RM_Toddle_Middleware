@@ -35,7 +35,13 @@ import { pgPool } from '@rm-toddle/db';
 
 const ESPERADO = 'integracao-teste';
 
-export default async function setup(): Promise<void> {
+/**
+ * Chave do lock consultivo do Postgres. Número arbitrário e fixo; o que importa
+ * é ser o MESMO em todo processo que rode esta suíte.
+ */
+const TRAVA = 828_140_914;
+
+export default async function setup(): Promise<() => Promise<void>> {
   if (tenantConfig.slug !== ESPERADO) {
     throw new Error(
       `Os testes de integração precisam rodar sob TENANT_SLUG="${ESPERADO}", e este ` +
@@ -45,10 +51,39 @@ export default async function setup(): Promise<void> {
     );
   }
 
+  /*
+   * ─── DUAS SUÍTES AO MESMO TEMPO NÃO É "FALHA INTERMITENTE" ────────────────
+   *
+   * `fileParallelism: false` ordena os arquivos DENTRO de um processo, e nada
+   * mais. Dois `vitest` simultâneos contra o mesmo banco — um subagente e eu,
+   * em 12/09/2026 — dividem o tenant da suíte, e o `limpar` de um apaga a linha
+   * que o outro acabou de inserir. O sintoma é um teste que falha uma vez e
+   * passa dez, e tempo gasto procurando no lugar errado: foram dez passagens
+   * seguidas atrás de uma falha que não estava no código.
+   *
+   * O lock consultivo faz o segundo processo ESPERAR em vez de atropelar.
+   *
+   * A conexão é DEDICADA, e isso não é zelo: o lock de sessão pertence à
+   * conexão que o tomou. Tirado por `pgPool.query`, ele ficaria presente numa
+   * conexão devolvida ao pool, e o unlock cairia provavelmente em OUTRA — que
+   * não o detém. O Postgres responde `false` a esse unlock, sem erro; a trava
+   * sobreviveria à suíte e o próximo processo esperaria para sempre.
+   */
+  const trava = await pgPool.connect();
+  await trava.query('SELECT pg_advisory_lock($1)', [TRAVA]);
+
   await pgPool.query(
     `INSERT INTO tenant (slug, nome, status)
      VALUES ($1, 'Tenant da suíte de integração', 'active')
      ON CONFLICT (slug) DO UPDATE SET status = 'active'`,
     [ESPERADO],
   );
+
+  // `release(true)` destrói a conexão em vez de devolvê-la ao pool — e é o
+  // encerramento dela que o Postgres usa para soltar o lock, inclusive quando a
+  // suíte morre de Ctrl+C sem chegar aqui.
+  return async () => {
+    await trava.query('SELECT pg_advisory_unlock($1)', [TRAVA]).catch(() => undefined);
+    trava.release(true);
+  };
 }
