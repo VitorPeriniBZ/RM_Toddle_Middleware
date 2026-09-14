@@ -83,6 +83,19 @@ export interface AbrirRunArgs {
    * `payload` e a guarda nunca teria histórico com que comparar.
    */
   resultadoInicial?: Record<string, unknown>;
+  /**
+   * Quando a execução COMEÇOU, se não foi agora.
+   *
+   * A duração do run é `updated_at - created_at`, então `created_at` tem de ser
+   * o instante em que o trabalho começou — e nem todo `abrirRun` acontece no
+   * começo. Nos fluxos de nota ele acontece DEPOIS de ler o Toddle e o RM, já
+   * sabendo o que escrever; e no caminho de saída antecipada
+   * (`nada-a-escrever`) acontece no fim, só para registrar que a passada
+   * existiu. Sem esta semente, a linha das 08:15 de 14/09/2026 marcou **9 ms**
+   * para uma passada que a fila cronometrou em **31 s** — a mesma métrica
+   * mentindo, agora na direção oposta à do defeito da chave compartilhada.
+   */
+  inicio?: Date;
 }
 
 /**
@@ -99,8 +112,8 @@ export interface AbrirRunArgs {
 export async function abrirRun(args: AbrirRunArgs): Promise<string | null> {
   try {
     const { rows } = await pgPool.query<{ id: string }>(
-      `INSERT INTO job_run (tenant_id, tipo, estado, payload, resultado, config_version, chave)
-       VALUES ($1, $2, 'executing', $3, $4, $5, $6)
+      `INSERT INTO job_run (tenant_id, tipo, estado, payload, resultado, config_version, chave, created_at)
+       VALUES ($1, $2, 'executing', $3, $4, $5, $6, coalesce($7::timestamptz, now()))
        ON CONFLICT (tenant_id, chave) DO UPDATE
          SET estado     = 'executing',
              -- O tipo TAMBEM e atualizado, e isto nao e zelo: sem ele, o tipo
@@ -131,6 +144,7 @@ export async function abrirRun(args: AbrirRunArgs): Promise<string | null> {
         JSON.stringify(args.resultadoInicial ?? {}),
         args.configVersion,
         args.chave,
+        args.inicio ?? null,
       ],
     );
     return rows[0]?.id ?? null;

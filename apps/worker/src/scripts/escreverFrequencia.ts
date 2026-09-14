@@ -210,9 +210,30 @@ async function main(): Promise<void> {
   const versao = configVersion();
   const janela = { de: args.de, ate: args.ate };
 
-  // A chave do run é o que liga proposta, aprovação e execução. Mesma janela e
-  // mesmo escopo = mesma chave: reexecutar não empilha pedidos de aprovação.
-  const chaveRun = `freq:${cfg.slug}:${codFilial}:${args.de}:${args.ate}:${args.turma ?? 'todas'}`;
+  /*
+   * DUAS chaves, porque são duas perguntas diferentes.
+   *
+   * A de APROVAÇÃO identifica a INTENÇÃO — "escrever esta janela, neste escopo".
+   * Mesma janela e mesmo escopo = mesma chave: reexecutar reencontra a aprovação
+   * já concedida em vez de empilhar pedidos.
+   *
+   * A do RUN identifica a EXECUÇÃO. `abrirRun` faz UPSERT pela chave; com a
+   * chave da intenção, toda passada da mesma janela sobrescreve a MESMA linha, e
+   * o que sobra é uma linha por janela com início da primeira passada, desfecho
+   * da última e "duração" igual ao vão entre as duas. Foi assim que o gráfico de
+   * Notas passou a dizer "maior terminado: 235 min" com runs de 20 a 29 segundos
+   * na lista logo acima — o mesmo defeito, no fluxo vizinho (PR #30).
+   */
+  const chaveDeAprovacao = `freq:${cfg.slug}:${codFilial}:${args.de}:${args.ate}:${args.turma ?? 'todas'}`;
+  /*
+   * UM instante serve a duas coisas: o sufixo que torna a chave do run única e
+   * o `created_at` da linha. `abrirRun` não é chamado aqui — acontece depois de
+   * ler o Toddle e o RM, e no caminho de saída antecipada acontece no fim — de
+   * modo que, sem passar este marco, a duração mediria o registro e não o
+   * trabalho.
+   */
+  const inicio = new Date();
+  const chaveRun = `${chaveDeAprovacao}:${inicio.toISOString().slice(11, 19).replace(/:/g, '')}`;
 
   logger.info(
     { ...configVersionDetalhe(), configVersion: versao, janela: `${args.de} → ${args.ate}`, codFilial, chaveRun, executar: args.executar },
@@ -328,6 +349,7 @@ async function main(): Promise<void> {
   p(`  escopo         ${turmasEmEscopo.length} turma-disciplina, ${alunos.length} alunos`);
   p(`  configVersion  ${versao}`);
   p(`  run            ${chaveRun}`);
+  p(`  aprovação      ${chaveDeAprovacao}`);
   p('');
   p('── plano ─────────────────────────────────────────────────────────');
   p(`  lidos do Toddle                 ${registros.length}`);
@@ -448,9 +470,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveRun))) {
+  if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveDeAprovacao))) {
     await pedirAprovacao({
-      chave: chaveRun,
+      // A chave da INTENÇÃO, não a da execução: é por ela que a passada
+      // seguinte reencontra a decisão. Com a chave por execução, a aprovação
+      // ficaria órfã e o gate pediria decisão de novo a cada rodada.
+      chave: chaveDeAprovacao,
       tipo: 'frequencia_toddle_para_rm',
       payload: {
         janela,
@@ -485,6 +510,7 @@ async function main(): Promise<void> {
   const runId = await abrirRun({
     tipo: 'frequencia_toddle_para_rm',
     chave: chaveRun,
+    inicio,
     configVersion: versao,
     payload: {
       janela,
