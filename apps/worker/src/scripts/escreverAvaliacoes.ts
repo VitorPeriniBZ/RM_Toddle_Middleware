@@ -67,6 +67,7 @@ function imprimir(r: RelatorioAvaliacoes, executar: boolean): void {
   p(`  tipos elegíveis ${r.tiposElegiveis.join(', ')}`);
   p(`  data de ref.   ${r.dataRef}`);
   p(`  run            ${r.chaveRun}`);
+  p(`  aprovação      ${r.chaveDeAprovacao}`);
   p('');
   p('── o que o Toddle tem ────────────────────────────────────────────');
   p(`  avaliações (assignments)        ${r.origem.avaliacoes}`);
@@ -130,7 +131,7 @@ function imprimir(r: RelatorioAvaliacoes, executar: boolean): void {
         break;
       case 'precisa-aprovacao':
         p('  PRECISA APROVAÇÃO. Pedido registrado, nada enviado.');
-        p(`  Aprove com: npm run aprovar -- --chave ${r.chaveRun} --quem SEU_NOME`);
+        p(`  Aprove com: npm run aprovar -- --chave ${r.chaveDeAprovacao} --quem SEU_NOME`);
         break;
       default:
         p('  Nada foi enviado.');
