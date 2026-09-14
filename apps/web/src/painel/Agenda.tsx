@@ -226,7 +226,10 @@ function CartaoDoFluxo({
 }) {
   const d = fluxo.desejado;
   const situacao = situacaoDe(fluxo);
-  const confere = Boolean(fluxo.observado && d && fluxo.observado.cron === d.cron);
+  // Vem da API, e não recalculado aqui: a regra inclui o fuso e o caso do fluxo
+  // DESLIGADO, em que "nada no Redis" é o estado certo. Duas implementações da
+  // mesma comparação divergem, e a que divergiria em silêncio é esta.
+  const confere = fluxo.observadoConfere;
   const [confirmando, setConfirmando] = useState(false);
 
   const emVoo = fluxo.execucaoEmVoo;

@@ -115,13 +115,31 @@ export async function processCourseSync(job: Job): Promise<Record<string, unknow
      */
     semSinalDeAlunos: relatorio.semSinalDeAlunos,
     naoClassificadas,
+    contaDoDePara: relatorio.contaDoDePara,
   };
 
+  /*
+   * DUAS contas, e a segunda é a que teria pego o defeito da primeira passada.
+   *
+   * `naoClassificadas` olha o lado do RM: linha lida que não virou achado.
+   * `contaDoDePara` olha o lado do de-para: toda turma mapeada e ativa é
+   * exatamente uma de três (OK, inativada, sumiu). Em 14/09/2026 as MESMAS 186
+   * turmas saíram como `OK` E como `SUMIU_DO_RM` — e o lado do RM fechava
+   * perfeitamente, porque o erro estava só no lado do de-para.
+   */
+  if (!relatorio.contaDoDePara.fecha) {
+    await fecharRun(runId, 'failed', { ...resultado, contabilidadeNaoFecha: 'de-para' });
+    logger.error({ jobId: job.id, ...resultado, contabilidadeNaoFecha: 'de-para' },
+      'Reconciliação de turmas: a conta do de-para não fecha — uma turma mapeada foi classificada ' +
+      'duas vezes, ou nenhuma');
+    return { ...resultado, contabilidadeNaoFecha: 'de-para' };
+  }
+
   if (naoClassificadas !== 0) {
-    await fecharRun(runId, 'failed', { ...resultado, contabilidadeNaoFecha: true });
-    logger.error({ jobId: job.id, ...resultado, contabilidadeNaoFecha: true },
+    await fecharRun(runId, 'failed', { ...resultado, contabilidadeNaoFecha: 'rm' });
+    logger.error({ jobId: job.id, ...resultado, contabilidadeNaoFecha: 'rm' },
       'Reconciliação de turmas: a conta não fecha — lidas ≠ classificadas');
-    return { ...resultado, contabilidadeNaoFecha: true };
+    return { ...resultado, contabilidadeNaoFecha: 'rm' };
   }
 
   await fecharRun(runId, 'succeeded', resultado);

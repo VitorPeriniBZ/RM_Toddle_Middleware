@@ -1,13 +1,19 @@
-import { env, logger, tenantConfig } from '@rm-toddle/config';
-import { idMappingRepository, pgPool } from '@rm-toddle/db';
-import { chaveCourse, criarResolvedorDeCourse } from '@rm-toddle/domain';
-import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
+import { logger, tenantConfig } from '@rm-toddle/config';
+import { pgPool } from '@rm-toddle/db';
+import {
+  EXIGEM_DECISAO,
+  LeituraDeTurmasQuebrada,
+  exigemDecisao,
+  reconciliarTurmas,
+  type RelatorioDeTurmas,
+  type Situacao,
+} from '../services/reconciliarTurmas';
 
-/** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
+/** Config da escola atendida por este processo. */
 const cfg = tenantConfig;
 
 /**
- * Compara as turma-disciplina do RM com o nosso de-para e relata a DERIVA.
+ * Compara as turma-disciplina do RM com o de-para e relata a DERIVA.
  * SOMENTE LEITURA — não cria, não arquiva, não altera nada.
  *
  *   npm run reconciliar:turmas
@@ -15,195 +21,40 @@ const cfg = tenantConfig;
  *
  * ─── POR QUE ISTO EXISTE ────────────────────────────────────────────────────
  *
- * Os 185 `COURSE` vieram de uma carga manual (CSV de 03/08/2026) e **nada os
- * atualiza**. O de-para de turma é um retrato, não uma sincronização: toda
- * turma-disciplina criada depois fica invisível para a integração.
+ * Os 186 `COURSE` vieram de uma carga manual e **nada os atualiza**. O de-para
+ * de turma é um retrato, não uma sincronização: toda turma-disciplina criada
+ * depois fica invisível para a integração. Foi assim que a `1714` ficou de fora
+ * com 60 faltas lançadas — e só apareceu por acidente, ao cruzar frequência.
  *
- * Foi assim que a `1714` (EAVHS10IA / ELA Higher Level) ficou de fora com 60
- * faltas lançadas — e só apareceu por acidente, ao cruzar frequência. O objetivo
- * aqui é a deriva ser DETECTADA em vez de descoberta.
+ * ─── A REGRA NÃO MORA MAIS AQUI ─────────────────────────────────────────────
  *
- * ─── FONTE: DataServer, não Sentença ────────────────────────────────────────
+ * A comparação vive em `services/reconciliarTurmas.ts`, que é o MESMO código do
+ * job `courses.sync`. Este arquivo só imprime.
  *
- * `EduTurmaDiscData` devolve as 217 turma-disciplina do campus em UMA chamada,
- * com 39 colunas — inclusive as quatro de auditoria. Chegou a existir uma
- * especificação de Sentença para isso (`TODDLE.TURMADISC`), escrita quando o
- * objetivo era CRIAR as turmas; para reconciliar, ela é desnecessária. O que a
- * Sentença ainda resolveria é o PROFESSOR, que este DataServer não traz.
+ * A duplicação não era teórica: enquanto as duas cópias existiram, a do serviço
+ * ganhou o conserto do `SUMIU_DO_RM` (que comparava chave natural contra um
+ * de-para ainda gravado em IDTURMADISC, reportando as mesmas 186 turmas como OK
+ * E como sumidas) e esta continuou errada.
  */
-
-type Situacao =
-  | 'OK'
-  | 'NOVA_COM_ALUNOS'
-  | 'NOVA_SEM_ALUNOS'
-  | 'INATIVADA_NO_RM'
-  | 'REATIVADA_NO_RM'
-  | 'SUMIU_DO_RM';
-
-interface Achado {
-  situacao: Situacao;
-  idTurmaDisc: string;
-  codTurma?: string;
-  codDisc?: string;
-  nomeDisc?: string;
-  ativa?: string;
-  alunos?: number;
-  criadoEm?: string;
-  alteradoEm?: string;
+function p(s = ''): void {
+  // eslint-disable-next-line no-console
+  console.log(s);
 }
 
-const soData = (v: string | undefined): string => (v ?? '').slice(0, 10);
-
-async function main(): Promise<void> {
-  const tudo = process.argv.includes('--tudo');
-
-  // ─── o RM ─────────────────────────────────────────────────────────────────
-  const doRm = await wsDataServerClient.readView(
-    'EduTurmaDiscData',
-    `STurmaDisc.CODCOLIGADA=${cfg.rm.escopo.coligada} AND STurmaDisc.CODFILIAL=${cfg.rm.escopo.filiais}`,
-    'STURMADISC',
-    cfg.rm.escopo.filiais,
-  );
-
-  // O período letivo corrente do campus. Vem do que as turmas mapeadas usam, para
-  // não fixar "15" no código — IDPERLET é por filial e muda todo ano.
-  const ativos = await idMappingRepository.listByType('COURSE', 'active');
-  const arquivados = await idMappingRepository.listByType('COURSE', 'archived');
-  const mapeadas = new Map(ativos.map((c) => [c.rmCode, c]));
-  const jaArquivadas = new Set(arquivados.map((c) => c.rmCode));
-
-  // O de-para COURSE é chaveado por CODPERLET:CODTURMA:CODDISC. IDTURMADISC
-  // continua identificando a linha DO RM (e é o que o relatório mostra, porque
-  // é por ele que se procura a turma na tela do TOTVS), mas não identifica mais
-  // o mapeamento — identity renumera na cópia de base. Ver domain/chaveCourse.ts.
-  const periodoLetivo = cfg.rm.escopo.periodoLetivo;
-  if (!periodoLetivo) throw new Error('RM_CODPERLET vazio: é parte da chave do de-para COURSE.');
-  const chaveDe = (r: { CODTURMA?: string; CODDISC?: string }): string =>
-    chaveCourse(periodoLetivo, String(r.CODTURMA ?? ''), String(r.CODDISC ?? ''));
-
-  // ─── AS DUAS CONVENÇÕES CONVIVEM ENQUANTO O DE-PARA MIGRA ────────────────
-  //
-  // Procurar só pela chave natural num de-para ainda em IDTURMADISC não acha
-  // NADA — e aqui isso não dá erro: dá um relatório dizendo que todas as 186
-  // turmas são novas. Rodado com `--executar`, duplicaria o de-para inteiro.
-  // O resolvedor aceita as duas, e o relatório volta a dizer a verdade.
-  const alvoDe = (r: { IDTURMADISC?: string; CODTURMA?: string; CODDISC?: string }) => ({
-    idTurmaDisc: String(r.IDTURMADISC ?? ''),
-    codTurma: String(r.CODTURMA ?? ''),
-    codDisc: String(r.CODDISC ?? ''),
-  });
-  const estaMapeada = criarResolvedorDeCourse(ativos, periodoLetivo);
-  const estaArquivada = criarResolvedorDeCourse(arquivados, periodoLetivo);
-  logger.info(
-    { ativos: estaMapeada.retrato, arquivados: estaArquivada.retrato },
-    'De-para COURSE: convenções de chave presentes',
-  );
-
-  const perletsMapeados = new Map<string, number>();
-  for (const r of doRm) {
-    if (estaMapeada(alvoDe(r)).toddleId) {
-      perletsMapeados.set(r.IDPERLET, (perletsMapeados.get(r.IDPERLET) ?? 0) + 1);
-    }
-  }
-  const perlet = [...perletsMapeados.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  if (!perlet) {
-    throw new Error(
-      'Não consegui inferir o período letivo corrente: nenhuma turma mapeada apareceu na ' +
-        'leitura do RM. Pare e investigue — o escopo pode estar errado.',
-    );
-  }
-
-  const doPerlet = doRm.filter((r) => r.IDPERLET === perlet);
-
-  // ─── quem tem aluno: distingue turma real de oferta vazia ────────────────
-  // As 16 turmas "IG" estão ativas e sem um único aluno. Sem este sinal, elas
-  // apareceriam como lacuna e poluiriam o relatório todo mês.
-  const alunosPorTd = new Map<string, Set<string>>();
-  try {
-    const cursos = ativos.map((c) => c.rmCode);
-    const alunos = (await idMappingRepository.listByType('STUDENT', 'active')).map((a) => a.rmCode);
-    const { fetchNotasFromRm } = await import('@rm-toddle/domain');
-    // Passa TODAS as turma-disciplina do RM como escopo, não só as mapeadas —
-    // senão a turma nova (que é o que procuramos) seria filtrada.
-    const r = await fetchNotasFromRm(doPerlet.map((x) => x.IDTURMADISC), alunos);
-    for (const n of r.notas) {
-      if (!alunosPorTd.has(n.idTurmaDisc)) alunosPorTd.set(n.idTurmaDisc, new Set());
-      alunosPorTd.get(n.idTurmaDisc)?.add(n.ra);
-    }
-    void cursos;
-  } catch (e) {
-    logger.warn(
-      { err: e },
-      'Não consegui medir alunos por turma (Sentença de notas) — o relatório sai sem esse sinal',
-    );
-  }
-
-  // ─── compara ──────────────────────────────────────────────────────────────
-  const achados: Achado[] = [];
-  const vistas = new Set<string>();
-
-  for (const r of doPerlet) {
-    const id = r.IDTURMADISC;
-    const chave = chaveDe(r);
-    vistas.add(chave);
-    const ativaNoRm = (r.ATIVA ?? '').toUpperCase() === 'S';
-    const alunos = alunosPorTd.get(id)?.size ?? 0;
-    const base = {
-      idTurmaDisc: id,
-      codTurma: r.CODTURMA,
-      codDisc: r.CODDISC,
-      nomeDisc: r.NOMEDISC,
-      ativa: r.ATIVA,
-      alunos,
-      criadoEm: soData(r.RECCREATEDON),
-      alteradoEm: soData(r.RECMODIFIEDON),
-    };
-
-    if (estaMapeada(alvoDe(r)).toddleId) {
-      achados.push({ ...base, situacao: ativaNoRm ? 'OK' : 'INATIVADA_NO_RM' });
-    } else if (estaArquivada(alvoDe(r)).toddleId) {
-      if (ativaNoRm) achados.push({ ...base, situacao: 'REATIVADA_NO_RM' });
-    } else if (ativaNoRm) {
-      achados.push({ ...base, situacao: alunos > 0 ? 'NOVA_COM_ALUNOS' : 'NOVA_SEM_ALUNOS' });
-    }
-  }
-
-  // Aqui a chave do mapeamento é o que se tem — a turma sumiu do RM, então não
-  // há linha de onde tirar o IDTURMADISC. Mostra a chave, que é mais legível.
-  for (const [chave] of mapeadas) {
-    if (!vistas.has(chave)) achados.push({ situacao: 'SUMIU_DO_RM', idTurmaDisc: chave });
-  }
-
-  // ─── deriva de rótulo: o título no Toddle ainda bate com o RM? ───────────
-  const nossos = new Set(ativos.map((c) => c.toddleId));
-  const classes = (await toddleClient.listClasses()).filter((c) => nossos.has(String(c.id)));
-  const tituloPorTd = new Map<string, string>();
-  for (const c of ativos) {
-    const t = classes.find((x) => String(x.id) === c.toddleId);
-    if (t) tituloPorTd.set(c.rmCode, String(t.title ?? ''));
-  }
-  const renomeadas = doPerlet.filter((r) => {
-    const titulo = tituloPorTd.get(chaveDe(r));
-    const disc = (r.NOMEDISC ?? '').trim();
-    if (!titulo || !disc) return false;
-    return !titulo.toLowerCase().includes(disc.toLowerCase());
-  });
-
-  // ─── relatório ────────────────────────────────────────────────────────────
-  const por = (s: Situacao): Achado[] => achados.filter((a) => a.situacao === s);
-  const p = (t = ''): void => console.log(t);
+function imprimir(r: RelatorioDeTurmas, tudo: boolean): void {
+  const por = (s: Situacao) => r.achados.filter((a) => a.situacao === s);
 
   p('');
   p('══════════════════════════════════════════════════════════════════');
   p('  Reconciliação de turma-disciplina — RM × de-para');
   p('  SOMENTE LEITURA. Nada foi criado, arquivado ou alterado.');
   p('══════════════════════════════════════════════════════════════════');
-  p(`  campus ${cfg.rm.escopo.filiais}   coligada ${cfg.rm.escopo.coligada}   IDPERLET ${perlet}`);
+  p(`  campus ${cfg.rm.escopo.filiais}   coligada ${cfg.rm.escopo.coligada}   IDPERLET ${r.idPerlet}`);
   p('');
-  p(`  turma-disciplina no RM (campus)        ${doRm.length}`);
-  p(`  do período letivo corrente             ${doPerlet.length}`);
-  p(`  mapeamentos COURSE ativos              ${mapeadas.size}`);
-  p(`  mapeamentos COURSE arquivados          ${jaArquivadas.size}`);
+  p(`  turma-disciplina no RM (campus)        ${r.lidasDoRm}`);
+  p(`  do período letivo corrente             ${r.doPeriodoCorrente}`);
+  p(`  mapeamentos COURSE ativos              ${r.mapeadasAtivas}`);
+  p(`  mapeamentos COURSE arquivados          ${r.mapeadasArquivadas}`);
   p('');
   p('── situação ──────────────────────────────────────────────────────');
   const ordem: Situacao[] = [
@@ -212,11 +63,26 @@ async function main(): Promise<void> {
   for (const s of ordem) {
     const n = por(s).length;
     if (n === 0) continue;
-    const marca = ['NOVA_COM_ALUNOS', 'REATIVADA_NO_RM', 'SUMIU_DO_RM'].includes(s) ? '⚠' : ' ';
-    p(`  ${marca} ${s.padEnd(20)} ${String(n).padStart(4)}`);
+    p(`  ${EXIGEM_DECISAO.includes(s) ? '⚠' : ' '} ${s.padEnd(20)} ${String(n).padStart(4)}`);
   }
 
-  const precisaAcao = [...por('NOVA_COM_ALUNOS'), ...por('REATIVADA_NO_RM'), ...por('SUMIU_DO_RM')];
+  // A conta do de-para, SEMPRE — não só quando quebra. Um número que só aparece
+  // no erro não ensina ninguém a lê-lo.
+  const c = r.contaDoDePara;
+  p('');
+  p(`  conta do de-para: ${c.classificadas} classificada(s) de ${c.mapeadasAtivas} mapeada(s) ativa(s) ${c.fecha ? '✓' : '✗ NÃO FECHA'}`);
+  if (!c.fecha) {
+    p('      Uma turma mapeada foi classificada duas vezes, ou nenhuma. O resto');
+    p('      deste relatório não é confiável — investigue antes de agir.');
+  }
+  if (r.semSinalDeAlunos) {
+    p('');
+    p('  ⚠ sem o sinal de alunos por turma: nenhuma turma nova foi classificada');
+    p('    como "sem aluno", porque afirmar isso sem medir esconderia justamente');
+    p('    a turma que este relatório existe para achar.');
+  }
+
+  const precisaAcao = exigemDecisao(r);
   if (precisaAcao.length) {
     p('');
     p('── ⚠ PRECISA DE AÇÃO ─────────────────────────────────────────────');
@@ -252,15 +118,15 @@ async function main(): Promise<void> {
     }
   }
 
-  if (renomeadas.length) {
+  if (r.renomeadas.length) {
     p('');
     p('── ⚠ título no Toddle não contém mais o nome da disciplina do RM ──');
     p('  Pode ser renomeação no RM, ou título montado com outro critério.');
-    for (const r of renomeadas.slice(0, 10)) {
-      p(`  ${r.IDTURMADISC}: RM="${r.NOMEDISC}"`);
-      p(`      Toddle="${tituloPorTd.get(r.IDTURMADISC)}"`);
+    for (const x of r.renomeadas.slice(0, 10)) {
+      p(`  ${x.idTurmaDisc}: RM="${x.noRm}"`);
+      p(`      Toddle="${x.noToddle}"`);
     }
-    if (renomeadas.length > 10) p(`  … e ${renomeadas.length - 10} outra(s)`);
+    if (r.renomeadas.length > 10) p(`  … e ${r.renomeadas.length - 10} outra(s)`);
   }
 
   p('');
@@ -275,9 +141,22 @@ async function main(): Promise<void> {
   p('');
 }
 
+async function main(): Promise<void> {
+  const tudo = process.argv.includes('--tudo');
+  imprimir(await reconciliarTurmas(), tudo);
+}
+
 main()
   .catch((error) => {
-    logger.error({ err: error }, 'reconciliar:turmas falhou');
+    if (error instanceof LeituraDeTurmasQuebrada) {
+      p('');
+      p('  A LEITURA está quebrada — "sem deriva" seria mentira, então nada foi relatado.');
+      p(`  ${error.message}`);
+      p(`  Como resolver: ${error.comoResolver}`);
+      p('');
+    } else {
+      logger.error({ err: error }, 'reconciliar:turmas falhou');
+    }
     process.exitCode = 1;
   })
   .finally(() => pgPool.end());
