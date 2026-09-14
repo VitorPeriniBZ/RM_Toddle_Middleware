@@ -75,6 +75,17 @@ export interface RelatorioDeTurmas {
   renomeadas: Array<{ idTurmaDisc: string; noRm: string; noToddle: string }>;
   /** `true` quando a medição de alunos por turma não pôde ser feita. */
   semSinalDeAlunos: boolean;
+  /**
+   * A conta do DE-PARA: toda turma mapeada e ativa é exatamente uma de três —
+   * casou e está ativa no RM (`OK`), casou e foi inativada (`INATIVADA_NO_RM`),
+   * ou não casou com nada (`SUMIU_DO_RM`). A soma TEM de ser `mapeadasAtivas`.
+   *
+   * Existe porque a primeira versão reportou as MESMAS 186 turmas como `OK` e
+   * como `SUMIU_DO_RM` na mesma passada, e nenhum dos outros números denunciou:
+   * `lidasDoRm`, `doPeriodoCorrente` e `naoClassificadas` estavam todos certos.
+   * Contar de um lado só deixa a contradição invisível.
+   */
+  contaDoDePara: { mapeadasAtivas: number; classificadas: number; fecha: boolean };
 }
 
 /** Leitura impossível — ver "o que derruba" no cabeçalho. */
@@ -120,8 +131,6 @@ export async function reconciliarTurmas(): Promise<RelatorioDeTurmas> {
 
   const ativos = await idMappingRepository.listByType('COURSE', 'active');
   const arquivados = await idMappingRepository.listByType('COURSE', 'archived');
-  const mapeadas = new Map(ativos.map((c) => [c.rmCode, c]));
-
   const chaveDe = (r: { CODTURMA?: string; CODDISC?: string }): string =>
     chaveCourse(periodoLetivo, String(r.CODTURMA ?? ''), String(r.CODDISC ?? ''));
   const alvoDe = (r: { IDTURMADISC?: string; CODTURMA?: string; CODDISC?: string }) => ({
@@ -181,11 +190,22 @@ export async function reconciliarTurmas(): Promise<RelatorioDeTurmas> {
   }
 
   const achados: Achado[] = [];
-  const vistas = new Set<string>();
+  /*
+   * O que casou é rastreado pelo `toddleId`, NUNCA pela chave do de-para.
+   *
+   * A primeira versão guardava a chave NATURAL das turmas vistas e comparava com
+   * as chaves de `id_mapping` — que hoje ainda são IDTURMADISC, porque a
+   * migração de convenção não terminou. Nenhuma chave casava, e a passada em
+   * produção reportou as MESMAS 186 turmas como `OK` e como `SUMIU_DO_RM` ao
+   * mesmo tempo: a comparação de ida usava o resolvedor (que aceita as duas
+   * convenções) e a de volta usava só uma delas.
+   *
+   * O `toddleId` é o único identificador que as duas convenções compartilham, e
+   * por isso a comparação por ele vale durante e depois da migração.
+   */
+  const casados = new Set<string>();
 
   for (const r of doPerlet) {
-    const chave = chaveDe(r);
-    vistas.add(chave);
     const ativaNoRm = (r.ATIVA ?? '').toUpperCase() === 'S';
     const alunos = alunosPorTd.get(r.IDTURMADISC)?.size ?? 0;
     const base: Achado = {
@@ -200,7 +220,9 @@ export async function reconciliarTurmas(): Promise<RelatorioDeTurmas> {
       alteradoEm: soData(r.RECMODIFIEDON),
     };
 
-    if (estaMapeada(alvoDe(r)).toddleId) {
+    const mapeada = estaMapeada(alvoDe(r)).toddleId;
+    if (mapeada) {
+      casados.add(mapeada);
       achados.push({ ...base, situacao: ativaNoRm ? 'OK' : 'INATIVADA_NO_RM' });
     } else if (estaArquivada(alvoDe(r)).toddleId) {
       if (ativaNoRm) achados.push({ ...base, situacao: 'REATIVADA_NO_RM' });
@@ -214,10 +236,12 @@ export async function reconciliarTurmas(): Promise<RelatorioDeTurmas> {
     }
   }
 
-  // Mapeada e ausente do RM: não há linha de onde tirar o IDTURMADISC, então a
-  // chave do de-para é o que se mostra — e é mais legível de qualquer forma.
-  for (const [chave] of mapeadas) {
-    if (!vistas.has(chave)) achados.push({ situacao: 'SUMIU_DO_RM', idTurmaDisc: chave });
+  // Mapeada e ausente do RM. Não há linha de onde tirar o IDTURMADISC, então o
+  // que se mostra é a chave do de-para — que é mais legível de qualquer forma.
+  for (const m of ativos) {
+    if (!casados.has(m.toddleId)) {
+      achados.push({ situacao: 'SUMIU_DO_RM', idTurmaDisc: m.rmCode });
+    }
   }
 
   // Deriva de rótulo: o título no Toddle ainda contém o nome da disciplina?
@@ -244,6 +268,9 @@ export async function reconciliarTurmas(): Promise<RelatorioDeTurmas> {
   const porSituacao: Record<string, number> = {};
   for (const a of achados) porSituacao[a.situacao] = (porSituacao[a.situacao] ?? 0) + 1;
 
+  const classificadasDoDePara =
+    (porSituacao.OK ?? 0) + (porSituacao.INATIVADA_NO_RM ?? 0) + (porSituacao.SUMIU_DO_RM ?? 0);
+
   return {
     idPerlet: perlet,
     lidasDoRm: doRm.length,
@@ -254,6 +281,11 @@ export async function reconciliarTurmas(): Promise<RelatorioDeTurmas> {
     porSituacao,
     renomeadas,
     semSinalDeAlunos,
+    contaDoDePara: {
+      mapeadasAtivas: ativos.length,
+      classificadas: classificadasDoDePara,
+      fecha: classificadasDoDePara === ativos.length,
+    },
   };
 }
 

@@ -161,9 +161,28 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
        * upsert é idempotente e barato, e é ele que fecha a janela em que o Redis
        * perdeu o registro sem ninguém notar.
        */
-      const observadoConfere = Boolean(
-        obs && linha && obs.cron === linha.cron && obs.tz === linha.timezone,
-      );
+      /*
+       * ─── FLUXO DESLIGADO E SEM SCHEDULER É CONCORDÂNCIA ────────────────────
+       *
+       * A versão anterior exigia um `obs` para dizer que os dois lados
+       * conferem, então todo fluxo DESLIGADO aparecia com `≠` na tela — e
+       * "desligado no banco, ausente no Redis" é exatamente o estado correto de
+       * um fluxo desligado, não uma divergência.
+       *
+       * O sinal era só cosmético (a lista `divergencias` acima já acertava, e o
+       * contador do topo dizia "sem pendência"), mas cosmético é o que se lê de
+       * relance: um `≠` ao lado do fluxo que ESCREVE FREQUÊNCIA convida a
+       * "consertar" algo que está certo. Alarme em cima do desenho correto é o
+       * erro que este arquivo já documenta na nota sobre revisão pendente.
+       *
+       * `naoObservavel` fica de fora nos dois casos: não ler o Redis não é
+       * concordar com ele.
+       */
+      const observadoConfere =
+        !naoObservavel &&
+        (linha?.ativo
+          ? Boolean(obs && obs.cron === linha.cron && obs.tz === linha.timezone)
+          : !obs);
       const revisaoPendente = Boolean(linha && linha.revisaoAplicada !== linha.revisao);
 
       return {
