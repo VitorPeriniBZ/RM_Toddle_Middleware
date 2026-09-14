@@ -48,8 +48,18 @@ export async function encerrarSessao(): Promise<void> {
   await pedir('/auth/sair', 'POST');
 }
 
-/** Há sessão válida? Lança `ApiError` 401 quando não há. */
-export async function quemSouEu(): Promise<{ subject: string; email: string | null }> {
+/**
+ * Há sessão válida? Lança `ApiError` 401 quando não há.
+ *
+ * Devolve também os PAPÉIS, que é o que permite a tela não desenhar uma aba que
+ * a pessoa não pode abrir. Esconder a aba é cortesia; a porta continua trancada
+ * do lado do servidor, em cada rota.
+ */
+export async function quemSouEu(): Promise<{
+  subject: string;
+  email: string | null;
+  papeis: Papel[];
+}> {
   return pedir('/auth/eu');
 }
 
@@ -212,6 +222,43 @@ export interface EventoDeAuditoria {
   quem?: string;
 }
 
+// ─── Acessos ────────────────────────────────────────────────────────────────
+
+/** Os cinco papéis do CHECK de `membership` (migration 006). */
+export type Papel =
+  | 'viewer'
+  | 'mapping_manager'
+  | 'integration_operator'
+  | 'approver'
+  | 'tenant_admin';
+
+export interface PessoaComAcesso {
+  userIdentityId: string;
+  provider: string;
+  subject: string;
+  email: string | null;
+  nome: string | null;
+  papeis: Papel[];
+}
+
+export interface PessoaAguardando {
+  userIdentityId: string;
+  provider: string;
+  subject: string;
+  email: string | null;
+  nome: string | null;
+  /** Quando ela tentou entrar pela primeira vez. */
+  desde: string;
+}
+
+export interface PainelDeAcessos {
+  papeis: Papel[];
+  comAcesso: PessoaComAcesso[];
+  aguardando: PessoaAguardando[];
+  /** Quantos têm `tenant_admin`. Com 1, remover o papel é recusado. */
+  administradores: number;
+}
+
 export const api = {
   authConfig: () => pedir<AuthConfig>('/auth/config'),
   health: () => pedir<{
@@ -251,6 +298,17 @@ export const api = {
       antes: AgendaDoFluxo; depois: AgendaDoFluxo; proximosDisparos: string[]; aplicacao: string;
     }>(`/agenda/${encodeURIComponent(flowKey)}`, 'PUT', mudanca),
   auditoria: (limite = 40) => pedir<{ eventos: EventoDeAuditoria[] }>(`/auditoria?limite=${limite}`),
+
+  // ─── Acessos ──────────────────────────────────────────────────────────────
+  acessos: () => pedir<PainelDeAcessos>('/acessos'),
+  conceder: (userIdentityId: string, papel: Papel, motivo?: string) =>
+    pedir<{ ok: boolean; jaTinha: boolean; papel: Papel }>('/acessos', 'POST', {
+      userIdentityId, papel, motivo,
+    }),
+  revogar: (userIdentityId: string, papel: Papel, motivo?: string) =>
+    pedir<{ ok: boolean; naoTinha: boolean; papel: Papel }>('/acessos/revogar', 'POST', {
+      userIdentityId, papel, motivo,
+    }),
 
   // ─── De-para ──────────────────────────────────────────────────────────────
   buscarMapeamentos: (q: string) =>

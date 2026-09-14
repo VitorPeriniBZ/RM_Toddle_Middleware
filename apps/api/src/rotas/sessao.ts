@@ -124,11 +124,36 @@ export async function registrarRotasDeSessao(app: FastifyInstance): Promise<void
    * tela usa isso para decidir entre a agenda e a tela de login.
    */
   app.get('/auth/eu', async (req, reply) => {
-    const subject = req.identidade?.subject;
-    if (!subject) return reply.code(401).send({ erro: 'sem sessão' });
+    const identidade = req.identidade;
+    if (!identidade?.subject) return reply.code(401).send({ erro: 'sem sessão' });
+    const subject = identidade.subject;
+
+    /*
+     * Os PAPÉIS vão junto, e isso muda o que a tela consegue fazer.
+     *
+     * Sem eles a tela tinha de desenhar todas as abas e descobrir pelo 403 quais
+     * não eram dela — o que transforma "abrir a aba errada" num erro vermelho em
+     * vez de numa aba que simplesmente não existe para aquela pessoa. Pior na
+     * aba de Acessos, cuja mera existência sugere um poder que a maioria não tem.
+     *
+     * Isto NÃO é a autorização: cada rota continua exigindo o papel do lado do
+     * servidor. Esconder a aba é cortesia com quem usa; a porta continua
+     * trancada por dentro.
+     *
+     * No modo de desenvolvimento não há identidade federada e a lista vem vazia —
+     * a tela trata `authMode === 'localhost'` como "pode tudo", coerente com o
+     * que `exigirPapel` já faz.
+     */
+    const papeis = identidade.semAutenticacao
+      ? []
+      : await papeisDoUsuario(
+          await identidadeDoGoogle({ subject, email: identidade.email, nome: identidade.nome }),
+        );
+
     return {
       subject,
-      email: req.identidade?.email ?? null,
+      email: identidade.email ?? null,
+      papeis,
       expiraEm: req.sessao?.expiraEm ?? null,
       ociosoAte: req.sessao?.ociosoAte ?? null,
     };

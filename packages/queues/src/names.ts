@@ -46,3 +46,22 @@ export const STAFF_JOB = {
 export const TERM_GRADE_JOB = {
   SYNC: 'term-grades.sync',
 } as const;
+
+/**
+ * Job de TURMA E DISCIPLINA (RM -> de-para). SOMENTE LEITURA.
+ *
+ * O nome diz `sync` por convenção das filas, mas ele não sincroniza nada: o
+ * Toddle não tem DELETE de turma, só arquivar, então criar turma automaticamente
+ * seria a única ação irreversível deste projeto. Ele DETECTA a deriva e para aí.
+ */
+export const COURSE_JOB = {
+  SYNC: 'courses.sync',
+} as const;
+
+/**
+ * Job de FREQUÊNCIA (Toddle -> RM). A segunda escrita agendada em registro
+ * acadêmico, atrás dos mesmos quatro guardas que o CLI usa.
+ */
+export const ATTENDANCE_JOB = {
+  SYNC: 'attendance.sync',
+} as const;

@@ -1,5 +1,5 @@
 import { QUEUE } from './names';
-import { STAFF_JOB, STUDENT_JOB, TERM_GRADE_JOB } from './names';
+import { ATTENDANCE_JOB, COURSE_JOB, STAFF_JOB, STUDENT_JOB, TERM_GRADE_JOB } from './names';
 
 /**
  * CATÁLOGO DOS FLUXOS — o que a tela de agendamento pode agendar.
@@ -37,6 +37,8 @@ export const FLOW = {
   ALUNOS: 'students.sync',
   PROFESSORES: 'staff.sync',
   NOTAS: 'term-grades.sync',
+  TURMAS: 'courses.sync',
+  FREQUENCIA: 'attendance.sync',
 } as const;
 
 export type FlowKey = (typeof FLOW)[keyof typeof FLOW];
@@ -156,13 +158,56 @@ export const FLUXOS: Record<FlowKey, Fluxo> = {
       'Nota já lançada por um humano no RM não é sobrescrita — vira pendência. ' +
       'Se NOTA_SYNC_ATIVO estiver false, o job encerra sem tocar no RM.',
   },
+  [FLOW.TURMAS]: {
+    key: FLOW.TURMAS,
+    rotulo: 'Turma e disciplina (RM → Toddle)',
+    fila: QUEUE.RM_TO_TODDLE_COURSES,
+    job: COURSE_JOB.SYNC,
+    // Lê o RM e, para conferir deriva de rótulo, lista as turmas do Toddle —
+    // então gasta da mesma janela de 300s que os outros três.
+    recursoDisputado: RECURSO.TODDLE,
+    // Mesma conta dos fluxos de cadastro: em intervalos desiguais ao longo do
+    // dia, a maior janela sem disparo é a da madrugada.
+    janelaSemSucessoHoras: 13,
+    // Pode ativar sem receio porque ele NÃO ESCREVE. O Toddle não tem DELETE de
+    // turma, só arquivar; criar turma automaticamente seria a única ação
+    // irreversível deste projeto, e é justamente a que ele não faz.
+    podeAtivar: true,
+    avisoAoExecutarAgora:
+      'SOMENTE LEITURA. Compara as turma-disciplina do RM com o de-para e relata a deriva — ' +
+      'turma nova com aluno, turma reativada, turma que sumiu. Não cria, não arquiva e não ' +
+      'altera nada, nem no RM nem no Toddle. CONSOME COTA da janela de 300s do Toddle, porque ' +
+      'lista as turmas de lá para conferir o título.',
+  },
+  [FLOW.FREQUENCIA]: {
+    key: FLOW.FREQUENCIA,
+    rotulo: 'Frequência (Toddle → RM)',
+    fila: QUEUE.TODDLE_TO_RM_ATTENDANCE,
+    job: ATTENDANCE_JOB.SYNC,
+    recursoDisputado: RECURSO.TODDLE,
+    // Falta lançada hoje precisa chegar ao RM hoje; mas o poll é por JANELA de
+    // dias, então perder uma passada não perde dado — a seguinte reprocessa a
+    // mesma janela. Daí a folga maior que a da nota.
+    janelaSemSucessoHoras: 13,
+    // Ligar aqui NÃO faz nada sozinho: `FREQ_SYNC_ATIVO` precisa estar `true`, e
+    // o processador confere de novo por dentro. Dois interruptores de propósito,
+    // um para a escola e outro para quem opera — igual à via de nota.
+    podeAtivar: true,
+    avisoAoExecutarAgora:
+      'ESCREVE NO REGISTRO ACADÊMICO. Envia a chamada lançada no Toddle para o TOTVS RM ' +
+      '(SFREQUENCIA). O TOTVS é a fonte de verdade da frequência e já tem ~14,6 mil faltas ' +
+      'lançadas à mão: falta marcada por um humano NÃO é sobrescrita — vira pendência. Se ' +
+      'FREQ_SYNC_ATIVO estiver false, o job encerra sem tocar no RM.',
+  },
 };
 
 /** Lista na ordem em que a tela mostra. */
 export const FLUXOS_EM_ORDEM: Fluxo[] = [
   FLUXOS[FLOW.ALUNOS],
   FLUXOS[FLOW.PROFESSORES],
+  FLUXOS[FLOW.TURMAS],
   FLUXOS[FLOW.NOTAS],
+  FLUXOS[FLOW.FREQUENCIA],
 ];
 
 /** `undefined` quando a chave não é de fluxo nenhum — a API responde 400 com a lista. */

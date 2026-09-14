@@ -59,7 +59,32 @@ async function identidade(sufixo: string): Promise<string> {
   return rows[0].id;
 }
 
+/**
+ * ZERA os papéis do tenant da suíte antes de cada teste.
+ *
+ * ─── POR QUE APAGAR TUDO, E NÃO SÓ O QUE ESTE ARQUIVO CRIOU ─────────────────
+ *
+ * `quantosPodemAprovar` conta o TENANT INTEIRO, e é esse número que decide se a
+ * auto-aprovação é recusada. Limpar só o próprio prefixo deixa cada arquivo à
+ * mercê do que os outros esquecerem: três arquivos desta suíte criam papel de
+ * aprovação, e a falha resultante aparece como "expected true to be false", sem
+ * nada apontando para a causa. Foi assim que uma falha intermitente sobreviveu
+ * dias — passava dez vezes isolada e caía na suíte inteira.
+ *
+ * É seguro apagar tudo porque o tenant é EXCLUSIVO da suíte: o `globalSetup`
+ * recusa subir se `TENANT_SLUG` não for `integracao-teste`, justamente para que
+ * limpezas como esta nunca alcancem a escola de verdade.
+ */
+async function zerarPapeisDoTenantDeTeste(): Promise<void> {
+  await pgPool.query(
+    `delete from membership where tenant_id in
+       (select id from tenant where slug = $1)`,
+    [tenantConfig.slug],
+  );
+}
+
 const limpar = async (): Promise<void> => {
+  await zerarPapeisDoTenantDeTeste();
   // Ordem obrigatória: approval.operation_id é ON DELETE RESTRICT, e o RESTRICT
   // é proposital — aprovação órfã seria registro de decisão sem a decisão.
   await pgPool.query(

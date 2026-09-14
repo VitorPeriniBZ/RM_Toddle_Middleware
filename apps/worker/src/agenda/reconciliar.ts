@@ -93,6 +93,16 @@ export async function semearDoAmbiente(): Promise<string[]> {
         return { cron: cronDoProfessor(env.STUDENTS_SYNC_CRON), ativo: true };
       case 'term-grades.sync':
         return { cron: env.NOTA_SYNC_CRON, ativo: env.NOTA_SYNC_ATIVO };
+      // Nasce LIGADO, e é a única exceção ao fail-closed do default abaixo:
+      // ele não escreve em lugar nenhum — compara o RM com o de-para e relata.
+      // Deixá-lo desligado seria manter a deriva invisível, que é o problema
+      // que ele existe para resolver.
+      case 'courses.sync':
+        return { cron: env.TURMAS_SYNC_CRON, ativo: true };
+      // Nasce DESLIGADO salvo decisão explícita da escola: escreve em registro
+      // acadêmico, e o TOTVS é a fonte de verdade da frequência.
+      case 'attendance.sync':
+        return { cron: env.FREQ_SYNC_CRON, ativo: env.FREQ_SYNC_ATIVO };
       default:
         // Fluxo novo no catálogo sem semente declarada nasce DESLIGADO, com um
         // cron plausível. Fail-closed: um fluxo que ninguém decidiu ligar não

@@ -295,6 +295,67 @@ function checar(): Checagem[] {
     });
   }
 
+  // ─── A via de FREQUÊNCIA, se estiver ligada ───────────────────────────────
+  //
+  // Mesma checagem que a da nota, pelo mesmo motivo — e um a mais: escrever
+  // frequência pode APAGAR ausência lançada por um professor, porque
+  // `PRESENCA='P'` remove a linha da SFREQUENCIA em vez de sobrescrever um
+  // valor. Quem lê "preflight aprovado" precisa saber que este ambiente faz
+  // isso sozinho.
+  if (env.FREQ_SYNC_ATIVO) {
+    c.push({
+      nome: 'FREQ_SYNC_ATIVO (escrita AGENDADA de frequência no RM)',
+      ok: true,
+      detalhe:
+        `LIGADA — cron "${env.FREQ_SYNC_CRON}", janela de ${env.FREQ_SYNC_DIAS} dia(s) para ` +
+        'trás. Este ambiente escreve frequência no RM sem intervenção humana, atrás dos ' +
+        'quatro guardas. O TOTVS é a fonte de verdade da frequência.',
+      fatal: false,
+    });
+
+    // Mesma lacuna que quebrou o staff.sync em 10/08: Sentença `.optional()` no
+    // schema, obrigatória quando o job que a usa está agendado.
+    c.push({
+      nome: 'RM_SENTENCA_FREQUENCIA (exigida por FREQ_SYNC_ATIVO)',
+      ok: Boolean(cfg.rm.sentencas.frequencia),
+      detalhe: cfg.rm.sentencas.frequencia
+        ? String(cfg.rm.sentencas.frequencia)
+        : 'AUSENTE com a via de frequência LIGADA — sem ela não dá para ler o estado atual ' +
+          'do RM, e a decisão por linha (que impede apagar falta de professor) não tem ' +
+          'entrada. Configure a Sentença ou desligue FREQ_SYNC_ATIVO.',
+      fatal: true,
+    });
+
+    // Um campus por vez: o contexto do wsDataServer exige UM CODFILIAL, e o
+    // serviço recusa em tempo de execução. Descobrir isso na primeira passada
+    // agendada — de madrugada — é pior do que descobrir no deploy.
+    c.push({
+      nome: 'RM_CODFILIAL único (exigido pela escrita de frequência)',
+      ok:
+        cfg.rm.escopo.filiais.toUpperCase() !== 'ALL' &&
+        cfg.rm.escopo.filiais.split(',').filter((x) => x.trim()).length === 1,
+      detalhe:
+        cfg.rm.escopo.filiais.toUpperCase() === 'ALL'
+          ? 'RM_CODFILIAL="ALL" com a via de frequência LIGADA — o contexto do wsDataServer ' +
+            'exige UM CODFILIAL, e o job falharia em toda passada'
+          : `CODFILIAL=${cfg.rm.escopo.filiais}`,
+      fatal: true,
+    });
+
+    // Sem monitor, uma escrita automática que para de rodar é invisível — e
+    // aqui o desfecho é pior que no boletim: a escola supõe que a frequência do
+    // aluno está lá, e o cálculo dos 75% usa o que existe.
+    c.push({
+      nome: 'HEARTBEAT_URL_FREQUENCIA (alerta da via de frequência)',
+      ok: Boolean(env.HEARTBEAT_URL_FREQUENCIA),
+      detalhe: env.HEARTBEAT_URL_FREQUENCIA
+        ? 'configurado'
+        : 'vazio — se a via de frequência parar, ninguém é avisado, e a falta lançada no ' +
+          'Toddle simplesmente não chega ao RM',
+      fatal: false,
+    });
+  }
+
   c.push({
     nome: 'TODDLE_DEFAULT_YEAR_GROUP_ID',
     ok: Boolean(cfg.toddle.yearGroupPadrao),

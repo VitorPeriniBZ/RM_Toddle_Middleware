@@ -13,7 +13,9 @@ import {
 } from './studentSync.processor';
 import { processStaffSync } from './staffSync.processor';
 import { processTermGradesSync } from '../toddle-to-rm/termGrades.processor';
-import { STAFF_JOB, TERM_GRADE_JOB } from '@rm-toddle/queues';
+import { processAttendanceSync } from '../toddle-to-rm/attendance.processor';
+import { processCourseSync } from './courseSync.processor';
+import { ATTENDANCE_JOB, COURSE_JOB, STAFF_JOB, TERM_GRADE_JOB } from '@rm-toddle/queues';
 import { env, heartbeat, logger } from '@rm-toddle/config';
 
 /**
@@ -111,10 +113,92 @@ const termGradesWorker = new Worker(
   { connection: redisConnection, concurrency: 1 },
 );
 
+/**
+ * Worker da fila `rm-to-toddle.courses` — TURMA E DISCIPLINA, somente leitura.
+ *
+ * Quarta fila no mesmo processo, pelo mesmo motivo das outras: o volume é ínfimo
+ * (uma passada por dia, ~670 turma-disciplina lidas de uma vez) e um container
+ * próprio traria supervisão, deploy e log duplicados para nada.
+ *
+ * `concurrency: 1`: duas reconciliações simultâneas leriam o mesmo RM e
+ * chegariam ao mesmo relatório, gastando duas vezes a janela de 300s do Toddle
+ * para nada.
+ */
+const coursesWorker = new Worker(
+  QUEUE.RM_TO_TODDLE_COURSES,
+  async (job: Job) => {
+    switch (job.name) {
+      case COURSE_JOB.SYNC:
+        return processCourseSync(job);
+      default:
+        throw new Error(`Job desconhecido na fila de turmas: ${job.name}`);
+    }
+  },
+  { connection: redisConnection, concurrency: 1 },
+);
+
+/**
+ * Worker da fila `toddle-to-rm.attendance` — a VIA DE VOLTA da frequência.
+ *
+ * `concurrency: 1`, e aqui isso NÃO é economia, é correção: duas passadas
+ * simultâneas leriam o mesmo estado do RM, decidiriam em cima dele e escreveriam
+ * as mesmas chaves — o guarda de proveniência veria "não é nosso" nas duas e o
+ * resultado dependeria da ordem. Pior que na nota, porque `PRESENCA='P'` REMOVE
+ * a falta em vez de sobrescrever um valor.
+ */
+const attendanceWorker = new Worker(
+  QUEUE.TODDLE_TO_RM_ATTENDANCE,
+  async (job: Job) => {
+    switch (job.name) {
+      case ATTENDANCE_JOB.SYNC:
+        return processAttendanceSync(job);
+      default:
+        throw new Error(`Job desconhecido na fila de frequência: ${job.name}`);
+    }
+  },
+  { connection: redisConnection, concurrency: 1 },
+);
+
 // Jobs que esgotarem as 3 tentativas vão para a fila 'dead-letter'.
 wireDeadLetterQueue(worker, QUEUE.RM_TO_TODDLE_STUDENTS);
 wireDeadLetterQueue(staffWorker, QUEUE.RM_TO_TODDLE_STAFF);
 wireDeadLetterQueue(termGradesWorker, QUEUE.TODDLE_TO_RM_TERM_GRADES);
+wireDeadLetterQueue(coursesWorker, QUEUE.RM_TO_TODDLE_COURSES);
+wireDeadLetterQueue(attendanceWorker, QUEUE.TODDLE_TO_RM_ATTENDANCE);
+
+coursesWorker.on('completed', (job, result) => {
+  logger.info({ jobId: job.id, jobName: job.name, result }, 'Job de turma concluído');
+});
+coursesWorker.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, jobName: job?.name, attemptsMade: job?.attemptsMade, err: err.message },
+    'Job de turma falhou',
+  );
+});
+coursesWorker.on('error', (err) => {
+  logger.error({ err }, 'Erro no worker de turmas');
+});
+
+attendanceWorker.on('completed', (job, result) => {
+  logger.info({ jobId: job.id, jobName: job.name, result }, 'Job de frequência concluído');
+  void heartbeat.frequencia('sucesso', { jobName: job.name });
+});
+attendanceWorker.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, jobName: job?.name, attemptsMade: job?.attemptsMade, err: err.message },
+    'Job de frequência falhou',
+  );
+  // Só depois de esgotar as tentativas: pingar `/fail` na primeira faria o
+  // monitor alertar por erro de rede que a segunda resolveria — e alerta que
+  // grita por nada é alerta que passa a ser ignorado.
+  //
+  // Divergência de integridade NÃO chega aqui: o processador não lança, para não
+  // reenviar escrita que pode ter sido aplicada. Ela aparece no run `failed`.
+  if (esgotouTentativas(job)) void heartbeat.frequencia('falha', { jobName: job?.name });
+});
+attendanceWorker.on('error', (err) => {
+  logger.error({ err }, 'Erro no worker de frequência');
+});
 
 termGradesWorker.on('completed', (job, result) => {
   logger.info({ jobId: job.id, jobName: job.name, result }, 'Job de nota concluído');
@@ -179,8 +263,18 @@ worker.on('error', (err) => {
 
 logger.info(
   {
-    filas: [QUEUE.RM_TO_TODDLE_STUDENTS, QUEUE.RM_TO_TODDLE_STAFF, QUEUE.TODDLE_TO_RM_TERM_GRADES],
+    filas: [
+      QUEUE.RM_TO_TODDLE_STUDENTS,
+      QUEUE.RM_TO_TODDLE_STAFF,
+      QUEUE.RM_TO_TODDLE_COURSES,
+      QUEUE.TODDLE_TO_RM_TERM_GRADES,
+      QUEUE.TODDLE_TO_RM_ATTENDANCE,
+    ],
     notaSyncAtivo: env.NOTA_SYNC_ATIVO,
+    // As duas escritas em registro acadêmico aparecem na PRIMEIRA linha do log
+    // do worker, de propósito: "este processo escreve no RM?" é a pergunta que
+    // se faz olhando um container que acabou de subir.
+    freqSyncAtivo: env.FREQ_SYNC_ATIVO,
   },
   'Worker iniciado',
 );
@@ -194,9 +288,17 @@ async function shutdown(signal: string): Promise<void> {
     // encerramento gracioso vira `kill -9` depois do stop_grace_period.
     pararVigia();
     await pararAgendamento();
-    // Os TRÊS workers: sem fechar o de professor, o SIGTERM mataria um job em
-    // andamento no meio de uma escrita no Toddle.
-    await Promise.all([worker.close(), staffWorker.close(), termGradesWorker.close()]);
+    // TODOS os workers, e a lista precisa crescer junto com eles: um worker
+    // esquecido aqui é um job morto no meio de uma escrita no Toddle ou no RM
+    // quando o container reinicia — que é exatamente o estado ambíguo que o
+    // `SaveRecord` sem resposta já produz sozinho.
+    await Promise.all([
+      worker.close(),
+      staffWorker.close(),
+      termGradesWorker.close(),
+      coursesWorker.close(),
+      attendanceWorker.close(),
+    ]);
     await closeAllQueues();
     await closeRmSqlPool();
     await pgPool.end();
