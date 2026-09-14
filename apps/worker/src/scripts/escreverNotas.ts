@@ -76,6 +76,7 @@ function imprimir(r: RelatorioNotas, executar: boolean): void {
   p(`  data de ref.   ${r.dataRef}   (teste de janela da D2)`);
   p(`  configVersion  ${r.configVersion}`);
   p(`  run            ${r.chaveRun}`);
+  p(`  aprovação      ${r.chaveDeAprovacao}`);
   p('');
   p('── o que o Toddle tem ────────────────────────────────────────────');
   p(`  alunos lidos                    ${r.origem.alunos}`);
@@ -127,7 +128,7 @@ function imprimir(r: RelatorioNotas, executar: boolean): void {
         '  Isto não é para ser aprovado — é para ser investigado. Confira o de-para e o escopo.',
       'precisa-aprovacao':
         'PRECISA APROVAÇÃO. O pedido foi registrado e nada foi enviado.\n' +
-        `  Aprove com: npm run aprovar -- --chave ${r.chaveRun} --quem SEU_NOME`,
+        `  Aprove com: npm run aprovar -- --chave ${r.chaveDeAprovacao} --quem SEU_NOME`,
       desligado: 'NOTA_SYNC_ATIVO=false. A via de nota está desligada para este tenant.',
     };
     p(`  ${razao[r.naoEscreveu]}`);

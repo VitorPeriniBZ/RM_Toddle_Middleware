@@ -94,7 +94,10 @@ export interface OpcoesSincronizacaoAvaliacoes {
 }
 
 export interface RelatorioAvaliacoes {
+  /** Identifica ESTA execução. Muda a cada disparo. */
   chaveRun: string;
+  /** Estável por (fluxo, escopo, dia). É esta que se aprova. */
+  chaveDeAprovacao: string;
   codFilial: string;
   configVersion: string;
   dataRef: string;
@@ -171,7 +174,26 @@ export async function sincronizarAvaliacoes(
   const codFilial = campusUnico();
   const versao = configVersion();
   const dataRef = op.dataRef ?? new Date().toISOString().slice(0, 10);
-  const chaveRun = `aval:${cfg.slug}:${codFilial}:${op.turma ?? 'todas'}:${dataRef}`;
+  /*
+   * ─── DUAS CHAVES, PORQUE SÃO DUAS PERGUNTAS ──────────────────────────────
+   *
+   * Havia uma só, e ela fazia dois trabalhos incompatíveis:
+   *
+   *   - a APROVAÇÃO precisa de chave ESTÁVEL por (fluxo, escopo, dia). Um
+   *     humano aprova "escrever as notas de hoje", e reexecutar no mesmo dia
+   *     tem de reusar aquela aprovação em vez de empilhar pedido novo.
+   *   - o RUN precisa de chave POR EXECUÇÃO. `abrirRun` faz UPSERT pela chave,
+   *     então com a chave do dia TODAS as passadas caíam na MESMA linha.
+   *
+   * O efeito, medido na tela: o histórico durável tinha 1 linha por dia em vez
+   * de 1 por execução, e a "duração" virava o tempo entre a primeira e a última
+   * passada do dia — o gráfico de Notas anunciava "maior terminado: 235 min"
+   * enquanto a lista logo acima mostrava execuções de 20 a 29 segundos.
+   *
+   * O instante do disparo é o que separa uma execução da seguinte.
+   */
+  const chaveDeAprovacao = `aval:${cfg.slug}:${codFilial}:${op.turma ?? 'todas'}:${dataRef}`;
+  const chaveRun = `${chaveDeAprovacao}:${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`;
 
   const progresso: AoProgredir = op.aoProgredir ?? (() => undefined);
   progresso({ fase: 'conferindo a organização do Toddle' });
@@ -378,6 +400,7 @@ export async function sincronizarAvaliacoes(
 
   const base: RelatorioAvaliacoes = {
     chaveRun,
+    chaveDeAprovacao,
     codFilial,
     configVersion: versao,
     dataRef,
@@ -462,9 +485,9 @@ export async function sincronizarAvaliacoes(
   if (!op.executar) return { ...base, naoEscreveu: 'ensaio' };
   if (lotes.length === 0) return registrarPassada('nada-a-escrever', 'succeeded');
   if (volume.veredito === 'RECUSADO') return registrarPassada('recusado-pelo-teto', 'failed');
-  if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveRun))) {
+  if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveDeAprovacao))) {
     await pedirAprovacao({
-      chave: chaveRun,
+      chave: chaveDeAprovacao,
       tipo: 'avaliacao_toddle_para_rm',
       payload: {
         codFilial,
