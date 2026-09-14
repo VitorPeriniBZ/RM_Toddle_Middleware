@@ -138,9 +138,16 @@ export async function verificarTokenDoGoogle(
     if (!hd || !aceitos.includes(hd)) {
       // Conta Google válida, mas de fora da escola.
       logger.warn({ hd, sub: payload.sub }, 'Token válido porém domínio não autorizado');
+      /*
+       * Mesma regra do 403 de papel (ver `corpoDeNegacao` em autorizacao.ts): o
+       * diagnóstico fica no log, acima, e a resposta não nomeia a variável de
+       * configuração nem diz QUAL domínio faltou. Dizer "seu domínio não está em
+       * GOOGLE_ALLOWED_HD" entrega o nome do controle a quem acabou de esbarrar
+       * nele, e distinguir "domínio errado" de "conta pessoal" já é informação
+       * sobre como a porta é fechada.
+       */
       await reply.code(403).send({
-        erro: 'Conta fora dos domínios autorizados',
-        detalhe: hd ? `domínio "${hd}" não está em GOOGLE_ALLOWED_HD` : 'token sem claim hd (conta pessoal?)',
+        erro: 'Esta conta não pode acessar o middleware. Use a conta da escola.',
       });
       return null;
     }
