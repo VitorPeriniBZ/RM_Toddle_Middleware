@@ -27,8 +27,15 @@ import { Acessos } from './painel/Acessos';
  * Autenticar com a conta da escola não dá acesso: quem pode o quê vive na tabela
  * `membership`, que nasce vazia. O primeiro acesso é concedido por script, de
  * fora — uma tela que pudesse conceder o primeiro papel a si mesma não seria uma
- * porta trancada. Por isso o 403 desta tela mostra o comando pronto em vez de só
- * dizer "sem permissão".
+ * porta trancada.
+ *
+ * O que esta tela mostra nesse caso é uma frase genérica, e só. Ela já mostrou o
+ * comando de bootstrap pronto, com o `subject` de quem pediu e `--papel
+ * tenant_admin` no fim, para ajudar quem estava travado. O público disso, porém,
+ * é toda conta do Workspace da escola — é esse o público do 403 — e a tela
+ * acabava ensinando o modelo de privilégios a quem acabou de ser recusado. O
+ * comando continua existindo, no LOG do servidor, onde quem o lê é quem tem
+ * acesso à máquina para executá-lo.
  */
 
 declare global {
@@ -58,7 +65,7 @@ export function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
   const [estado, setEstado] = useState<Estado>('carregando');
   const [erro, setErro] = useState<string | null>(null);
-  const [semAcesso, setSemAcesso] = useState<{ comoLiberar?: string; erro?: string } | null>(null);
+  const [semAcesso, setSemAcesso] = useState<{ erro?: string } | null>(null);
   const [aba, setAba] = useState<Aba>('agenda');
   /*
    * Os papéis de quem está olhando.
@@ -86,8 +93,8 @@ export function App() {
       setErro(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 403) {
-        const corpo = e.corpo as { erro?: string; comoLiberar?: string } | null;
-        setSemAcesso({ erro: corpo?.erro ?? e.message, comoLiberar: corpo?.comoLiberar });
+        const corpo = e.corpo as { erro?: string } | null;
+        setSemAcesso({ erro: corpo?.erro ?? e.message });
         setEstado('logado');
         return;
       }
@@ -178,8 +185,8 @@ export function App() {
       return;
     }
     if (e instanceof ApiError && e.status === 403) {
-      const corpo = e.corpo as { erro?: string; comoLiberar?: string } | null;
-      setSemAcesso({ erro: corpo?.erro ?? e.message, comoLiberar: corpo?.comoLiberar });
+      const corpo = e.corpo as { erro?: string } | null;
+      setSemAcesso({ erro: corpo?.erro ?? e.message });
       return;
     }
     setErro(e instanceof Error ? e.message : String(e));
@@ -240,20 +247,20 @@ export function App() {
             </div>
           )}
 
+          {/*
+              Sem acesso: uma frase, e nada sobre COMO o sistema decide.
+              A versão anterior explicava o modelo (`membership`, autenticação ×
+              autorização) e imprimia o comando de bootstrap pronto, com o
+              `subject` de quem pediu e `--papel tenant_admin` no fim. O público
+              disso é toda conta do Workspace da escola — inclusive, se houver,
+              a de aluno. Quem precisa do comando é quem opera o servidor, e lá
+              ele continua, no log. */}
           {semAcesso && (
             <div style={s.aviso('ruim')}>
               <strong>{semAcesso.erro}</strong>
               <p style={{ margin: '.4rem 0 0' }}>
-                Autenticar com a conta da escola não dá acesso: pertencer ao Workspace é
-                autenticação, não autorização. O papel vem da tabela <code style={s.mono}>membership</code>.
+                Se você deveria ter acesso, procure quem administra o middleware na escola.
               </p>
-              {semAcesso.comoLiberar && (
-                <p style={{ margin: '.4rem 0 0' }}>
-                  Rode, na máquina do middleware:
-                  <br />
-                  <code style={{ ...s.mono, userSelect: 'all' }}>{semAcesso.comoLiberar}</code>
-                </p>
-              )}
             </div>
           )}
 

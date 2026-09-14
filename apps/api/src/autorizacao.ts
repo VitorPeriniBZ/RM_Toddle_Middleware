@@ -24,10 +24,10 @@ import { PAPEIS, identidadeDeCli, identidadeDoGoogle, papeisDoUsuario, type Pape
  * leitura. A tabela nasce vazia, então a primeira concessão é por SCRIPT
  * (`npm run conceder`), fora da tela.
  *
- * Isso trava você fora da própria API no primeiro acesso, e é de propósito. Para
- * o bootstrap não virar adivinhação, o 403 devolve o SEU `subject` e o comando
- * exato a rodar — a identidade de quem está pedindo, para quem está pedindo, o
- * que não revela nada de ninguém.
+ * Isso trava você fora da própria API no primeiro acesso, e é de propósito. O
+ * comando exato do bootstrap sai no LOG do servidor, não na resposta: quem
+ * precisa dele é quem tem acesso à máquina, que é — por construção — a única
+ * pessoa capaz de executá-lo. Ver a nota em `corpoDeNegacao`.
  *
  * ─── `tenant_admin` SATISFAZ QUALQUER EXIGÊNCIA ─────────────────────────────
  *
@@ -124,29 +124,67 @@ export function exigirPapel(exigidos: Papel[]) {
     const podeTudo = papeis.includes('tenant_admin');
     if (podeTudo || exigidos.some((p) => papeis.includes(p))) return;
 
+    /*
+     * ─── O DIAGNÓSTICO VAI PARA O LOG; PARA A TELA VAI UMA FRASE SÓ ─────────
+     *
+     * A versão anterior devolvia, NO CORPO DO 403, o comando de bootstrap
+     * pronto para copiar — com o `subject` de quem pediu e `--papel
+     * tenant_admin` no fim — mais os papéis exigidos, os papéis que a pessoa
+     * tem e o nome da tabela de autorização.
+     *
+     * Quem recebia isso era QUALQUER conta do Workspace da escola, porque é
+     * exatamente esse o público do 403: autenticou e não tem papel. Ou seja, a
+     * resposta ensinava o modelo de privilégios a quem acabou de ser recusado, e
+     * entregava o texto exato para pedir a um administrador sem ele precisar
+     * entender o que estava rodando. Se alunos tiverem conta no domínio, a lista
+     * inclui alunos.
+     *
+     * Além do roteiro, os campos eram um ORÁCULO: `papeis.length === 0` contra
+     * "tem papel, mas não este" diz ao pedinte se ele já é conhecido do sistema,
+     * e `exigidos` diz o nome do papel que protege cada rota. Por isso a
+     * mensagem é a MESMA nos dois casos — distinguir já é informação.
+     *
+     * Nada disso se perde: o log carrega tudo, inclusive o comando, e quem
+     * precisa dele é quem tem acesso ao servidor — que é, por construção, a
+     * única pessoa capaz de executá-lo.
+     */
     logger.warn(
-      { rota: req.url, sub: identidade.subject, papeis, exigidos },
+      {
+        rota: req.url,
+        sub: identidade.subject,
+        email: identidade.email,
+        papeis,
+        exigidos,
+        comoLiberar:
+          papeis.length === 0
+            ? `npm run conceder -- --subject ${identidade.subject}` +
+              (identidade.email ? ` --email ${identidade.email}` : '') +
+              ' --papel tenant_admin'
+            : `npm run conceder -- --subject ${identidade.subject} --papel ${exigidos[0]}`,
+      },
       'Autorização NEGADA: identidade autenticada sem papel suficiente neste tenant',
     );
 
-    await reply.code(403).send({
-      erro: papeis.length === 0
-        ? 'Sua conta autentica, mas não tem acesso a este tenant'
-        : 'Sua conta não tem papel suficiente para esta operação',
-      exigidos,
-      seusPapeis: papeis,
-      // Bootstrap: a tabela `membership` nasce vazia e a tela não concede o
-      // primeiro papel a si mesma de propósito. Este é o caminho de fora.
-      comoLiberar:
-        papeis.length === 0
-          ? `npm run conceder -- --subject ${identidade.subject}` +
-            (identidade.email ? ` --email ${identidade.email}` : '') +
-            ' --papel tenant_admin'
-          : `npm run conceder -- --subject ${identidade.subject} --papel ${exigidos[0]}`,
-      detalhe:
-        'pertencer ao Workspace da escola é autenticação, não autorização — quem pode o quê ' +
-        'vive na tabela membership',
-    });
+    await reply.code(403).send(corpoDeNegacao());
+  };
+}
+
+/**
+ * O corpo do 403 de autorização. Uma frase, sempre a mesma.
+ *
+ * Existe como função (e não como literal no meio da rota) para poder ser
+ * testada: `packages/db` não alcança `apps/api`, mas o teste ao lado dela
+ * alcança, e é ele que garante que nenhum detalhe volte para cá sem alguém
+ * perceber.
+ *
+ * O texto diz o que fazer — pedir a quem administra — sem dizer COMO o sistema
+ * decide, porque quem lê isto é, por definição, quem não deveria saber.
+ */
+export function corpoDeNegacao(): { erro: string } {
+  return {
+    erro:
+      'Sua conta não tem permissão para acessar esta área. Peça acesso a quem administra o ' +
+      'middleware na escola.',
   };
 }
 
