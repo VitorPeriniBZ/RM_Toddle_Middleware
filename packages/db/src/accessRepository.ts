@@ -1,5 +1,6 @@
 import { tenantConfig } from '@rm-toddle/config';
 import { pgPool } from './pool';
+import { registrarEvento } from './auditRepository';
 import type { Executor } from './executor';
 
 /** Config da escola atendida por este processo. */
@@ -152,9 +153,14 @@ export async function concederPapel(
     const userIdentityId = idRows[0].id;
 
     const { rowCount } = await client.query(
+      // O alvo é o índice PARCIAL da migration 020, não o `membership_uq` de
+      // 006: aquele inclui `campus_id`, que é NULL em toda linha, e NULL não
+      // participa de UNIQUE — então ele nunca conflitava e conceder duas vezes
+      // criava duas linhas, reportando `jaTinha: false` nas duas.
       `INSERT INTO membership (user_identity_id, tenant_id, campus_id, papel)
        VALUES ($1, $2, NULL, $3)
-       ON CONFLICT (user_identity_id, tenant_id, campus_id, papel) DO NOTHING`,
+       ON CONFLICT (user_identity_id, tenant_id, papel)
+         WHERE campus_id IS NULL DO NOTHING`,
       [userIdentityId, await tenantId(client), papel],
     );
     await client.query('COMMIT');
@@ -209,4 +215,212 @@ export async function quantosPodemAprovar(exec: Executor = pgPool): Promise<numb
     [await tenantId(exec), PAPEIS_QUE_APROVAM],
   );
   return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * ─── A PARTIR DAQUI: O QUE A TELA DE ACESSOS USA ────────────────────────────
+ *
+ * A propriedade de bootstrap continua intacta, e vale a pena dizer por quê,
+ * porque parece que a tela a quebra.
+ *
+ * Conceder pela tela exige `tenant_admin`. A tabela nasce vazia, então ninguém é
+ * `tenant_admin` até que `npm run conceder` crie o primeiro. Ou seja: a tela não
+ * pode conceder o primeiro papel a si mesma — não por uma regra escrita, mas
+ * porque não existe quem a abra. A porta trancada continua trancada; o que a
+ * tela faz é evitar SSH para o segundo acesso em diante.
+ */
+
+/**
+ * Quem AUTENTICOU mas não tem papel nenhum neste tenant.
+ *
+ * ─── POR QUE ISTO EXISTE, EM VEZ DE UM CONVITE POR E-MAIL ───────────────────
+ *
+ * A identidade é `(provider, subject)`, e `subject` é a claim `sub` do Google —
+ * um número que ninguém sabe de cor e que só existe depois do primeiro login.
+ * Uma tela que convidasse por e-mail teria de inventar uma tabela de convites
+ * pendentes, casá-los por e-mail no primeiro login e conviver com o fato de que
+ * e-mail MUDA: convite para o endereço antigo casaria com a pessoa errada no dia
+ * em que a escola renomeasse a conta.
+ *
+ * O caminho honesto já estava pronto sem ninguém ter notado: `exigirPapel` cria
+ * a `user_identity` ANTES de checar o papel, então toda pessoa que tentou entrar
+ * e levou 403 já está no banco, com `sub`, e-mail e nome de verdade, ditos pelo
+ * Google. A fila de espera existe; faltava alguém olhar.
+ *
+ * O fluxo vira: a pessoa tenta entrar uma vez, aparece aqui, e quem administra
+ * dá o papel — sem digitar `sub` nenhum.
+ */
+export async function listarIdentidadesSemPapel(): Promise<
+  Array<{ userIdentityId: string; provider: string; subject: string; email: string | null; nome: string | null; desde: string }>
+> {
+  const { rows } = await pgPool.query<{
+    id: string; provider: string; subject: string; email: string | null; nome: string | null; created_at: Date;
+  }>(
+    `SELECT u.id, u.provider, u.subject, u.email, u.nome, u.created_at
+       FROM user_identity u
+      WHERE NOT EXISTS (
+              SELECT 1 FROM membership m
+               WHERE m.user_identity_id = u.id AND m.tenant_id = $1
+            )
+      ORDER BY u.created_at DESC`,
+    [await tenantId()],
+  );
+  return rows.map((r) => ({
+    userIdentityId: r.id,
+    provider: r.provider,
+    subject: r.subject,
+    email: r.email,
+    nome: r.nome,
+    desde: new Date(r.created_at).toISOString(),
+  }));
+}
+
+/** Quantas identidades têm `tenant_admin` aqui. Alimenta a guarda de tranca. */
+export async function quantosAdministram(exec: Executor = pgPool): Promise<number> {
+  const { rows } = await exec.query<{ n: string }>(
+    `SELECT count(DISTINCT user_identity_id)::text AS n
+       FROM membership
+      WHERE tenant_id = $1 AND papel = 'tenant_admin'`,
+    [await tenantId(exec)],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+export interface MudancaDePapel {
+  /** A identidade ALVO, que já existe: veio de `listarAcessos`/`listarIdentidadesSemPapel`. */
+  userIdentityId: string;
+  papel: Papel;
+  /** Quem está concedendo/revogando, no formato de `audit_event`. */
+  ator: `user:${string}` | 'system/cli';
+  motivo?: string;
+}
+
+/** Erro de REGRA, não de banco: a rota o traduz em 4xx com o texto pronto. */
+export class RecusaDeAcesso extends Error {
+  constructor(readonly comoResolver: string, mensagem: string) {
+    super(mensagem);
+    this.name = 'RecusaDeAcesso';
+  }
+}
+
+/**
+ * Concede um papel a quem JÁ TEM identidade, com trilha na mesma transação.
+ *
+ * Diferente de `concederPapel`, que cria a identidade e serve ao bootstrap por
+ * CLI: aqui a identidade tem de existir. Uma tela que criasse identidade poderia
+ * inventar um `subject` que o Google nunca emitiu — uma conta fantasma com papel,
+ * que ninguém conseguiria rastrear até uma pessoa.
+ */
+export async function concederPapelAExistente(m: MudancaDePapel): Promise<{ jaTinha: boolean }> {
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: alvo } = await client.query<{ subject: string; email: string | null }>(
+      'SELECT subject, email FROM user_identity WHERE id = $1',
+      [m.userIdentityId],
+    );
+    if (!alvo[0]) {
+      throw new RecusaDeAcesso(
+        'peça à pessoa para entrar uma vez na tela — ela aparecerá em "aguardando acesso"',
+        'identidade não existe neste banco',
+      );
+    }
+
+    const { rowCount } = await client.query(
+      // Ver a nota em `concederPapel`: o alvo é o índice parcial de 020.
+      `INSERT INTO membership (user_identity_id, tenant_id, campus_id, papel)
+       VALUES ($1, $2, NULL, $3)
+       ON CONFLICT (user_identity_id, tenant_id, papel)
+         WHERE campus_id IS NULL DO NOTHING`,
+      [m.userIdentityId, await tenantId(client), m.papel],
+    );
+    const jaTinha = (rowCount ?? 0) === 0;
+
+    // Conceder o que já existe não é evento: registrar produziria trilha de
+    // cliques em vez de trilha de mudanças.
+    if (!jaTinha) {
+      await registrarEvento(client, {
+        ator: m.ator,
+        acao: 'acesso.concedido',
+        entidade: 'membership',
+        entidadeId: m.userIdentityId,
+        depois: { papel: m.papel, subject: alvo[0].subject, email: alvo[0].email },
+        motivo: m.motivo,
+        resultado: 'ok',
+      });
+    }
+
+    await client.query('COMMIT');
+    limparCacheDePapeis();
+    return { jaTinha };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Revoga um papel.
+ *
+ * ─── A GUARDA DE TRANCA ─────────────────────────────────────────────────────
+ *
+ * Tirar o ÚLTIMO `tenant_admin` deixa o tenant sem ninguém capaz de conceder
+ * papel — inclusive de volta. A recuperação existe (`npm run conceder`, por SSH
+ * na máquina do middleware), mas depende de acesso ao servidor, que quem opera a
+ * tela pode não ter. Um clique que só é reversível por outra pessoa, em outro
+ * canal, não deve ser possível sem aviso.
+ *
+ * Note que a guarda é sobre o ÚLTIMO, não sobre "você mesmo": um administrador
+ * pode perfeitamente se remover enquanto houver outro. É o tenant que não pode
+ * ficar órfão — não a pessoa que não pode se demitir.
+ */
+export async function revogarPapel(m: MudancaDePapel): Promise<{ naoTinha: boolean }> {
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+
+    if (m.papel === 'tenant_admin' && (await quantosAdministram(client)) <= 1) {
+      throw new RecusaDeAcesso(
+        'conceda tenant_admin a outra pessoa antes de remover este — ou, se não houver ninguém, ' +
+          'use `npm run conceder` na máquina do middleware',
+        'este é o ÚLTIMO tenant_admin: removê-lo deixa o tenant sem quem conceda acesso',
+      );
+    }
+
+    const { rows: alvo } = await client.query<{ subject: string; email: string | null }>(
+      'SELECT subject, email FROM user_identity WHERE id = $1',
+      [m.userIdentityId],
+    );
+
+    const { rowCount } = await client.query(
+      `DELETE FROM membership
+        WHERE user_identity_id = $1 AND tenant_id = $2 AND papel = $3`,
+      [m.userIdentityId, await tenantId(client), m.papel],
+    );
+    const naoTinha = (rowCount ?? 0) === 0;
+
+    if (!naoTinha) {
+      await registrarEvento(client, {
+        ator: m.ator,
+        acao: 'acesso.revogado',
+        entidade: 'membership',
+        entidadeId: m.userIdentityId,
+        antes: { papel: m.papel, subject: alvo[0]?.subject, email: alvo[0]?.email },
+        motivo: m.motivo,
+        resultado: 'ok',
+      });
+    }
+
+    await client.query('COMMIT');
+    limparCacheDePapeis();
+    return { naoTinha };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }

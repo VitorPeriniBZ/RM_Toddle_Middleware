@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { abrirSessao, api, ApiError, encerrarSessao, quemSouEu, type AuthConfig } from './api';
+import { abrirSessao, api, ApiError, encerrarSessao, quemSouEu, type AuthConfig, type Papel } from './api';
 import { cor, s } from './estilos';
 import { Agenda } from './painel/Agenda';
 import { DePara } from './painel/DePara';
 import { Auditoria } from './painel/Auditoria';
 import { Jobs } from './painel/Jobs';
+import { Acessos } from './painel/Acessos';
 
 /**
  * A tela: login, e três assuntos.
@@ -51,7 +52,7 @@ declare global {
 }
 
 type Estado = 'carregando' | 'deslogado' | 'logado' | 'erro';
-type Aba = 'agenda' | 'jobs' | 'de-para' | 'auditoria' | 'saude';
+type Aba = 'agenda' | 'jobs' | 'de-para' | 'auditoria' | 'acessos' | 'saude';
 
 export function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
@@ -59,6 +60,15 @@ export function App() {
   const [erro, setErro] = useState<string | null>(null);
   const [semAcesso, setSemAcesso] = useState<{ comoLiberar?: string; erro?: string } | null>(null);
   const [aba, setAba] = useState<Aba>('agenda');
+  /*
+   * Os papéis de quem está olhando.
+   *
+   * Servem para NÃO desenhar a aba de Acessos a quem não administra: uma aba que
+   * só responde 403 sugere um poder que a pessoa não tem e transforma curiosidade
+   * em erro vermelho. A autorização continua no servidor, rota por rota — isto é
+   * só o que a tela mostra.
+   */
+  const [papeis, setPapeis] = useState<Papel[]>([]);
 
   /**
    * Troca o ID token do Google por uma SESSÃO de servidor.
@@ -69,7 +79,8 @@ export function App() {
    */
   async function aceitarCredencial(credencial: string): Promise<void> {
     try {
-      await abrirSessao(credencial);
+      const sessao = await abrirSessao(credencial);
+      setPapeis(sessao.papeis as Papel[]);
       setSemAcesso(null);
       setEstado('logado');
       setErro(null);
@@ -103,7 +114,8 @@ export function App() {
           return;
         }
         try {
-          await quemSouEu();
+          const eu = await quemSouEu();
+          setPapeis(eu.papeis);
           setEstado('logado');
         } catch {
           // Qualquer falha aqui é "não tem sessão": não vale distinguir 401 de
@@ -172,6 +184,8 @@ export function App() {
     }
     setErro(e instanceof Error ? e.message : String(e));
   }
+
+  const administra = papeis.includes('tenant_admin') || authConfig?.authMode === 'localhost';
 
   return (
     <>
@@ -246,13 +260,17 @@ export function App() {
           {erro && <div style={s.aviso('ruim')}>{erro}</div>}
 
           <div style={s.abas}>
-            {([
+            {(([
               ['agenda', 'Agenda'],
               ['jobs', 'Jobs'],
               ['de-para', 'De-para'],
               ['auditoria', 'Auditoria'],
+              // Só quem administra. No modo de desenvolvimento não há identidade
+              // federada, e `exigirPapel` já dispensa a checagem — a aba aparece
+              // para que a tela seja desenvolvível sem semear o banco.
+              ...(administra ? [['acessos', 'Acessos']] : []),
               ['saude', 'Saúde'],
-            ] as Array<[Aba, string]>).map(([chave, rotulo]) => (
+            ] as Array<[Aba, string]>)).map(([chave, rotulo]) => (
               <button key={chave} style={s.aba(aba === chave)} onClick={() => { setErro(null); setAba(chave); }}>
                 {rotulo}
               </button>
@@ -263,6 +281,7 @@ export function App() {
           {aba === 'jobs' && <Jobs aoErrar={tratar} />}
           {aba === 'de-para' && <DePara aoErrar={tratar} />}
           {aba === 'auditoria' && <Auditoria aoErrar={tratar} />}
+          {aba === 'acessos' && administra && <Acessos aoErrar={tratar} />}
           {aba === 'saude' && <Saude aoErrar={tratar} />}
         </>
       )}
