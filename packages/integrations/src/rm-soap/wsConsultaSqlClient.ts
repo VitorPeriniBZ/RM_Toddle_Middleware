@@ -44,10 +44,15 @@ export function buildParameters(params: Record<string, string | number>): string
     .join(';');
 }
 
-class WsConsultaSqlClient {
-  private readonly http: AxiosInstance;
-  // isArray: força Resultado a ser sempre array, mesmo com uma única linha.
-  private readonly parser = new XMLParser({
+/**
+ * O parser usado tanto no envelope quanto no dataset de dentro dele.
+ *
+ * Exportado porque a interpretação do dataset (`linhasDoDataset`) é pura e tem
+ * teste próprio — e um teste que usasse outra configuração de parser estaria
+ * testando outra coisa.
+ */
+export function criarParserDoRm(): XMLParser {
+  return new XMLParser({
     ignoreAttributes: true,
     parseTagValue: false, // mantém tudo como string; conversão é responsabilidade do chamador
     trimValues: true,
@@ -62,6 +67,80 @@ class WsConsultaSqlClient {
       maxExpandedLength: Infinity,
     } as unknown as boolean,
   });
+}
+
+/**
+ * Interpreta o XML do dataset que veio dentro do envelope.
+ *
+ * ─── LISTA VAZIA É UMA RESPOSTA, NÃO UM DEPÓSITO DE DÚVIDA ──────────────────
+ *
+ * Medido contra o RM da escola em 14/09/2026, caso a caso:
+ *
+ *   Sentença inexistente   → SOAP Fault (com HTTP 200), tratado antes daqui
+ *   parâmetro recusado     → SOAP Fault (com HTTP 200), tratado antes daqui
+ *   ZERO linhas, legítimo  → a string `<NewDataSet />`, e nada mais
+ *
+ * Então, quando a resposta não traz `NewDataSet`, ou traz um dataset cujo
+ * elemento de linha tem outro nome, isso NÃO é "não há nada hoje" — é a leitura
+ * que está errada. Devolver `[]` nesse caso é o modo de falha caro deste
+ * projeto: o fluxo segue verde, não escreve nada, e a tela mostra
+ * "nada-a-escrever" — indistinguível do dia normal fora da janela de
+ * lançamento. Cada um desses caminhos passa a derrubar a leitura, com o nome do
+ * que foi encontrado no lugar do que se esperava.
+ */
+export function linhasDoDataset(
+  resultXml: unknown,
+  codSentenca: string,
+  parser: XMLParser = criarParserDoRm(),
+): ConsultaRow[] {
+  if (resultXml == null || resultXml === '') {
+    throw new Error(
+      `wsConsultaSQL (${codSentenca}) respondeu SEM dataset. O vazio legítimo vem como ` +
+        '`<NewDataSet />`; a ausência total significa que a resposta não é a que este cliente ' +
+        'sabe ler. Não trate como "zero linhas".',
+    );
+  }
+
+  const dataset: unknown = parser.parse(String(resultXml));
+  if (!(dataset && typeof dataset === 'object' && 'NewDataSet' in dataset)) {
+    const raiz = Object.keys((dataset ?? {}) as object).join(', ') || '(nenhum)';
+    throw new Error(
+      `wsConsultaSQL (${codSentenca}) devolveu um XML sem <NewDataSet>. Elemento(s) de raiz: ` +
+        `${raiz}. Isto não é um dataset vazio — é outra coisa.`,
+    );
+  }
+
+  // `<NewDataSet />` é o vazio legítimo, e o parser o entrega como string vazia.
+  const conteudo = (dataset as { NewDataSet: unknown }).NewDataSet;
+  if (conteudo == null || conteudo === '') return [];
+
+  const rows = (conteudo as Record<string, unknown>).Resultado;
+  if (!rows) {
+    // O dataset TEM conteúdo, e não são linhas chamadas `Resultado`. Um `[]`
+    // aqui esconderia uma Sentença que renomeou a linha, e o sintoma seria o
+    // fluxo inteiro concluindo que não há dado.
+    const achados = Object.keys(conteudo as object).join(', ');
+    throw new Error(
+      `wsConsultaSQL (${codSentenca}): o <NewDataSet> tem conteúdo, mas nenhum elemento ` +
+        `<Resultado> — encontrei [${achados}]. A Sentença provavelmente nomeia a linha de outro ` +
+        'jeito. Zero linhas de verdade viria como `<NewDataSet />`.',
+    );
+  }
+
+  // isArray garante array; ainda assim normalizamos os valores para string.
+  return (rows as Array<Record<string, unknown>>).map((row) => {
+    const clean: ConsultaRow = {};
+    for (const [key, value] of Object.entries(row)) {
+      clean[key] = value == null ? '' : String(value).trim();
+    }
+    return clean;
+  });
+}
+
+class WsConsultaSqlClient {
+  private readonly http: AxiosInstance;
+  // isArray: força Resultado a ser sempre array, mesmo com uma única linha.
+  private readonly parser = criarParserDoRm();
 
   /**
    * A config da escola, e não o ambiente, é a fonte da conexão.
@@ -114,7 +193,9 @@ class WsConsultaSqlClient {
       const res = await this.http.post<string>('', body, { responseType: 'text' });
       raw = res.data;
     } catch (error) {
-      // Um SOAP Fault volta com HTTP 500 e o XML do fault no corpo.
+      // Medido em 14/09/2026: o SOAP Fault deste RM volta com HTTP **200** e é
+      // tratado em `linhasDoDataset`/`parseResult`, não aqui. Este ramo cobre o
+      // erro de transporte que ainda traz corpo (proxy, 500 do IIS).
       if (axios.isAxiosError(error) && typeof error.response?.data === 'string') {
         throw new Error(
           `wsConsultaSQL falhou (${codSentenca}): ${this.extractFault(error.response.data)}`,
@@ -158,20 +239,7 @@ class WsConsultaSqlClient {
     }
 
     const resultXml: unknown = body?.RealizarConsultaSQLResponse?.RealizarConsultaSQLResult;
-    if (resultXml == null || resultXml === '') return []; // dataset vazio
-
-    const dataset = this.parser.parse(String(resultXml));
-    const rows = dataset?.NewDataSet?.Resultado;
-    if (!rows) return [];
-
-    // isArray garante array; ainda assim normalizamos valores para string.
-    return (rows as Array<Record<string, unknown>>).map((row) => {
-      const clean: ConsultaRow = {};
-      for (const [key, value] of Object.entries(row)) {
-        clean[key] = value == null ? '' : String(value).trim();
-      }
-      return clean;
-    });
+    return linhasDoDataset(resultXml, codSentenca, this.parser);
   }
 
   /** Extrai a mensagem de um SOAP Fault para um erro legível. */
