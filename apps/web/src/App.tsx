@@ -6,6 +6,7 @@ import { DePara } from './painel/DePara';
 import { Auditoria } from './painel/Auditoria';
 import { Jobs } from './painel/Jobs';
 import { Acessos } from './painel/Acessos';
+import { Sentencas } from './painel/Sentencas';
 
 /**
  * A tela: login, e três assuntos.
@@ -59,7 +60,7 @@ declare global {
 }
 
 type Estado = 'carregando' | 'deslogado' | 'logado' | 'erro';
-type Aba = 'agenda' | 'jobs' | 'de-para' | 'auditoria' | 'acessos' | 'saude';
+type Aba = 'agenda' | 'jobs' | 'de-para' | 'sentencas' | 'auditoria' | 'acessos' | 'saude';
 
 export function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
@@ -271,6 +272,7 @@ export function App() {
               ['agenda', 'Agenda'],
               ['jobs', 'Jobs'],
               ['de-para', 'De-para'],
+              ['sentencas', 'Sentenças'],
               ['auditoria', 'Auditoria'],
               // Só quem administra. No modo de desenvolvimento não há identidade
               // federada, e `exigirPapel` já dispensa a checagem — a aba aparece
@@ -287,6 +289,7 @@ export function App() {
           {aba === 'agenda' && <Agenda aoErrar={tratar} />}
           {aba === 'jobs' && <Jobs aoErrar={tratar} />}
           {aba === 'de-para' && <DePara aoErrar={tratar} />}
+          {aba === 'sentencas' && <Sentencas aoErrar={tratar} />}
           {aba === 'auditoria' && <Auditoria aoErrar={tratar} />}
           {aba === 'acessos' && administra && <Acessos aoErrar={tratar} />}
           {aba === 'saude' && <Saude aoErrar={tratar} />}

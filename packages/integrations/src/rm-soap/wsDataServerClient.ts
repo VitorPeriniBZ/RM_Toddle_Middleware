@@ -3,7 +3,12 @@ import { XMLParser } from 'fast-xml-parser';
 import { logger, rmSoapConfigurado, tenantConfig, type TenantConfig } from '@rm-toddle/config';
 
 /**
- * Cliente do TOTVS RM wsDataServer (SOAP 1.1) — SOMENTE LEITURA.
+ * Cliente do TOTVS RM wsDataServer (SOAP 1.1).
+ *
+ * O cabeçalho dizia "SOMENTE LEITURA" — não diz mais, e não dizia com razão
+ * desde 21/08/2026: `saveRecord` existe (ver a nota abaixo) e, desde 16/09/2026,
+ * `deleteRecord` também. Um comentário que descreve a versão anterior do arquivo
+ * é pior que comentário nenhum, porque é lido como garantia.
  *
  * Diferente do wsConsultaSQL (que executa Sentenças cadastradas), o wsDataServer
  * expõe os DataServers do produto, que encapsulam a regra de negócio. É o canal
@@ -158,6 +163,93 @@ class WsDataServerClient {
   }
 
   /**
+   * `ReadRecord` — UM registro pela chave primária, com as tabelas-filhas junto.
+   *
+   * Complementa o `readView`, que devolve uma visão achatada e SEM os filhos. É
+   * o único jeito de ler uma Sentença inteira de volta do RM: `GlbConsSQLData`
+   * devolve `GConsSql` (corpo e metadados) e `GConsSqlParams` (os parâmetros) no
+   * mesmo dataset.
+   *
+   * ─── REGISTRO AUSENTE NÃO É ERRO ────────────────────────────────────────
+   *
+   * Chave que não existe devolve o dataset VAZIO (`<GlbConsSql />`), com HTTP
+   * 200 e sem mensagem. Devolvemos `null`, e quem chama decide o que isso
+   * significa — para a restauração de Sentença, significa "sumiu na cópia de
+   * base", que é o caso normal, não uma falha.
+   *
+   * @param contexto passado inteiro pelo chamador: `GlbConsSQLData` aceita
+   *        `CODCOLIGADA=1;CODSISTEMA=G` e NÃO quer `CODFILIAL`, diferente dos
+   *        DataServers educacionais que `contexto()` monta.
+   */
+  async readRecord(
+    dataServer: string,
+    primaryKey: string,
+    contexto: string,
+  ): Promise<string | null> {
+    if (!rmSoapConfigurado(this.cfg)) {
+      throw new RmDataServerError('wsDataServer não configurado.', dataServer);
+    }
+
+    const body =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      `<soap:Envelope xmlns:soap="${SOAP_NS}" xmlns:tot="${TOTVS_NS}">` +
+      '<soap:Body><tot:ReadRecord>' +
+      `<tot:DataServerName>${escapeXml(dataServer)}</tot:DataServerName>` +
+      `<tot:PrimaryKey>${escapeXml(primaryKey)}</tot:PrimaryKey>` +
+      `<tot:Contexto>${escapeXml(contexto)}</tot:Contexto>` +
+      '</tot:ReadRecord></soap:Body></soap:Envelope>';
+
+    const res = await this.http.post<string>('', body, {
+      responseType: 'text',
+      headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/ReadRecord` },
+    });
+    this.assertNoRmError(res.data, dataServer, 'ReadRecord');
+
+    const dataset = this.decodeEntities(String(res.data ?? ''));
+    const m = /<ReadRecordResult[^>]*>([\s\S]*?)<\/ReadRecordResult>/.exec(dataset);
+    const conteudo = (m?.[1] ?? '').trim();
+    // Dataset de raiz auto-fechado (`<GlbConsSql />`) = nenhum registro.
+    if (!conteudo || /^<[A-Za-z][\w]*\s*\/>$/.test(conteudo)) return null;
+    return conteudo;
+  }
+
+  /**
+   * `DeleteRecord` — apaga pela chave, mas a CHAVE VAI NO `XML`, não em
+   * `PrimaryKey`.
+   *
+   * Medido em 16/09/2026: mandar `<tot:PrimaryKey>` aqui devolve SOAP Fault
+   * "Falha ao salvar XML, XML invalido." — mensagem que não tem nada a ver com a
+   * causa e leva a concluir que o DataServer não apaga. O que ele quer é um
+   * dataset contendo só a chave do registro.
+   */
+  async deleteRecord(
+    dataServer: string,
+    xmlDataset: string,
+    contexto: string,
+  ): Promise<string> {
+    if (!rmSoapConfigurado(this.cfg)) {
+      throw new RmDataServerError('wsDataServer não configurado.', dataServer);
+    }
+
+    const body =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      `<soap:Envelope xmlns:soap="${SOAP_NS}" xmlns:tot="${TOTVS_NS}">` +
+      '<soap:Body><tot:DeleteRecord>' +
+      `<tot:DataServerName>${escapeXml(dataServer)}</tot:DataServerName>` +
+      `<tot:XML>${escapeXml(xmlDataset)}</tot:XML>` +
+      `<tot:Contexto>${escapeXml(contexto)}</tot:Contexto>` +
+      '</tot:DeleteRecord></soap:Body></soap:Envelope>';
+
+    const res = await this.http.post<string>('', body, {
+      responseType: 'text',
+      headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/DeleteRecord` },
+    });
+    this.assertNoRmError(res.data, dataServer, 'DeleteRecord');
+    const m = /<DeleteRecordResult[^>]*>([\s\S]*?)<\/DeleteRecordResult>/.exec(String(res.data));
+    return (m?.[1] ?? '').trim();
+  }
+
+  /**
    * Devolve o XSD que o DataServer declara. É a forma segura de descobrir a
    * gramática de um SaveRecord: declara campos, tipos, obrigatoriedade e a
    * chave primária, sem tentativa-e-erro contra dados reais.
@@ -243,13 +335,31 @@ class WsDataServerClient {
     return rows;
   }
 
-  /** O dataset vem escapado dentro do envelope; desescapa antes de recortar. */
+  /**
+   * O dataset vem escapado dentro do envelope; desescapa antes de recortar.
+   *
+   * ─── AS REFERÊNCIAS NUMÉRICAS TAMBÉM ────────────────────────────────────
+   *
+   * Este RM devolve as quebras de linha como `&#xD;` (CR), não como o byte. Sem
+   * decodificá-las, cada linha ganha **5 caracteres** literais que não existem
+   * no dado — medido em 16/09/2026: a `TODDLE.RESP` voltava com 1669 caracteres
+   * contra 1509 do `.sql`, exatamente 5 × 32 linhas.
+   *
+   * O estrago disso é uma comparação que nunca bate: a Sentença estava
+   * corretamente gravada e a conferência dizia que divergia. Um falso negativo
+   * aqui manda recadastrar de novo e de novo, e ensina a ignorar a conferência —
+   * que é pior que não ter nenhuma.
+   *
+   * `&amp;` fica por último, senão `&amp;lt;` vira `<` em vez de `&lt;`.
+   */
   private decodeEntities(raw: string): string {
     return raw
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&apos;/g, "'")
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
       .replace(/&amp;/g, '&');
   }
 

@@ -123,67 +123,87 @@ o erro de sintaxe que o topo deste arquivo manda evitar.
 
 Medido em 11/09: as seis armazenam `:NOME`; nenhuma armazena `@NOME`.
 
-### Dá para recadastrar automaticamente? Em tese sim, e não vale a pena
+### Dá para recadastrar automaticamente? SIM — medido em 16/09/2026
 
-`GlbConsSQLData` também expõe `SaveRecord` — então existe, no papel, um caminho
-de escrita. Levado ao conselho de LLMs em 11/09/2026 (ChatGPT, Claude e
-Nemotron; o Gemini não respondeu), a recomendação foi unânime no **não como
-primeira opção**, e por um motivo que é a cicatriz desta casa: o modo de falha
-não é o serviço recusar — é ele **aceitar e a Sentença não executar direito**,
-sem erro. Já vimos isso no `EduNotaEtapaData`, que respondeu `ok=true` e
-descartou o valor.
+> **Esta seção dizia "em tese sim, e não vale a pena".** Estava errada na
+> conclusão e certa no motivo. O conselho de LLMs de 11/09 recomendou não usar
+> `SaveRecord` como primeira opção porque o modo de falha desta casa é o serviço
+> **aceitar e o dado ficar sutilmente errado**. Isso continua verdade. O que
+> mudou é que o remédio para esse risco — conferir de verdade depois de gravar —
+> é barato, e agora existe. O que não vale a pena é gravar SEM conferir.
 
-O que se mede hoje nas seis, que nenhum `.sql` guarda:
+`GlbConsSQLData` expõe `SaveRecord` e `DeleteRecord`. Sondado numa Sentença
+descartável (`TODDLE.SONDA`, apagada em seguida):
 
-| campo | valor nas seis | por que importa |
-|---|---|---|
-| `APLICACAO` | `S` | parte da chave; errado = "Sentença não encontrada" |
-| `TAMANHO` | = contagem de caracteres do corpo | inconsistente, trunca o SQL |
-| `SEMSEGCOLUNAS` / `SEMSEGESTENDIDA` | `0` / `0` | se recriar diferente, o RM **remove colunas** ou devolve 0 linhas, sem erro |
-| `DISPONIVELFILTRO` / `RELATORIO` / `VISAO` | `1` | |
-| `DISPONIVELMENU` | `0` | |
-| `IDDBCONNECTION` | **NULL** | nulo = conexão padrão. Copiar um id de outro ambiente faria a consulta rodar no banco errado — aqui o risco não existe, porque é nulo |
-| `DISPONIVEL`, `NIVEL`, `IDGRUPO`, `VERSAO`, `NOMESISTEMA`, `PODEALTERAR`, `PODEEXCLUIR` | **NULL** | e mesmo assim executam — não são porteiros |
-| `CONTROLE` | inteiro curto com sinal (ex.: `-29472`) | é `short`, não chave composta |
-| `GUID` | um por Sentença | |
+| passo | resultado |
+|---|---|
+| `SaveRecord` com dataset `GlbConsSql` | gravou, devolveu `1;S;TODDLE.SONDA` |
+| `GUID`, `CONTROLE`, `DTULTALTERACAO`, `USRULTALTERACAO` | **o RM gera** — não mande os do manifesto |
+| `ReadRecord` de volta | corpo, metadados e parâmetros idênticos ao enviado |
+| `RealizarConsultaSQL` com a credencial da integração | executou e devolveu a coluna esperada |
+| `DeleteRecord` | apagou |
 
-Os parâmetros guardam **nome de tipo .NET**: `CODCOLIGADA` = `System.Int16`, e
-`CODPERLET`/`DATAINICIAL`/`DATAFINAL` vêm **NULL** (elemento ausente no XML do
-DataSet .NET — que é como se distingue NULL de string vazia). E funcionam assim.
-Não "conserte" isso para `System.String` junto de uma restauração: mudar
-metadado e recuperar ambiente são dois riscos diferentes, e o que está lá
-comprovadamente executa.
+As seis foram restauradas por esse caminho em **16/09/2026**, depois do reset da
+base. Estado conferido nas três camadas: corpo idêntico, execução sem recusa e
+linhas > 0 — `STUDENTS 603`, `TURMADISC 708`, `RESP 597`, `NOTAS 11.765`,
+`FREQ 800` e `PLANOAULA 1.569` (as duas últimas em janela de 7 dias).
 
-Todos os campos acima ficam em `sentencas.manifesto.json`, escrito pelo
+**`DeleteRecord` quer a chave dentro de `<tot:XML>`, não em `<tot:PrimaryKey>`.**
+Passar `PrimaryKey` devolve *"Falha ao salvar XML, XML invalido."* — mensagem que
+não tem relação com a causa e leva a concluir que o DataServer não apaga.
+
+#### Três coisas que só apareceram gravando
+
+1. **`TAMANHO` conta o corpo em CRLF, e o do manifesto não é confiável.** Quatro
+   das seis batem com `len(corpo com CRLF)`; `TODDLE.NOTAS` diverge em 168 e
+   `TODDLE.FREQ` em 2, porque o `exportar-sentencas.sh` compara os `.sql` sem
+   sensibilidade a espaço (`split()`) e não reescreve arquivo que mudou só na
+   indentação. Quem grava tem de **calcular** o `TAMANHO` do corpo que está
+   enviando: um número que não corresponde ao texto é o que trunca o SQL.
+2. **O conteúdo de um campo vem escapado DUAS vezes.** O envelope carrega o
+   dataset escapado, e dentro dele o SQL está escapado de novo. Desfazer só uma
+   camada faz `F.DATA >= ...` voltar como `F.DATA &gt;= ...`, e a conferência
+   reprova uma Sentença perfeita. O `exportar-sentencas.sh` sempre chamou
+   `html.unescape` duas vezes — a linha passa despercebida.
+3. **Coluna nula não aparece no XML do .NET.** Conferir as colunas por
+   `linhas[0]` acusa "coluna removida" para toda coluna que por acaso é nula no
+   primeiro registro. A união de TODAS as linhas resolve a maior parte, mas não
+   distingue "removida pela segurança" de "nula em todas as linhas": a API não
+   devolve schema. Quem decide a causa é comparar `SEMSEGCOLUNAS` e
+   `SEMSEGESTENDIDA` com o manifesto, que é determinístico.
+
+#### O botão no Plano de Controle
+
+A aba **Sentenças** mostra o estado das seis e carrega as que faltam.
+
+- `GET /sentencas` — abre com a **releitura só** (barata). Conferir de verdade
+  executa a `TODDLE.NOTAS`, ~12 mil linhas por SOAP.
+- `POST /sentencas/conferir` — as três camadas, sem gravar. É o passo 2 do
+  runbook abaixo, e o que faltava nas duas perdas.
+- `POST /sentencas/restaurar` (`tenant_admin`) — **pausa as filas**, grava só o
+  que não confere, relê, e retoma as filas no fim. Idempotente por conferência,
+  não por flag: o que já confere não é reenviado.
+
+Uma fila que fique pausada não dá erro em lugar nenhum — ela só para de
+processar. Por isso o `GET` devolve `filasPausadas` e a tela mostra em vermelho.
+
+**A ordem recomendada** continua a mesma, com o passo 5 promovido:
+
+1. **Exportar antes da cópia** (`--gravar`) — leitura pura, risco zero.
+2. **Conferir depois da cópia** — pelo botão *Conferir de verdade*. Foi a
+   ausência disto que transformou a perda em dias, não a ausência do recadastro.
+3. **Carregar pelo botão** — grava e prova, na mesma ação.
+4. **Recadastrar à mão pela tela do RM** — continua valendo como recurso quando
+   a API estiver fora, com o manifesto ao lado.
+
+Todos os campos do manifesto seguem em `sentencas.manifesto.json`, escrito pelo
 `./exportar-sentencas.sh --gravar`.
-
-**A ordem recomendada**, do mais seguro ao menos:
-
-1. **Exportar antes da cópia** (`--gravar`) — leitura pura, risco zero. É o que
-   faltava em 13–15/08: havia o SQL no git, não havia os metadados.
-2. **Smoke test depois da cópia** — rodar as seis e conferir colunas e linhas
-   contra o baseline acima. Foi a ausência disto que transformou a perda em
-   dias, não a ausência do recadastro.
-3. **Pedir o `INSERT` ao time que faz a cópia** — quem restaura o banco tem
-   acesso SQL por definição; `GCONSSQL` + `GCONSSQLPARAMETROS` no mesmo runbook
-   não passa por camada nenhuma do RM que possa descartar campo em silêncio.
-4. **Recadastrar à mão pela tela** — 20 a 40 minutos com o manifesto ao lado, e
-   o próprio RM preenche `TAMANHO`, `GUID` e `CONTROLE` corretamente.
-5. **`SaveRecord`** — só depois de passar numa sonda em Sentença descartável
-   (nunca numa das seis), cujo critério de sucesso **não é `ok=true`**: tem de
-   executar pelo `wsConsultaSQL`, com a credencial da integração e não a de
-   admin, devolvendo as colunas esperadas.
-
-A assimetria decide: cair é barulhento, Sentença silenciosamente errada é
-silenciosa. São ~30 minutos economizados por cópia contra a chance de alimentar
-o Toddle com dado faltando.
 
 > Nem tudo que o conselho disse resistiu à conferência. O Nemotron apontou
 > tabelas `GSECSENTENCA` / `GSECUSUARIOSENTENCA` para permissão: **nenhuma das
 > duas existe** nas 8.521 tabelas do dicionário do RM. Também afirmou que
 > `TIPO` é um enum `smallint` (seria `12` para texto) — o que se lê é
 > `System.Int16`, nome de tipo .NET. Confira antes de agir.
-
 ## A cópia renumera o IDTURMADISC — e o de-para de COURSE depende dele
 
 Decidido em 11/09/2026: a cópia vem da **produção** e o agendamento **fica

@@ -325,6 +325,12 @@ export const api = {
   curriculos: () =>
     pedir<{ organizacao: string; itens: Array<{ id: string; name?: string }> }>('/curriculos'),
 
+  // ─── Sentenças do RM ──────────────────────────────────────────────────────
+  sentencas: () => pedir<PainelDeSentencas>('/sentencas'),
+  conferirSentencas: () => pedir<PainelDeSentencas>('/sentencas/conferir', 'POST'),
+  restaurarSentencas: (motivo: string, codigos?: string[]) =>
+    pedir<ResultadoDaCarga>('/sentencas/restaurar', 'POST', { motivo, codigos }),
+
   // ─── Propostas de vínculo ─────────────────────────────────────────────────
   propostas: () => pedir<{ formas: string[]; itens: PropostaPendente[] }>('/propostas'),
   propor: (p: Proposta) =>
@@ -334,6 +340,53 @@ export const api = {
       `/propostas/${encodeURIComponent(id)}/decidir`, 'POST', { decisao, motivo },
     ),
 };
+
+/** ─── a aba Sentenças ────────────────────────────────────────────────────── */
+
+/**
+ * O resultado das três camadas de aceite de uma Sentença. Espelha
+ * `ConferenciaDeSentenca` no servidor — e é intencional que cada camada traga o
+ * seu `detalhe` em texto: a tela não interpreta, ela mostra o que foi medido.
+ */
+export interface ConferenciaDeSentenca {
+  codigo: string;
+  existeNoRm: boolean;
+  confere: boolean;
+  verificacaoCompleta: boolean;
+  releitura: { ok: boolean; detalhe: string };
+  execucao: { ok: boolean; detalhe: string; colunasAusentes: string[] };
+  volume: { ok: boolean; linhas: number | null; baseline: number | null; detalhe: string };
+  reprovouEm: 'releitura' | 'execucao' | 'volume' | null;
+  /** Aviso que não reprova — tipicamente coluna que veio nula em todas as linhas. */
+  aviso: string | null;
+}
+
+export interface RestauracaoDeSentenca extends ConferenciaDeSentenca {
+  gravou: boolean;
+  desconhecido: boolean;
+  respostaDoRm: string | null;
+}
+
+export interface PainelDeSentencas {
+  coligada: string;
+  periodoLetivo: string | null;
+  apenasReleitura: boolean;
+  itens: ConferenciaDeSentenca[];
+  ausentes: number;
+  divergentes: number;
+  filasPausadas: string[];
+}
+
+export interface ResultadoDaCarga {
+  pedidas: number;
+  restauradas: number;
+  gravadas: number;
+  falharam: number;
+  filasPausadasDurante: string[];
+  filasPausadasAgora: string[];
+  itens: RestauracaoDeSentenca[];
+  aindaFalta: string | null;
+}
 
 /** ─── a aba Jobs ─────────────────────────────────────────────────────────── */
 
