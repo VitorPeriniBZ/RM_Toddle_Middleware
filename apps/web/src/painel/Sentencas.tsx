@@ -26,11 +26,19 @@ import { cor, s } from '../estilos';
  *
  * Três camadas, e as três têm de passar:
  *
- *   releitura — o corpo no RM é caractere a caractere igual ao `.sql`, E as
+ *   cadastro  — o corpo no RM é caractere a caractere igual ao `.sql`, E as
  *               flags `SEMSEG*` batem com o manifesto (são elas que fazem o RM
  *               remover coluna ou linha sem avisar)
  *   execução  — a Sentença roda sem o RM recusar
- *   volume    — voltou mais que zero linha
+ *   retorno   — voltou mais que zero linha
+ *
+ * ─── O QUE NÃO SE MEDE AQUI ────────────────────────────────────────────────
+ *
+ * Não existe comparação de volume contra número esperado. A base é um sistema
+ * vivo — matrícula entra, nota é lançada todo dia — e qualquer literal de
+ * referência diverge do real na primeira semana, acusando diferença justamente
+ * quando a escola está funcionando. O invariante que não caduca é "mais que
+ * zero"; o resto é o número do dia, mostrado sem julgamento.
  *
  * Coluna que não veio na resposta aparece como AVISO, e não reprova: o dataset
  * do .NET omite a coluna nula, então "removida pela segurança" e "nula em todas
@@ -52,10 +60,10 @@ const TOM: Record<string, 'bom' | 'ruim' | 'atencao' | 'neutro'> = {
 
 function situacao(i: ConferenciaDeSentenca): { rotulo: string; tom: 'bom' | 'ruim' | 'atencao' | 'neutro' } {
   if (!i.existeNoRm) return { rotulo: 'não existe no RM', tom: TOM.falta };
-  if (!i.releitura.ok) return { rotulo: 'corpo diverge', tom: TOM.falta };
-  if (!i.verificacaoCompleta) return { rotulo: 'corpo ok, não conferida', tom: TOM.parcial };
-  if (i.confere) return { rotulo: 'confere', tom: TOM.ok };
-  return { rotulo: `reprovou: ${i.reprovouEm}`, tom: TOM.falta };
+  if (!i.releitura.ok) return { rotulo: 'cadastro diverge', tom: TOM.falta };
+  if (!i.verificacaoCompleta) return { rotulo: 'cadastro ok, execução não testada', tom: TOM.parcial };
+  if (i.confere) return { rotulo: 'cadastro e execução ok', tom: TOM.ok };
+  return { rotulo: `falhou em ${i.reprovouEm}`, tom: TOM.falta };
 }
 
 export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
@@ -133,8 +141,12 @@ export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
           <button style={s.botao} onClick={() => void carregar()} disabled={carregando}>
             {carregando ? 'Lendo…' : 'Reler'}
           </button>
+          {/* Nomeado pelo que faz. A versão anterior dizia "Conferir de
+              verdade", o que declarava a outra checagem como de mentira — e a
+              diferença entre as duas não é seriedade, é escopo: uma lê o
+              cadastro, a outra executa a Sentença contra o RM. */}
           <button style={s.botao} onClick={() => void conferirTudo()} disabled={carregando}>
-            Conferir de verdade
+            Executar as seis
           </button>
         </div>
       </div>
@@ -157,9 +169,9 @@ export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
 
       {dados.apenasReleitura && faltando === 0 && (
         <div style={s.aviso('atencao')}>
-          Só a <strong>releitura</strong> foi conferida — o corpo bate com o <code>.sql</code>. Isso
-          ainda não diz que elas executam nem que devolvem dado. Use <em>Conferir de verdade</em>
-          {' '}depois de uma cópia de base: é esse passo que teria encurtado as duas perdas.
+          Foi lido o <strong>cadastro</strong>: o corpo bate com o <code>.sql</code> e as flags de
+          segurança conferem. Isso ainda não diz que elas executam nem que devolvem dado — para
+          isso, <em>Executar as seis</em>. É esse passo que teria encurtado as duas perdas.
         </div>
       )}
 
@@ -170,9 +182,9 @@ export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
             <tr>
               <th style={s.th}>Sentença</th>
               <th style={s.th}>Situação</th>
-              <th style={s.th}>Releitura</th>
+              <th style={s.th}>Cadastro</th>
               <th style={s.th}>Execução</th>
-              <th style={s.th}>Volume</th>
+              <th style={s.th}>Retorno</th>
             </tr>
           </thead>
           <tbody>

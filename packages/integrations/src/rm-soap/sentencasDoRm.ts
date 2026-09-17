@@ -77,18 +77,25 @@ export const SENTENCAS_DO_TODDLE = [
 
 export type CodigoDeSentenca = (typeof SENTENCAS_DO_TODDLE)[number];
 
-/**
- * Linhas medidas em 11/09/2026 (`CODPERLET=2026`, todas as filiais), antes da
- * cópia. Serve para COMPARAR, não para reprovar: depois de uma cópia de base o
- * dado muda de verdade, e um número diferente é informação, não defeito. O que
- * reprova é ZERO.
+/*
+ * NÃO EXISTE BASELINE DE LINHAS AQUI, E É DE PROPÓSITO.
+ *
+ * A primeira versão trazia os números medidos em 11/09/2026 (597 alunos, 672
+ * turma-disciplina, 7.283 notas) e mostrava "603 linhas (baseline: 597)" ao
+ * lado de cada Sentença. Está errado como engenharia: a base é um sistema vivo,
+ * matrícula entra, nota é lançada todo dia, e um número congelado no código
+ * diverge do real na primeira semana. Uma tela que acusa diferença toda vez que
+ * a escola funciona ensina a ignorar a tela.
+ *
+ * O invariante que vale para sempre é OUTRO: a Sentença tem de devolver MAIS QUE
+ * ZERO. Zero linha com a Sentença cadastrada é o silêncio que importa — ela
+ * existe, o dado não. Isso não caduca, não precisa de manutenção e não dispara
+ * sozinho.
+ *
+ * Se um dia for preciso detectar queda brusca de volume, a comparação tem de ser
+ * contra a ÚLTIMA execução observada (em `job_run`, que já guarda histórico), e
+ * não contra um literal que alguém teria de vir atualizar à mão.
  */
-const BASELINE: Partial<Record<CodigoDeSentenca, number>> = {
-  'TODDLE.STUDENTS': 597,
-  'TODDLE.TURMADISC': 672,
-  'TODDLE.RESP': 594,
-  'TODDLE.NOTAS': 7283,
-};
 
 /**
  * As duas de janela de data não cabem numa resposta só no ano inteiro, então o
@@ -305,7 +312,7 @@ export interface ConferenciaDeSentenca {
   verificacaoCompleta: boolean;
   releitura: { ok: boolean; detalhe: string };
   execucao: { ok: boolean; detalhe: string; colunasAusentes: string[] };
-  volume: { ok: boolean; linhas: number | null; baseline: number | null; detalhe: string };
+  volume: { ok: boolean; linhas: number | null; detalhe: string };
   /** Primeira camada que reprovou, para a tela nomear o problema. */
   reprovouEm: CamadaDeAceite | null;
   /**
@@ -344,7 +351,7 @@ export async function conferir(
     verificacaoCompleta: true,
     releitura: { ok: false, detalhe },
     execucao: { ok: false, detalhe: 'não executada', colunasAusentes: [] },
-    volume: { ok: false, linhas: null, baseline: BASELINE[codigo] ?? null, detalhe: 'não contado' },
+    volume: { ok: false, linhas: null, detalhe: 'não contado' },
     reprovouEm: 'releitura',
     aviso: null,
   });
@@ -398,7 +405,7 @@ export async function conferir(
         colunasAusentes: [],
         detalhe: igual ? 'não executada — só a releitura foi pedida' : 'não executada — o corpo já diverge',
       },
-      volume: { ok: false, linhas: null, baseline: BASELINE[codigo] ?? null, detalhe: 'não contado' },
+      volume: { ok: false, linhas: null, detalhe: 'não contado' },
       reprovouEm: igual ? null : 'releitura',
       aviso: null,
     };
@@ -443,19 +450,15 @@ export async function conferir(
     colunasAusentes,
   };
 
-  const baseline = BASELINE[codigo] ?? null;
   const volume = {
     ok: erroDeExecucao === null && linhas.length > 0,
     linhas: erroDeExecucao === null ? linhas.length : null,
-    baseline,
     detalhe:
       erroDeExecucao !== null
         ? 'não contado — a execução falhou'
         : linhas.length === 0
           ? 'ZERO linhas: a Sentença existe, o dado não. Confira o CODPERLET e se a cópia trouxe o período letivo'
-          : baseline === null
-            ? `${linhas.length} linhas (sem baseline: esta Sentença pede janela de data)`
-            : `${linhas.length} linhas (baseline de 11/09: ${baseline})`,
+          : `${linhas.length} linhas`,
   };
 
   const reprovouEm: CamadaDeAceite | null = !releitura.ok
@@ -475,9 +478,15 @@ export async function conferir(
     execucao,
     volume,
     reprovouEm,
+    /*
+     * O aviso nomeia as COLUNAS, e não o tamanho do resultado. Dizer "não vieram
+     * em nenhuma das 603 linhas" amarra a frase a um número que muda a cada
+     * execução e não acrescenta nada: quem lê precisa saber QUAL coluna veio
+     * vazia, não quantas linhas tinha o resultado daquele instante.
+     */
     aviso:
       colunasAusentes.length > 0
-        ? `não vieram em nenhuma das ${linhas.length} linhas: ${colunasAusentes.join(', ')}. ` +
+        ? `sem valor em todo o resultado: ${colunasAusentes.join(', ')}. ` +
           'Com as flags de segurança conferindo, o provável é coluna sempre nula — mas confira ' +
           'se alguma delas alimenta o Toddle, porque nula chega no middleware como undefined.'
         : null,
