@@ -216,6 +216,20 @@ export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
             })}
           </tbody>
         </table>
+
+        {/* A nota de rodapé existe UMA vez. Antes, esta explicação vinha repetida
+            dentro de cada linha da coluna Execução — três linhas de texto
+            idêntico em cinco das seis Sentenças. Texto que se repete a cada
+            linha deixa de ser lido, e leva junto a informação que só ele tinha:
+            QUAL coluna veio vazia. */}
+        {dados.itens.some((i) => i.aviso) && (
+          <p style={{ ...s.fraco, marginTop: '.7rem' }}>
+            <strong>Sobre as colunas sem valor:</strong> com as flags de segurança conferindo, o
+            provável é coluna sempre nula no RM — e não coluna removida. Vale conferir se alguma
+            delas alimenta o Toddle: nula chega no middleware como <code>undefined</code>, que é
+            indistinguível de &ldquo;o RM não tem esse dado&rdquo;.
+          </p>
+        )}
       </div>
 
       <div style={{ ...s.cartao, marginTop: '1rem' }}>
