@@ -86,10 +86,13 @@ quebra em execução: o `rmTeacherSource.ts` da `main` só lê `EMAIL_PROFESSOR`
 > `.sql` no mesmo dia. O único jeito barato de conferir é rodar
 > `./exportar-sentencas.sh` — ele compara os dois lados e nomeia quem divergiu.
 
-### Baseline de execução (11/09/2026, `CODPERLET=2026`, todas as filiais)
+### Volume observado em 11/09/2026 (`CODPERLET=2026`, todas as filiais)
 
-Para comparar depois da cópia — se algum destes voltar zerado, a Sentença
-existe mas o dado não:
+Registro histórico, **não** referência de comparação: a base é um sistema vivo e
+estes números envelhecem sozinhos (em 16/09, depois do reset, a `TODDLE.NOTAS`
+devolvia 11.765 em vez de 7.283 — a base cresceu, nada quebrou). O que o código
+verifica é o invariante que não caduca: **mais que zero linha**. Zero com a
+Sentença cadastrada é que é sintoma — ela existe, o dado não.
 
 | Sentença | linhas |
 |---|---|
@@ -176,8 +179,8 @@ não tem relação com a causa e leva a concluir que o DataServer não apaga.
 
 A aba **Sentenças** mostra o estado das seis e carrega as que faltam.
 
-- `GET /sentencas` — abre com a **releitura só** (barata). Conferir de verdade
-  executa a `TODDLE.NOTAS`, ~12 mil linhas por SOAP.
+- `GET /sentencas` — abre lendo só o **cadastro** (corpo + flags). É barato;
+  executar as seis roda a `TODDLE.NOTAS`, ~12 mil linhas por SOAP.
 - `POST /sentencas/conferir` — as três camadas, sem gravar. É o passo 2 do
   runbook abaixo, e o que faltava nas duas perdas.
 - `POST /sentencas/restaurar` (`tenant_admin`) — **pausa as filas**, grava só o
@@ -190,7 +193,7 @@ processar. Por isso o `GET` devolve `filasPausadas` e a tela mostra em vermelho.
 **A ordem recomendada** continua a mesma, com o passo 5 promovido:
 
 1. **Exportar antes da cópia** (`--gravar`) — leitura pura, risco zero.
-2. **Conferir depois da cópia** — pelo botão *Conferir de verdade*. Foi a
+2. **Executar depois da cópia** — pelo botão *Executar as seis*. Foi a
    ausência disto que transformou a perda em dias, não a ausência do recadastro.
 3. **Carregar pelo botão** — grava e prova, na mesma ação.
 4. **Recadastrar à mão pela tela do RM** — continua valendo como recurso quando

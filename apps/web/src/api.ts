@@ -355,7 +355,7 @@ export interface ConferenciaDeSentenca {
   verificacaoCompleta: boolean;
   releitura: { ok: boolean; detalhe: string };
   execucao: { ok: boolean; detalhe: string; colunasAusentes: string[] };
-  volume: { ok: boolean; linhas: number | null; baseline: number | null; detalhe: string };
+  volume: { ok: boolean; linhas: number | null; detalhe: string };
   reprovouEm: 'releitura' | 'execucao' | 'volume' | null;
   /** Aviso que não reprova — tipicamente coluna que veio nula em todas as linhas. */
   aviso: string | null;
