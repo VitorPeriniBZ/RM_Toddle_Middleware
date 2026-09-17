@@ -390,7 +390,7 @@ export async function conferir(
         ? `corpo ok, mas ${flagsDiferentes
             .map((k) => `${k}=${noRm.flags[k] ?? 'NULL'} (esperado ${flagEsperada(k)})`)
             .join(' e ')} — com isso o RM remove coluna ou linha sem avisar`
-        : `corpo idêntico ao .sql (${disco.corpo.length} caracteres) e flags de segurança conferem`,
+        : `idêntico ao .sql (${disco.corpo.length} car.) · flags ok`,
   };
 
   if (!igual || !executar) {
@@ -439,14 +439,31 @@ export async function conferir(
   for (const linha of linhas) for (const k of Object.keys(linha)) uniao.add(k.toUpperCase());
   const colunasAusentes = linhas.length > 0 ? disco.colunasEsperadas.filter((c) => !uniao.has(c)) : [];
 
+  /*
+   * CONTA AS ESPERADAS QUE VOLTARAM — NUNCA O TAMANHO DA UNIÃO.
+   *
+   * A primeira versão comparava `uniao.size` com `colunasEsperadas.length`, que
+   * são conjuntos DIFERENTES: a união tem toda coluna que o RM devolveu, e as
+   * esperadas saem dos apelidos `AS` do `.sql`. Coluna sem apelido explícito
+   * entra numa e não na outra.
+   *
+   * Na tela isso apareceu como "devolveu 13 das 12 colunas" na `TODDLE.RESP`, e
+   * como "20 das 20 colunas" na `TURMADISC` ao lado do aviso de que
+   * `AULAS_SEMANAIS` não veio — duas frases que se contradizem na mesma linha.
+   * Um painel que se contradiz é pior que um painel que falta: ele gasta o
+   * crédito de quem lê.
+   */
+  const presentes = disco.colunasEsperadas.length - colunasAusentes.length;
   const execucao = {
     ok: erroDeExecucao === null,
     detalhe:
       erroDeExecucao !== null
         ? `o RM recusou executar: ${erroDeExecucao.slice(0, 200)}`
-        : linhas.length > 0
-          ? `executou e devolveu ${uniao.size} das ${disco.colunasEsperadas.length} colunas do .sql`
-          : 'executou sem erro, mas veio vazia (ver volume)',
+        : linhas.length === 0
+          ? 'executou sem erro, mas veio vazia (ver retorno)'
+          : colunasAusentes.length === 0
+            ? `executou e devolveu as ${disco.colunasEsperadas.length} colunas do .sql`
+            : `executou e devolveu ${presentes} das ${disco.colunasEsperadas.length} colunas do .sql`,
     colunasAusentes,
   };
 
@@ -484,12 +501,14 @@ export async function conferir(
      * execução e não acrescenta nada: quem lê precisa saber QUAL coluna veio
      * vazia, não quantas linhas tinha o resultado daquele instante.
      */
-    aviso:
-      colunasAusentes.length > 0
-        ? `sem valor em todo o resultado: ${colunasAusentes.join(', ')}. ` +
-          'Com as flags de segurança conferindo, o provável é coluna sempre nula — mas confira ' +
-          'se alguma delas alimenta o Toddle, porque nula chega no middleware como undefined.'
-        : null,
+    /*
+     * SÓ O FATO. A explicação — "provavelmente coluna nula, mas nula chega como
+     * undefined no middleware" — é idêntica para todas as Sentenças, e repetida
+     * linha a linha virou três linhas de texto igual em cinco das seis, que é o
+     * tipo de ruído que faz parar de ler a coluna inteira. Ela passou a viver
+     * UMA vez, embaixo da tabela.
+     */
+    aviso: colunasAusentes.length > 0 ? `sem valor em todo o resultado: ${colunasAusentes.join(', ')}` : null,
   };
 }
 
