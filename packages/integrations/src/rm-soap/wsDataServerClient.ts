@@ -141,23 +141,7 @@ class WsDataServerClient {
 
     logger.debug({ dataServer, filtro, codFilial }, 'wsDataServer ReadView');
 
-    let raw: string;
-    try {
-      const res = await this.http.post<string>('', body, {
-        responseType: 'text',
-        headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/ReadView` },
-      });
-      raw = res.data;
-    } catch (error) {
-      if (axios.isAxiosError(error) && typeof error.response?.data === 'string') {
-        throw new RmDataServerError(
-          `ReadView ${dataServer} falhou: ${this.extractFault(error.response.data)}`,
-          dataServer,
-        );
-      }
-      throw error;
-    }
-
+    const raw = await this.chamar('ReadView', dataServer, body);
     this.assertNoRmError(raw, dataServer, 'ReadView');
     return this.extractRows(raw, rowElement);
   }
@@ -199,13 +183,10 @@ class WsDataServerClient {
       `<tot:Contexto>${escapeXml(contexto)}</tot:Contexto>` +
       '</tot:ReadRecord></soap:Body></soap:Envelope>';
 
-    const res = await this.http.post<string>('', body, {
-      responseType: 'text',
-      headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/ReadRecord` },
-    });
-    this.assertNoRmError(res.data, dataServer, 'ReadRecord');
+    const raw = await this.chamar('ReadRecord', dataServer, body);
+    this.assertNoRmError(raw, dataServer, 'ReadRecord');
 
-    const dataset = this.decodeEntities(String(res.data ?? ''));
+    const dataset = this.decodeEntities(String(raw ?? ''));
     const m = /<ReadRecordResult[^>]*>([\s\S]*?)<\/ReadRecordResult>/.exec(dataset);
     const conteudo = (m?.[1] ?? '').trim();
     // Dataset de raiz auto-fechado (`<GlbConsSql />`) = nenhum registro.
@@ -240,12 +221,9 @@ class WsDataServerClient {
       `<tot:Contexto>${escapeXml(contexto)}</tot:Contexto>` +
       '</tot:DeleteRecord></soap:Body></soap:Envelope>';
 
-    const res = await this.http.post<string>('', body, {
-      responseType: 'text',
-      headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/DeleteRecord` },
-    });
-    this.assertNoRmError(res.data, dataServer, 'DeleteRecord');
-    const m = /<DeleteRecordResult[^>]*>([\s\S]*?)<\/DeleteRecordResult>/.exec(String(res.data));
+    const raw = await this.chamar('DeleteRecord', dataServer, body);
+    this.assertNoRmError(raw, dataServer, 'DeleteRecord');
+    const m = /<DeleteRecordResult[^>]*>([\s\S]*?)<\/DeleteRecordResult>/.exec(String(raw));
     return (m?.[1] ?? '').trim();
   }
 
@@ -267,12 +245,83 @@ class WsDataServerClient {
       `<tot:Contexto>${escapeXml(this.contexto(codFilial))}</tot:Contexto>` +
       '</tot:GetSchema></soap:Body></soap:Envelope>';
 
-    const res = await this.http.post<string>('', body, {
-      responseType: 'text',
-      headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/GetSchema` },
-    });
-    this.assertNoRmError(res.data, dataServer, 'GetSchema');
-    return res.data;
+    const raw = await this.chamar('GetSchema', dataServer, body);
+    this.assertNoRmError(raw, dataServer, 'GetSchema');
+    return raw;
+  }
+
+  /**
+   * TODA chamada ao wsDataServer passa por aqui, e é aqui que falha de terceiro
+   * para de virar status desta aplicação.
+   *
+   * ─── O QUE ISTO CONSERTA (21/09/2026) ───────────────────────────────────
+   *
+   * `readRecord`, `deleteRecord` e `getSchema` não tinham `try/catch` nenhum.
+   * Numa janela em que o RM recusou a credencial (madrugada até ~09:00, o
+   * padrão da cópia de base), ele respondeu **HTTP 401** e o `AxiosError` cru
+   * subiu do cliente até a rota `GET /sentencas`.
+   *
+   * Esse erro carrega `status: 401`, e o Fastify usa esse campo como status DA
+   * NOSSA resposta. A tela só sabe uma coisa sobre 401 — "sessão morta" — então
+   * mostrou "Sessão expirada", o One Tap relogou sozinho, a aba recarregou, o
+   * RM recusou de novo: seis logins em treze minutos, com a sessão intacta o
+   * tempo todo. A senha estava e continua correta.
+   *
+   * O `readView` já tratava o caso, mas só quando o corpo do erro era string —
+   * e caía no `throw error` cru justamente no 401, que não traz corpo. Ou seja:
+   * a mesma armadilha, um ramo adiante.
+   *
+   * A regra que isto grava: **nenhum erro de biblioteca HTTP sai deste
+   * arquivo**. O que sai é `RmDataServerError`, que não tem `status` nem
+   * `statusCode` e por isso não consegue escolher o código de ninguém.
+   */
+  private async chamar(operacao: string, dataServer: string, body: string): Promise<string> {
+    try {
+      const res = await this.http.post<string>('', body, {
+        responseType: 'text',
+        headers: { SOAPAction: `${TOTVS_NS}IwsDataServer/${operacao}` },
+      });
+      return res.data;
+    } catch (erro) {
+      throw this.erroDoRm(operacao, dataServer, erro);
+    }
+  }
+
+  /**
+   * Converte qualquer falha de transporte num `RmDataServerError` legível.
+   *
+   * Separado do `chamar` porque o `saveRecord` não pode passar por lá — timeout
+   * nele é um TERCEIRO estado (a escrita pode ter acontecido), não uma falha —
+   * mas o erro que ele levanta precisa ser desta mesma família, pelo mesmo
+   * motivo: não carregar status.
+   */
+  private erroDoRm(operacao: string, dataServer: string, erro: unknown): RmDataServerError {
+    const status = axios.isAxiosError(erro) ? erro.response?.status : undefined;
+    const corpo =
+      axios.isAxiosError(erro) && typeof erro.response?.data === 'string'
+        ? this.extractFault(erro.response.data)
+        : null;
+    const causa = corpo ?? (erro as Error).message ?? 'erro desconhecido';
+
+    /*
+     * A pista existe porque a mensagem do RM mente. Ele diz "Usuário ou Senha
+     * inválidos!" para uma recusa TEMPORÁRIA, e quem lê isso vai mexer no
+     * `.env` — que é o único lugar onde não está o problema. Em 18/08/2026 a
+     * causa real foi senha expirada (code FE005); em 21/09/2026 foi uma
+     * janela que passou sozinha. Nas duas o valor no `.env` estava certo.
+     */
+    const pista =
+      status === 401 || status === 403
+        ? ' — o RM recusou a CREDENCIAL DELE, e isto não tem relação com a sessão de quem chamou. ' +
+          'Antes de mexer no .env: confira no painel de Sentenças se as seis executam agora. ' +
+          'Recusa que passa sozinha é janela de cópia de base; recusa que persiste costuma ser ' +
+          'senha expirada no cadastro do usuário do RM (code FE005), não senha errada aqui.'
+        : '';
+
+    return new RmDataServerError(
+      `${operacao} ${dataServer} falhou${status ? ` (HTTP ${status})` : ''}: ${causa}${pista}`,
+      dataServer,
+    );
   }
 
   /**
@@ -430,7 +479,7 @@ class WsDataServerClient {
         );
         return { ok: false, desconhecido: true, resposta: e.message ?? 'timeout' };
       }
-      throw new RmDataServerError(`SaveRecord falhou: ${e.message}`, dataServer);
+      throw this.erroDoRm('SaveRecord', dataServer, err);
     }
 
     const m = /<SaveRecordResult[^>]*>([\s\S]*?)<\/SaveRecordResult>/.exec(texto);
