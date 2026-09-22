@@ -106,6 +106,22 @@ async function checarToddleComCache(): Promise<Dependencia> {
   return resultado;
 }
 
+/**
+ * O texto que vai para a tela quando algo falha.
+ *
+ * `erro.message` sozinho não basta: `AggregateError` — que é o que o `pg` e o
+ * `ioredis` levantam quando nem IPv4 nem IPv6 conectam — tem `message` VAZIA, e
+ * a resposta saía como `{"erro":""}`. Tela em branco sobre um banco fora do ar é
+ * o mesmo silêncio que este projeto passa a vida caçando: o erro existiu, foi
+ * registrado no log, e quem estava olhando não recebeu nada.
+ */
+function mensagemDe(erro: Error): string {
+  if (erro.message) return erro.message;
+  const internos = (erro as unknown as { errors?: Error[] }).errors;
+  const primeiro = internos?.find((e) => e?.message)?.message;
+  return primeiro ? `${erro.name}: ${primeiro}` : erro.name || 'falha interna';
+}
+
 export function construirApp() {
   const app = Fastify({ loggerInstance: logger });
 
@@ -204,6 +220,55 @@ export function construirApp() {
     // revoga por ele, porque sair da conta não pode falhar por falta de sessão.
     if (publicas.some((r) => req.url === r || req.url.startsWith(r + '?'))) return;
     await autenticar(req, reply);
+  });
+
+  /*
+   * ─── QUEM ESCOLHE O STATUS DESTA API É ESTA API ──────────────────────────
+   *
+   * Sem este handler, o Fastify usa `err.statusCode` OU `err.status` do erro
+   * que subir. `status` é campo do `AxiosError` — então um 401 do RM virava um
+   * 401 NOSSO, e a tela, que só conhece um significado para 401 ("sessão
+   * morta"), mandava o operador para o login. Em 21/09/2026 isso produziu seis
+   * logins em treze minutos, com a sessão viva o tempo todo, enquanto o RM
+   * recusava a própria credencial numa janela que passou sozinha às 09:15.
+   *
+   * O `wsDataServerClient` já não deixa mais `AxiosError` escapar; isto aqui é
+   * a rede embaixo — vale para o Toddle, para qualquer cliente HTTP novo e para
+   * o próximo `axios.get` que alguém escrever sem `try/catch`.
+   *
+   * ─── POR QUE 502, E NÃO 500 ──────────────────────────────────────────────
+   *
+   * "Falhei" e "o sistema de quem eu dependo falhou" são diagnósticos
+   * diferentes, e quem lê a tela precisa dessa diferença: 502 com a mensagem do
+   * RM manda olhar o RM. O que NUNCA pode sair daqui por causa de terceiro é
+   * 401 — esse código, nesta aplicação, significa uma coisa só.
+   */
+  app.setErrorHandler((erroCru, req, reply) => {
+    const erro = erroCru as Error & {
+      statusCode?: number;
+      status?: number;
+      isAxiosError?: boolean;
+      validation?: unknown;
+    };
+
+    logger.error({ err: erro, rota: req.url, metodo: req.method }, 'requisição falhou');
+
+    // Corpo malformado é culpa de quem chamou, e o Fastify já diz o que falta.
+    if (erro.validation) return reply.code(400).send({ erro: mensagemDe(erro) });
+
+    /*
+     * `statusCode` é a convenção do Fastify e dos nossos próprios erros; é o
+     * único campo em que confiamos para repetir um status. `status` fica de
+     * fora DE PROPÓSITO: é ele que o axios preenche, e foi ele que causou o
+     * laço de login.
+     */
+    const nosso = erro.isAxiosError === true ? undefined : erro.statusCode;
+    if (typeof nosso === 'number' && nosso >= 400 && nosso < 600) {
+      return reply.code(nosso).send({ erro: mensagemDe(erro) });
+    }
+
+    const deTerceiro = erro.isAxiosError === true || erro.name === 'RmDataServerError';
+    return reply.code(deTerceiro ? 502 : 500).send({ erro: mensagemDe(erro) });
   });
 
   /**

@@ -231,6 +231,29 @@ O dump é **streamed** pelo SSH, não gerado em arquivo no servidor e copiado de
 
 **Um backup não verificado não é backup.** O script recusa o resultado em quatro situações, todas testadas: `ssh`/`pg_dump` com erro, arquivo abaixo de 20KB, gzip corrompido, e — a que pega o caso traiçoeiro — **dump grande mas sem nenhuma linha de `id_mapping`**, que um cheque de tamanho sozinho deixaria passar. Note que o mínimo é medido no arquivo **já comprimido**.
 
+### Abrir o Postgres de produção na IDE
+
+```bash
+./scripts/tunel-db-coolify.sh        # fica em primeiro plano; Ctrl-C fecha
+# IDE: PostgreSQL em 127.0.0.1:55433, banco `postgres`, usuário `postgres`
+```
+
+O Postgres do Coolify é recurso gerenciado e **não publica porta no host**
+(`docker inspect` mostra `{"5432/tcp": null}`), então não há `servidor:5432` para
+apontar a IDE. As duas saídas são o botão *make publicly available* da UI — que
+abre o banco para a internet — ou este túnel, que mantém o banco fechado.
+
+O alvo do encaminhamento é o **IP do container** na rede `coolify`, não o
+`localhost` do servidor, que não escuta nessa porta. Esse IP muda a cada restart
+do container, e é por isso que o script o resolve na hora em vez de deixar um
+número fixo na configuração da IDE — colado lá, ele quebraria calado no próximo
+restart do banco. A senha vai para a área de transferência, nunca para a tela.
+
+A porta local é **55433** de propósito: o `5433` é o Postgres de desenvolvimento
+do `docker-compose.yml` da raiz, e trocar um pelo outro é escrever em produção
+achando que se está no local. (55432 também está fora: é a porta do
+`portal-eav-db-1` nesta máquina.)
+
 ### Deploy no Coolify
 
 `Dockerfile` + `docker-compose.coolify.yml` (não confundir com o `docker-compose.yml`
