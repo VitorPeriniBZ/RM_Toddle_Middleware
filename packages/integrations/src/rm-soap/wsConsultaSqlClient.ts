@@ -27,6 +27,19 @@ const SERVICE_PATH = '/wsConsultaSQL/IwsConsultaSQL';
 
 export type ConsultaRow = Record<string, string>;
 
+/** Ajustes de uma consulta. Hoje só um, e ele existe para não virar recursão. */
+export interface OpcoesDaConsulta {
+  /**
+   * `false` desliga a recuperação automática de Sentença ausente NESTA chamada.
+   *
+   * Quem passa isso é a própria conferência de Sentenças (`sentencasDoRm`), que
+   * executa a Sentença para provar que ela voltou funcionando. Sem a trava, uma
+   * Sentença que continua falhando depois de recolocada dispararia outro
+   * restauro, que conferiria de novo, para sempre.
+   */
+  recuperar?: boolean;
+}
+
 /** Escapa os 5 caracteres que quebram um corpo XML. */
 function escapeXml(value: string): string {
   return value
@@ -176,6 +189,7 @@ class WsConsultaSqlClient {
   async realizarConsulta(
     codSentenca: string,
     params: Record<string, string | number> = {},
+    opcoes: OpcoesDaConsulta = {},
   ): Promise<ConsultaRow[]> {
     if (!rmSoapConfigurado(this.cfg)) {
       throw new Error(
@@ -196,15 +210,70 @@ class WsConsultaSqlClient {
       // Medido em 14/09/2026: o SOAP Fault deste RM volta com HTTP **200** e é
       // tratado em `linhasDoDataset`/`parseResult`, não aqui. Este ramo cobre o
       // erro de transporte que ainda traz corpo (proxy, 500 do IIS).
-      if (axios.isAxiosError(error) && typeof error.response?.data === 'string') {
-        throw new Error(
-          `wsConsultaSQL falhou (${codSentenca}): ${this.extractFault(error.response.data)}`,
-        );
-      }
-      throw error;
+      //
+      // O `AxiosError` NÃO sai daqui cru, nem quando não há corpo: ele carrega
+      // `status`, o Fastify usa esse campo como status da resposta da API, e um
+      // 401 do RM vira "Sessão expirada" na tela de quem está olhando. Foi o
+      // laço de login de 21/09/2026, consertado no irmão deste arquivo.
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      const corpo =
+        axios.isAxiosError(error) && typeof error.response?.data === 'string'
+          ? this.extractFault(error.response.data)
+          : (error as Error).message;
+      throw new Error(
+        `wsConsultaSQL falhou (${codSentenca})${status ? ` (HTTP ${status})` : ''}: ${corpo}`,
+      );
     }
 
-    return this.parseResult(raw, codSentenca);
+    try {
+      return this.parseResult(raw, codSentenca);
+    } catch (erro) {
+      return this.recuperarSentencaSumida(erro, codSentenca, params, opcoes);
+    }
+  }
+
+  /**
+   * A Sentença sumiu do RM? Então recoloca e tenta de novo — UMA vez.
+   *
+   * ─── POR QUE AQUI, E NÃO EM CADA JOB ────────────────────────────────────
+   *
+   * Cinco fluxos chamam este método (alunos, professores, responsáveis,
+   * frequência, notas) e todos morrem do mesmo jeito quando a cópia de base
+   * apaga o `GCONSSQL`. Tratar no cliente cobre os cinco e os próximos.
+   *
+   * ─── O QUE NÃO ACONTECE AQUI ────────────────────────────────────────────
+   *
+   * A decisão de escrever no RM NÃO é tomada com base nesta mensagem — ela é
+   * ambígua e diz a mesma coisa para "não existe" e para "sem permissão". Quem
+   * decide é o `autoRestauro`, que vai LER o cadastro por outro serviço antes
+   * de qualquer coisa. Aqui só se reconhece a forma do problema.
+   *
+   * `import()` tardio porque `autoRestauro` -> `sentencasDoRm` -> este arquivo:
+   * o ciclo existe no grafo e só não existe no tempo.
+   */
+  private async recuperarSentencaSumida(
+    erro: unknown,
+    codSentenca: string,
+    params: Record<string, string | number>,
+    opcoes: OpcoesDaConsulta,
+  ): Promise<ConsultaRow[]> {
+    const mensagem = erro instanceof Error ? erro.message : String(erro);
+
+    const { sentencaAusenteNaMensagem, restaurarSeAusente } = await import('./autoRestauro');
+    const suspeita = sentencaAusenteNaMensagem(mensagem);
+
+    // Outro erro qualquer, ou recuperação já gastou a vez: sobe como sempre.
+    if (!suspeita || opcoes.recuperar === false) throw erro;
+
+    const r = await restaurarSeAusente(suspeita, this.cfg);
+    if (r.desfecho !== 'restaurada') {
+      // A mensagem do RM continua inteira na frente — ela é o fato. O que o
+      // restauro descobriu vai atrás, porque é o que diz o que fazer agora.
+      throw new Error(`${mensagem} [restauro automático: ${r.detalhe}]`);
+    }
+
+    logger.info({ codSentenca, restaurada: suspeita }, 'Sentença recolocada — repetindo a consulta');
+    return this.realizarConsulta(codSentenca, params, { recuperar: false });
   }
 
   private buildEnvelope(codSentenca: string, parameters: string): string {

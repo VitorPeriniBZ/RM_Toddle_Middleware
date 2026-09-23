@@ -414,7 +414,16 @@ export async function conferir(
   let linhas: Array<Record<string, string>> = [];
   let erroDeExecucao: string | null = null;
   try {
-    linhas = await wsConsultaSqlClient.realizarConsulta(codigo, parametrosDeExecucao(codigo, cfg));
+    /*
+     * `recuperar: false`: esta execução é a PROVA de que a Sentença voltou
+     * funcionando, e prova não pode se consertar sozinha. Sem a trava, uma
+     * Sentença que continua falhando depois de recolocada mandaria o cliente
+     * restaurá-la de novo — e este mesmo `conferir` rodaria outra vez, para
+     * sempre. Ver `autoRestauro.ts`.
+     */
+    linhas = await wsConsultaSqlClient.realizarConsulta(codigo, parametrosDeExecucao(codigo, cfg), {
+      recuperar: false,
+    });
   } catch (e) {
     erroDeExecucao = e instanceof Error ? e.message : String(e);
   }

@@ -5,8 +5,8 @@ import { wireDeadLetterQueue } from '@rm-toddle/queues';
 import { closeAllQueues } from '@rm-toddle/queues';
 import { manterAgendamento } from '../../agenda/reconciliar';
 import { ligarVigia } from '../../agenda/vigia';
-import { pgPool } from '@rm-toddle/db';
-import { closeRmSqlPool } from '@rm-toddle/integrations';
+import { pgPool, registrarEvento } from '@rm-toddle/db';
+import { closeRmSqlPool, observarRestauroAutomatico } from '@rm-toddle/integrations';
 import {
   processStudentExtract,
   processStudentUpsertBatch,
@@ -241,6 +241,35 @@ const pararAgendamento = manterAgendamento();
 // O vigia grita pelo que o heartbeat não pega: job morrendo com o worker VIVO.
 // Foi esse o modo de falha dos 62 registros na DLQ, sete dias sem ninguém saber.
 const pararVigia = ligarVigia();
+
+/*
+ * A TRILHA DO QUE O MIDDLEWARE ESCREVEU NO RM SOZINHO.
+ *
+ * O restauro automático de Sentença acontece lá embaixo, dentro do cliente do
+ * `wsConsultaSQL`, que não conhece banco — de propósito, senão o adaptador do RM
+ * passaria a exigir Postgres para ser importado. O gancho é registrado AQUI, no
+ * processo que já tem pool e tenant.
+ *
+ * Vale para todo desfecho, inclusive os que não escrevem nada: "a Sentença
+ * sumiu e foi recolocada às 3h" e "a Sentença estava lá e o RM recusou assim
+ * mesmo" são as duas respostas que alguém vai querer da manhã seguinte, e
+ * nenhuma das duas sobrevive só no log de container.
+ *
+ * `ator` é `worker:...` (o formato que a migration 006 define) e não uma pessoa:
+ * quem olhar a auditoria precisa distinguir na hora o que um humano decidiu do
+ * que a máquina fez sozinha.
+ */
+observarRestauroAutomatico(async ({ codigo, desfecho, detalhe }) => {
+  await registrarEvento(pgPool, {
+    ator: 'worker:restauro-automatico',
+    acao: 'sentenca.restauro.automatico',
+    entidade: 'GCONSSQL',
+    entidadeId: codigo,
+    depois: { desfecho, detalhe },
+    resultado: desfecho,
+    motivo: 'Sentença recusada pelo RM durante um job agendado',
+  }).catch((err) => logger.warn({ err, codigo }, 'não consegui auditar o restauro automático'));
+});
 
 worker.on('completed', (job, result) => {
   logger.info({ jobId: job.id, jobName: job.name, result }, 'Job concluído');

@@ -5,6 +5,7 @@ export * from './toddle/types';
 export * from './rm-soap/wsConsultaSqlClient';
 export * from './rm-soap/wsDataServerClient';
 export * from './rm-soap/sentencasDoRm';
+export * from './rm-soap/autoRestauro';
 export * from './totvs/types';
 export * from './totvs/totvsEducationalClient';
 export * from './rm-database/rmSqlPool';
