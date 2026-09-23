@@ -180,6 +180,13 @@ export async function fecharRun(
 export interface ContadoresLote {
   created: number;
   updated: number;
+  /**
+   * Registros que o lote NÃO escreveu no destino porque o payload é idêntico ao
+   * da última escrita (ver migração 021). Somado ao `updated`, dá o total
+   * conferido — e a diferença entre os dois é o que o painel nunca soube
+   * mostrar: quanto do trabalho era reescrita à toa.
+   */
+  inalterados: number;
   unarchived: number;
   failed: number;
 }
@@ -228,12 +235,13 @@ export async function acumularLote(
                 'updated',          COALESCE((resultado->>'updated')::int, 0)          + $4::int,
                 'unarchived',       COALESCE((resultado->>'unarchived')::int, 0)       + $5::int,
                 'failed',           COALESCE((resultado->>'failed')::int, 0)           + $6::int,
+                'inalterados',      COALESCE((resultado->>'inalterados')::int, 0)      + $7::int,
                 'lotesConcluidos',  COALESCE((resultado->>'lotesConcluidos')::int, 0)  + 1
               ),
               updated_at = now()
         WHERE tenant_id = $1 AND chave = $2 AND estado = 'executing'
         RETURNING resultado, (payload->>'lotesEsperados')::int AS esperados`,
-      [await tenantId(), runChave, c.created, c.updated, c.unarchived, c.failed],
+      [await tenantId(), runChave, c.created, c.updated, c.unarchived, c.failed, c.inalterados],
     );
 
     const linha = rows[0];

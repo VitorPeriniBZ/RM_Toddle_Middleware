@@ -31,9 +31,9 @@ const abrir = (chave: string, lotes: number, emEscopo = 255) =>
 describe('acumulação por lote', () => {
   it('só o ÚLTIMO lote fecha o run, e os contadores somam', async () => {
     await abrir('r1', 3);
-    expect(await acumularLote('r1', { created: 1, updated: 49, unarchived: 0, failed: 0 })).toBeNull();
-    expect(await acumularLote('r1', { created: 2, updated: 48, unarchived: 1, failed: 0 })).toBeNull();
-    const r = await acumularLote('r1', { created: 0, updated: 50, unarchived: 0, failed: 0 });
+    expect(await acumularLote('r1', { created: 1, updated: 49, inalterados: 0, unarchived: 0, failed: 0 })).toBeNull();
+    expect(await acumularLote('r1', { created: 2, updated: 48, inalterados: 0, unarchived: 1, failed: 0 })).toBeNull();
+    const r = await acumularLote('r1', { created: 0, updated: 50, inalterados: 0, unarchived: 0, failed: 0 });
     expect(r?.completo).toBe(true);
     expect(r?.estado).toBe('succeeded');
     expect(r?.resultado).toMatchObject({ created: 3, updated: 147, unarchived: 1 });
@@ -43,27 +43,27 @@ describe('acumulação por lote', () => {
     // Se o `||` sobrescrevesse em vez de mesclar, a guarda de desvio do run
     // seguinte perderia a referência.
     await abrir('r2', 1);
-    const r = await acumularLote('r2', { created: 0, updated: 1, unarchived: 0, failed: 0 });
+    const r = await acumularLote('r2', { created: 0, updated: 1, inalterados: 0, unarchived: 0, failed: 0 });
     expect(r?.resultado.emEscopo).toBe(255);
   });
 
   it('lote com falha marca o run como failed', async () => {
     await abrir('r3', 1, 10);
-    const r = await acumularLote('r3', { created: 0, updated: 9, unarchived: 0, failed: 1 });
+    const r = await acumularLote('r3', { created: 0, updated: 9, inalterados: 0, unarchived: 0, failed: 1 });
     expect(r?.estado).toBe('failed');
   });
 
   it('acumular em run já fechado não reabre nem soma', async () => {
     await abrir('r4', 1);
-    await acumularLote('r4', { created: 1, updated: 0, unarchived: 0, failed: 0 });
-    expect(await acumularLote('r4', { created: 99, updated: 99, unarchived: 0, failed: 0 })).toBeNull();
+    await acumularLote('r4', { created: 1, updated: 0, inalterados: 0, unarchived: 0, failed: 0 });
+    expect(await acumularLote('r4', { created: 99, updated: 99, inalterados: 0, unarchived: 0, failed: 0 })).toBeNull();
   });
 });
 
 describe('baseline da guarda de desvio', () => {
   it('lê o último run SUCCEEDED e ignora o failed', async () => {
     await abrir('b1', 1, 255);
-    await acumularLote('b1', { created: 0, updated: 255, unarchived: 0, failed: 0 });
+    await acumularLote('b1', { created: 0, updated: 255, inalterados: 0, unarchived: 0, failed: 0 });
     await abrir('b2', 1, 10);
     await fecharRunPorChave('b2', 'failed', { emEscopo: 10, motivo: 'abortado' });
     expect(await ultimaContagemEmEscopo(TIPO)).toBe(255);

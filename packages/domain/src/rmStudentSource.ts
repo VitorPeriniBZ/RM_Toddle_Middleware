@@ -36,9 +36,36 @@ const cfg = tenantConfig;
  *   DTNASCIMENTO   (opcional)     nascimento (ISO ou dd/mm/aaaa)
  *   SEXO           (opcional)     gênero (M/F)
  */
+/**
+ * Quantos alunos o RM diz ter alterado — a pergunta que o contador de upsert não
+ * responde.
+ *
+ * `updated: 50` nunca significou "50 alunos mudaram": 50 é o tamanho do lote, e o
+ * job reenviava todo mundo a cada passada. Medido em 23/09/2026 pelo
+ * `RECMODIFIEDON` do próprio RM: dos 866 alunos da coligada, ZERO tinham mudado
+ * nas últimas 24h e 5 na última semana — enquanto o sync mandava 252 PATCH por
+ * rodada, 4x ao dia.
+ *
+ * Os três carimbos são de tabelas diferentes e todos importam: a ficha do aluno
+ * (`SALUNO`), a ficha pessoal (`PPESSOA`, onde moram nome e e-mail) e a matrícula
+ * (`SMATRICPL`, onde mora a turma). Quem manda é o mais recente dos três.
+ *
+ * `null` = a Sentença em vigor no RM ainda não tem as colunas. É informação
+ * ausente, e dizer "0 alterados" nesse caso seria inventar uma medição.
+ */
+export interface AlteracoesNoRm {
+  ultimas24h: number;
+  ultimos7dias: number;
+  /** ISO do carimbo mais recente entre os alunos em escopo. */
+  maisRecenteEm: string | null;
+  /** Alunos em escopo que trouxeram carimbo — o denominador da conta. */
+  comCarimbo: number;
+}
+
 export async function fetchStudentsFromRm(): Promise<{
   contexts: RmStudentContext[];
   enrichmentByCode: Map<string, StudentEnrichment>;
+  alteracoesNoRm: AlteracoesNoRm | null;
 }> {
   if (!rmSoapConfigurado) {
     throw new Error('wsConsultaSQL não configurado (RM_WS_BASEURL/RM_WS_USER/RM_WS_PASS).');
@@ -61,6 +88,7 @@ export async function fetchStudentsFromRm(): Promise<{
 
   const contexts: RmStudentContext[] = [];
   const enrichmentByCode = new Map<string, StudentEnrichment>();
+  const carimboPorAluno = new Map<string, string>();
 
   // Escopo por campus: a integração cobre apenas o(s) CODFILIAL listado(s) em
   // RM_CODFILIAL. O literal "ALL" inclui todos os campi — mas é uma DECLARAÇÃO
@@ -104,6 +132,18 @@ export async function fetchStudentsFromRm(): Promise<{
       TermStatusName: pick(row, 'STATUS_DESCRICAO', 'STATUSDESCRICAO'),
     });
 
+    // O mais recente dos três carimbos do RM. Um aluno pode aparecer em mais de
+    // uma linha (uma por contexto de matrícula): fica o maior.
+    const carimbo = maisRecente(
+      pick(row, 'PESSOA_ALTERADA_EM'),
+      pick(row, 'MATRICULA_ALTERADA_EM'),
+      pick(row, 'ALUNO_ALTERADO_EM'),
+    );
+    if (carimbo) {
+      const anterior = carimboPorAluno.get(studentCode);
+      if (!anterior || carimbo > anterior) carimboPorAluno.set(studentCode, carimbo);
+    }
+
     // E-mail: institucional (EMAIL) tem precedência; pessoal (EMAILPESSOAL) é
     // fallback. Para inverter, troque a ordem das duas linhas abaixo.
     const email =
@@ -121,6 +161,8 @@ export async function fetchStudentsFromRm(): Promise<{
     }
   }
 
+  const alteracoesNoRm = resumirAlteracoes(carimboPorAluno);
+
   logger.info(
     {
       linhas: rows.length,
@@ -128,11 +170,42 @@ export async function fetchStudentsFromRm(): Promise<{
       enriquecidos: enrichmentByCode.size,
       foraDoEscopo: outOfScope,
       campi: allowedBranches.length > 0 ? allowedBranches.join(',') : 'todos',
+      alteradosNoRm24h: alteracoesNoRm?.ultimas24h ?? 'sem carimbo na Sentença',
     },
     'Roster de alunos lido via wsConsultaSQL',
   );
 
-  return { contexts, enrichmentByCode };
+  return { contexts, enrichmentByCode, alteracoesNoRm };
+}
+
+/** O maior de três carimbos ISO, ignorando vazio. Comparação lexicográfica basta em ISO. */
+function maisRecente(...valores: Array<string | undefined>): string | undefined {
+  let maior: string | undefined;
+  for (const v of valores) {
+    const limpo = v?.trim();
+    if (!limpo) continue;
+    if (!maior || limpo > maior) maior = limpo;
+  }
+  return maior;
+}
+
+/** Conta quantos carimbos caem nas janelas. `null` quando a Sentença não os traz. */
+function resumirAlteracoes(carimbos: Map<string, string>): AlteracoesNoRm | null {
+  if (carimbos.size === 0) return null;
+  const agora = Date.now();
+  const dentro = (iso: string, dias: number): boolean => {
+    const t = Date.parse(iso);
+    return Number.isFinite(t) && agora - t <= dias * 86_400_000;
+  };
+  let ultimas24h = 0;
+  let ultimos7dias = 0;
+  let maisRecenteEm: string | null = null;
+  for (const iso of carimbos.values()) {
+    if (dentro(iso, 1)) ultimas24h += 1;
+    if (dentro(iso, 7)) ultimos7dias += 1;
+    if (!maisRecenteEm || iso > maisRecenteEm) maisRecenteEm = iso;
+  }
+  return { ultimas24h, ultimos7dias, maisRecenteEm, comCarimbo: carimbos.size };
 }
 
 /** Busca uma coluna por vários nomes possíveis (case-insensitive), trimada. */

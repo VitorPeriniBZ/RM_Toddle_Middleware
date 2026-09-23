@@ -17,7 +17,7 @@ import {
   studentExtractJobSchema,
   studentUpsertBatchJobSchema,
 } from '@rm-toddle/contracts';
-import { fetchStudentsFromRm } from '@rm-toddle/domain';
+import { fetchStudentsFromRm, hashDoPayload } from '@rm-toddle/domain';
 import { toCreatePayload, toSyncItem, toUpdatePayload } from '@rm-toddle/domain';
 import { buildSourceId, rmCodeFromSourceId } from '@rm-toddle/domain';
 import { resolveYearGroupId } from '@rm-toddle/domain';
@@ -62,6 +62,11 @@ export async function processStudentExtract(job: Job): Promise<{
   totalContexts: number;
   uniqueStudents: number;
   batches: number;
+  /**
+   * Quantos alunos o RM realmente alterou, pelo carimbo dele. `null` enquanto a
+   * Sentença em vigor não trouxer as colunas — que é diferente de zero.
+   */
+  alteradosNoRm: { ultimas24h: number; ultimos7dias: number; maisRecenteEm: string | null } | null;
 }> {
   const { trigger } = studentExtractJobSchema.parse(job.data ?? {});
   const log = logger.child({ jobId: job.id, jobName: job.name, trigger });
@@ -69,7 +74,7 @@ export async function processStudentExtract(job: Job): Promise<{
 
   // 1. Lê o roster completo via Sentença SQL (SOAP) — email/dob/gênero já vêm
   //    no mesmo rowset (enrichmentByCode), sem segundo round-trip.
-  const { contexts, enrichmentByCode } = await fetchStudentsFromRm();
+  const { contexts, enrichmentByCode, alteracoesNoRm } = await fetchStudentsFromRm();
   // Formato único do projeto (`ProgressoDeJob`): `fase` sempre, `feitos`/`total`
   // só com denominador. A leitura não tem — daí só a fase. O progresso do RUN
   // inteiro de alunos não vem daqui: vem de `lotesConcluidos/lotesEsperados` no
@@ -204,7 +209,18 @@ export async function processStudentExtract(job: Job): Promise<{
   }
 
   log.info({ runId, batches: batches.length, students: items.length }, 'Fan-out de lotes enfileirado');
-  return { totalContexts, uniqueStudents: items.length, batches: batches.length };
+  return {
+    totalContexts,
+    uniqueStudents: items.length,
+    batches: batches.length,
+    alteradosNoRm: alteracoesNoRm
+      ? {
+          ultimas24h: alteracoesNoRm.ultimas24h,
+          ultimos7dias: alteracoesNoRm.ultimos7dias,
+          maisRecenteEm: alteracoesNoRm.maisRecenteEm,
+        }
+      : null,
+  };
 }
 
 /**
@@ -238,12 +254,36 @@ function isActiveContext(ctx: RmStudentContext): boolean {
   return status !== undefined && status !== null && allowed.includes(String(status).trim());
 }
 
+/**
+ * Passou tempo demais desde a última escrita neste registro?
+ *
+ * É o teto da divergência que o pulo de escrita cria. Enquanto o sync reescrevia
+ * tudo todo dia, uma edição feita à mão NO TODDLE durava até a passada seguinte;
+ * pulando o idêntico, ela duraria para sempre. Com a janela, dura no máximo
+ * `SYNC_REENVIO_DIAS` (padrão 7) — e a economia continua em ~96%, porque o
+ * reenvio se espalha pelos dias em vez de acontecer para todos de uma vez.
+ *
+ * `0` desliga o reenvio periódico. Nunca escrito antes (`null`) sempre escreve.
+ */
+function venceuAJanelaDeReenvio(escritoEm: Date | null): boolean {
+  if (env.SYNC_REENVIO_DIAS === 0) return false;
+  if (!escritoEm) return true;
+  return Date.now() - escritoEm.getTime() > env.SYNC_REENVIO_DIAS * 86_400_000;
+}
+
 // ---------------------------------------------------------------------------
 // Fase 2: UPSERT BATCH
 // ---------------------------------------------------------------------------
 
 export async function processStudentUpsertBatch(job: Job): Promise<{
   created: number;
+  /**
+   * Alunos que este lote NÃO mandou para o Toddle porque o payload é idêntico ao
+   * da última escrita. É o número que faltava: até 23/09/2026 `updated` era
+   * sempre o tamanho do lote, e ninguém conseguia distinguir "mudou" de
+   * "reenviei tudo de novo".
+   */
+  inalterados: number;
   updated: number;
   unarchived: number;
   failed: number;
@@ -307,6 +347,7 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
   // retentativa idempotente (viram "update").
   let created = 0;
   let updated = 0;
+  let inalterados = 0;
   let unarchived = 0;
   const failures: Array<{ studentCode: string; error: string }> = [];
 
@@ -323,22 +364,60 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
         // o GET /students não devolve arquivado nem por sourceId, então a
         // camada 2 (busca remota) jamais o encontraria. É a id_mapping que
         // segura o toddle_id.
+        let desarquivou = false;
         if (mapping.state === 'archived') {
           await toddleClient.unarchiveStudent(mapping.toddleId);
           unarchived += 1;
+          desarquivou = true;
           log.info(
             { studentCode: item.studentCode, toddleId: mapping.toddleId, motivoAnterior: mapping.archiveReason },
             'Aluno voltou ao escopo — desarquivado no Toddle',
           );
         }
 
-        await toddleClient.updateStudent(mapping.toddleId, toUpdatePayload(item));
+        /*
+         * ─── ESCREVER SÓ O QUE MUDOU ────────────────────────────────────────
+         *
+         * Até 23/09/2026 todo aluno mapeado levava um PATCH em toda passada, sem
+         * comparação nenhuma. Medido no mesmo dia pelo `RECMODIFIEDON` do RM:
+         * ZERO alunos alterados nas últimas 24h, 5 na última semana — contra
+         * ~1000 PATCH por dia. O `updated: 50` que aparecia no painel era o
+         * tamanho do lote, não uma medição.
+         *
+         * `desarquivou` força a escrita: o registro acabou de voltar às
+         * listagens do Toddle e o que está lá é o de antes de ele sair.
+         */
+        const payload = toUpdatePayload(item);
+        const hash = hashDoPayload(payload);
+        const escreverMesmoAssim = desarquivou || venceuAJanelaDeReenvio(mapping.payloadEscritoEm);
+
+        if (mapping.payloadHash === hash && !escreverMesmoAssim) {
+          /*
+           * Nada a escrever — mas o upsert acontece do mesmo jeito, SEM hash.
+           *
+           * É ele que renova `last_seen_in_scope_at`. Sem essa renovação o aluno
+           * pulado pareceria ter saído do escopo e seria ARQUIVADO no Toddle: o
+           * pulo de escrita viraria exclusão, que é o pior desfecho possível
+           * para uma otimização.
+           */
+          await idMappingRepository.upsert({
+            entityType: 'STUDENT',
+            rmCode: item.studentCode,
+            toddleId: mapping.toddleId,
+            rmInternalId: item.studentInternalId,
+          });
+          inalterados += 1;
+          continue;
+        }
+
+        await toddleClient.updateStudent(mapping.toddleId, payload);
         // O upsert devolve o estado para 'active' e limpa archived_at/reason.
         await idMappingRepository.upsert({
           entityType: 'STUDENT',
           rmCode: item.studentCode,
           toddleId: mapping.toddleId,
           rmInternalId: item.studentInternalId,
+          payloadHash: hash,
         });
         updated += 1;
       } else {
@@ -361,7 +440,7 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
     }
   }
 
-  log.info({ created, updated, unarchived, failed: failures.length }, 'Upsert de lote concluído');
+  log.info({ created, updated, inalterados, unarchived, failed: failures.length }, 'Upsert de lote concluído');
 
   if (failures.length > 0) {
     // Dispara a retentativa exponencial do BullMQ (3x) e, esgotada, a DLQ.
@@ -382,6 +461,7 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
   const run = await acumularLote(batch.runId, {
     created,
     updated,
+    inalterados,
     unarchived,
     failed: failures.length,
   });
@@ -390,5 +470,5 @@ export async function processStudentUpsertBatch(job: Job): Promise<{
     await heartbeat.alunos(run.estado === 'succeeded' ? 'sucesso' : 'falha', run.resultado);
   }
 
-  return { created, updated, unarchived, failed: 0 };
+  return { created, updated, inalterados, unarchived, failed: 0 };
 }

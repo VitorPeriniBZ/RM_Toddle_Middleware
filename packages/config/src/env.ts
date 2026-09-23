@@ -129,6 +129,20 @@ const envSchema = z.object({
   /** Prefixo do sourceId (ex.: "1-" para coligada). Escolha um formato e NUNCA mude. */
   SOURCE_ID_PREFIX: z.string().default(''),
   SYNC_BATCH_SIZE: z.coerce.number().int().positive().max(200).default(50),
+  /**
+   * De quantos em quantos dias um cadastro é reenviado ao destino MESMO sem ter
+   * mudado no RM.
+   *
+   * O sync passou a pular escrita idêntica (migração 021) — o que corta ~96% das
+   * chamadas, porque o RM altera unidades de aluno por semana e o job mandava
+   * 252 PATCH por rodada. Só que pular tem um efeito colateral que ninguém
+   * pediu: até aqui, edição feita à mão NO TODDLE era desfeita na passada
+   * seguinte, e com o pulo ela sobreviveria para sempre.
+   *
+   * Esta janela é o teto dessa divergência. 0 desliga o reenvio periódico (só
+   * mudança real escreve) — o que é uma escolha legítima, mas deliberada.
+   */
+  SYNC_REENVIO_DIAS: z.coerce.number().int().min(0).max(365).default(7),
   STUDENTS_SYNC_CRON: z.string().default('0 3 * * *'),
 
   // --- Multi-tenant ---
