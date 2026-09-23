@@ -270,6 +270,24 @@ descobriu, em 20/08, que a `TODDLE.RESP` tinha sido cadastrada com o SQL da
 Para separar "conta quebrada" de "Sentença faltando", sonde um DataServer:
 `GetSchema` de `EduFrequenciaDiariaWSData` responde com a mesma credencial.
 
+### Desde 23/09/2026 essa sonda roda sozinha
+
+O `wsConsultaSqlClient` reconhece essa recusa e chama o `autoRestauro`, que faz
+exatamente o que a seção acima manda fazer à mão: lê o cadastro por OUTRO
+serviço (`ReadRecord` no `GlbConsSQLData`) antes de concluir qualquer coisa.
+
+- **Ausente** → recoloca a partir do `.sql` do repositório, confere pelas três
+  camadas e repete a consulta uma vez. O job segue como se nada tivesse
+  acontecido — e um alerta avisa que sumiu, porque Sentença que some significa
+  cópia de base, e o resto do ambiente provavelmente mudou junto.
+- **Presente** → **não escreve nada** e falha dizendo que a recusa é de
+  permissão/perfil. Sobrescrever cadastro existente continua sendo decisão
+  humana, no botão do painel: o RM pode estar à frente do repositório, e
+  "restaurar" seria rebaixar um SQL melhor por um pior sem ninguém ver.
+
+Desligável com `SENTENCAS_AUTO_RESTAURO=false`. A trilha fica em `audit_event`
+como `sentenca.restauro.automatico`, com ator `worker:restauro-automatico`.
+
 ## Por que a Sentença de alunos traz curso e matriz
 
 Sem saber a qual **currículo** o aluno pertence, o de-para turma

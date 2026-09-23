@@ -58,6 +58,25 @@ const envSchema = z.object({
   RM_TURMAS_IGNORADAS: z.string().optional(),
   /** Responsáveis (ex.: TODDLE.RESP). Ver docs/rm-sentencas/TODDLE.RESP.ESPEC.md. */
   RM_SENTENCA_RESPONSAVEIS: z.string().optional(),
+  /**
+   * Recolocar sozinho a Sentença que SUMIU do RM, quando um job esbarra nela.
+   *
+   * Toda cópia de base por cima do ambiente apaga as seis — 13–15/08/2026,
+   * 16/09/2026 e de novo no domingo 20/09/2026. O conteúdo não se perde (ele
+   * mora em `docs/rm-sentencas/*.sql`, versionado); o que se perde são os DIAS
+   * até alguém perceber, porque o RM só diz "não existe ou não pôde ser
+   * executada por restrição de filtro por perfil/usuário" dentro de um job que
+   * roda às 3 da manhã.
+   *
+   * `false` desliga e volta ao comportamento anterior: o job falha e alguém
+   * clica no botão do painel. O default é `true` porque recolocar o que o
+   * repositório já contém é mais seguro do que ficar dias sem fluxo nenhum.
+   *
+   * O que este interruptor NÃO faz, e é o freio que importa: a restauração
+   * automática só acontece quando a Sentença está **AUSENTE** do RM. Sentença
+   * presente e divergente NÃO é sobrescrita sozinha — ver `autoRestauro.ts`.
+   */
+  SENTENCAS_AUTO_RESTAURO: z.enum(['true', 'false']).default('true'),
   RM_CODCOLIGADA: z.coerce.number().int().default(1),
   /**
    * Campus (CODFILIAL) no escopo da integração, em CSV. OBRIGATÓRIA.

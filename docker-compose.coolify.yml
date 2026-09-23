@@ -23,6 +23,13 @@
 #     idempotência para salvar — o middleware CRIA 253 ALUNOS DUPLICADOS.
 #     Confira este valor antes do primeiro sync. Não há erro que o denuncie.
 #
+#   SENTENCAS_AUTO_RESTAURO=true
+#     Recoloca sozinha a Sentença que a cópia de base apagou, quando um job
+#     esbarra nela. O default (`true`) é o que você quer: sem isso, a próxima
+#     cópia de base derruba os fluxos até alguém abrir o painel e clicar. O
+#     freio está no código, não aqui — só restaura o que está AUSENTE; Sentença
+#     presente e divergente continua sendo decisão humana.
+#
 #   REDIS_URL           default aponta para localhost: sem isto, não acha o Redis
 #   RM_CODPERLET=2026   ano letivo; sem ele o extract falha em runtime
 #   RM_CODCOLIGADA=1
