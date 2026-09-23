@@ -2,6 +2,7 @@
 export * from './rmStudentSource';
 export * from './sourceId';
 export * from './studentTransformer';
+export * from './payloadHash';
 export * from './yearGroupResolver';
 export * from './studentEnrichment';
 export * from './rmAttendanceTargets';

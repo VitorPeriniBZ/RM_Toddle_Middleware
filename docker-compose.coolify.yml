@@ -31,6 +31,13 @@
 #     presente e divergente continua sendo decisão humana.
 #
 #   REDIS_URL           default aponta para localhost: sem isto, não acha o Redis
+#   SYNC_REENVIO_DIAS=7
+#     O sync de aluno pula escrita idêntica (migração 021): das ~1000 chamadas
+#     diárias ao Toddle sobram as poucas que mudaram de verdade. O efeito
+#     colateral é que edição feita À MÃO no Toddle deixa de ser desfeita na
+#     passada seguinte — esta janela é o teto dessa divergência. 0 desliga o
+#     reenvio periódico, e aí só mudança real escreve.
+#
 #   RM_CODPERLET=2026   ano letivo; sem ele o extract falha em runtime
 #   RM_CODCOLIGADA=1
 #   STUDENTS_SYNC_CRON=0 3 * * *

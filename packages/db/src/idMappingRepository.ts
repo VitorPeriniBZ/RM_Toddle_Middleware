@@ -71,6 +71,14 @@ export interface IdMapping {
   lastSeenInScopeAt: Date | null;
   /** Só YEAR_GROUP: currículo Toddle onde aquele yearGroupId vive. */
   curriculumId: string | null;
+  /**
+   * sha256 do payload enviado na última escrita ao destino. Igual ao de hoje =
+   * nada a escrever. `null` = nunca foi escrito por este caminho (o primeiro run
+   * depois da migração 021 escreve e grava).
+   */
+  payloadHash: string | null;
+  /** Quando aquele payload foi de fato enviado. Ver a migração 021. */
+  payloadEscritoEm: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -87,6 +95,8 @@ interface IdMappingRow {
   archive_reason: string | null;
   last_seen_in_scope_at: Date | null;
   curriculum_id: string | null;
+  payload_hash: string | null;
+  payload_escrito_em: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -103,6 +113,8 @@ const mapRow = (r: IdMappingRow): IdMapping => ({
   archiveReason: r.archive_reason,
   lastSeenInScopeAt: r.last_seen_in_scope_at,
   curriculumId: r.curriculum_id,
+  payloadHash: r.payload_hash,
+  payloadEscritoEm: r.payload_escrito_em,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -207,12 +219,25 @@ export const idMappingRepository = {
     toddleId: string;
     rmInternalId?: string | null;
     curriculumId?: string | null;
+    /**
+     * Hash do payload ENVIADO agora. Só quem de fato escreveu no destino passa
+     * isto — quem pulou a escrita por estar tudo igual chama o upsert SEM ele, e
+     * o carimbo anterior fica de pé.
+     *
+     * A distinção importa muito: o upsert continua acontecendo mesmo quando não
+     * se escreve nada, porque é ele que renova `last_seen_in_scope_at`. Sem essa
+     * renovação, o aluno pulado pareceria ter saído do escopo e seria ARQUIVADO
+     * no Toddle — o pulo de escrita viraria exclusão.
+     */
+    payloadHash?: string | null;
   }): Promise<IdMapping> {
     const { rows } = await pgPool.query<IdMappingRow>(
       `INSERT INTO id_mapping
              (tenant_id, entity_type, rm_code, rm_internal_id, toddle_id,
-              target_instance_key, curriculum_id, state, last_seen_in_scope_at)
-       VALUES ($7, $1, $2, $3, $4, $5, $6, 'active', now())
+              target_instance_key, curriculum_id, state, last_seen_in_scope_at,
+              payload_hash, payload_escrito_em)
+       VALUES ($7, $1, $2, $3, $4, $5, $6, 'active', now(),
+               $8, CASE WHEN $8::text IS NULL THEN NULL ELSE now() END)
        ON CONFLICT (tenant_id, entity_type, rm_code, target_instance_key) DO UPDATE
          SET toddle_id             = EXCLUDED.toddle_id,
              rm_internal_id        = COALESCE(EXCLUDED.rm_internal_id, id_mapping.rm_internal_id),
@@ -221,6 +246,10 @@ export const idMappingRepository = {
              archived_at           = NULL,
              archive_reason        = NULL,
              last_seen_in_scope_at = now(),
+             -- COALESCE, e não EXCLUDED puro: quem pulou a escrita não passa
+             -- hash, e não pode apagar o carimbo de quem escreveu antes.
+             payload_hash          = COALESCE(EXCLUDED.payload_hash, id_mapping.payload_hash),
+             payload_escrito_em    = COALESCE(EXCLUDED.payload_escrito_em, id_mapping.payload_escrito_em),
              updated_at            = now()
        RETURNING *`,
       [
@@ -231,6 +260,7 @@ export const idMappingRepository = {
         cfg.toddle.organizationId,
         input.curriculumId ?? null,
         await tenantId(),
+        input.payloadHash ?? null,
       ],
     );
     return mapRow(rows[0]);
