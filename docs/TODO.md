@@ -67,7 +67,10 @@ um monitor mais apertado que o vigia gera alarme falso.
 
 As variáveis são do ambiente do Coolify, não do `.env` do repositório. O
 `docker-compose.coolify.yml` já as documenta nos comentários (linhas 58-65).
-Depois de configurar, conferir em `GET /health` → campo `avisos`.
+Depois de configurar, conferir em:
+
+- `GET /health` → `cegoParaAlertas` deve virar `false` (rota pública, um bit só)
+- `GET /config` → campo `avisos` com o detalhe (exige papel `viewer`)
 
 ### 1.4 Agendar o teste sintético
 
@@ -123,7 +126,7 @@ conselheiros.
 
 ## 4. Fora do escopo, achado na auditoria
 
-### 3.1 `logs/` com 6,3 GB na máquina de desenvolvimento
+### 4.1 `logs/` com 6,3 GB na máquina de desenvolvimento
 
 O worker sob launchd (`com.escolaamericana.rm-toddle.worker-students`) martela um
 Redis local fora do ar desde 16/09, ~1 GB/dia. Sem rotação de log, sem teto de
@@ -132,21 +135,21 @@ retry de conexão no `ioredis`.
 **É o item P1-2 do plano.** O truncamento dos arquivos e o `launchctl` ficam para
 lá, ou para uma decisão sua antes disso — não mexi no seu processo.
 
-### 3.2 A senha do RM ainda não foi trocada
+### 4.2 A senha do RM ainda não foi trocada
 
 O serializador de log que a vazava foi corrigido em 21/09
 (`packages/config/src/logger.ts`, com teste). A credencial que esteve exposta
 **continua em uso**. Anterior a esta auditoria; registrado por ser o tipo de
 pendência que some.
 
-### 3.3 Nenhum `trustProxy` na API
+### 4.3 Nenhum `trustProxy` na API
 
 `apps/web/nginx.conf:26` define `X-Forwarded-For`, mas o Fastify não confia em
 proxy. `req.ip` é o IP do container do nginx, igual para todos. Hoje não causa
 dano; **causaria** no P1-5, transformando o rate-limit num balde único para a
 escola inteira. Detalhado na seção 6 do `docs/PLANO.md`.
 
-### 3.4 `apps/worker` não declara nenhuma dependência
+### 4.4 `apps/worker` não declara nenhuma dependência
 
 `apps/worker/package.json` tem `dependencies` vazio e usa `bullmq`, `ioredis` e
 outros por hoisting do workspace raiz. Funciona com npm workspaces e com o
