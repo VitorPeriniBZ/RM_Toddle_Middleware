@@ -149,7 +149,21 @@ proxy. `req.ip` é o IP do container do nginx, igual para todos. Hoje não causa
 dano; **causaria** no P1-5, transformando o rate-limit num balde único para a
 escola inteira. Detalhado na seção 6 do `docs/PLANO.md`.
 
-### 4.4 `apps/worker` não declara nenhuma dependência
+### 4.4 `/health` expõe o texto do erro a chamador anônimo
+
+`checarDependencia` devolve `erro: texto.slice(0, 160)` da exceção, e o
+`/health` — que é público — o publica. Uma queda de Postgres imprime coisas
+como `connect ECONNREFUSED 10.0.1.5:5432`, que nomeia a topologia interna.
+
+**Não corrigido de propósito**: a tela de saúde RENDERIZA esse texto
+(`apps/web/src/App.tsx:364`), então removê-lo quebra o painel. O conserto certo
+é mover o detalhe para uma rota autenticada e a tela passar a consumi-la — o que
+é mudança de contrato com o front, fora do escopo do P0-3.
+
+O `/health/ready`, criado no P0-3, já nasce sem esse vazamento: o tipo
+`DependenciaAvaliada` só tem `nome` e `estado`, então não há de onde vazar.
+
+### 4.5 `apps/worker` não declara nenhuma dependência
 
 `apps/worker/package.json` tem `dependencies` vazio e usa `bullmq`, `ioredis` e
 outros por hoisting do workspace raiz. Funciona com npm workspaces e com o

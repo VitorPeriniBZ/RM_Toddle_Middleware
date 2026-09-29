@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import {
+  alertar,
   configVersion,
   configVersionDetalhe,
   diagnosticoDoAmbiente,
@@ -13,6 +14,7 @@ import { pgPool, idMappingRepository, ENTITY_TYPES, type EntityType } from '@rm-
 import { toddleClient } from '@rm-toddle/integrations';
 import { autenticar } from './auth';
 import { exigirPapel } from './autorizacao';
+import { assuntoDeDependenciaFora, avaliarProntidao, comPrazo } from './prontidao';
 import { registrarRotasDeSessao } from './rotas/sessao';
 import { registrarRotasDeAgenda } from './rotas/agenda';
 import { registrarRotasDeJobs } from './rotas/jobs';
@@ -222,7 +224,11 @@ export function construirApp() {
   // de sessão, que é onde a autenticação COMEÇA (ela valida o token do Google
   // por conta própria).
   app.addHook('onRequest', async (req, reply) => {
-    const publicas = ['/health', '/auth/config', '/auth/sessao', '/auth/sair'];
+    // `/health/ready` entra explicitamente: a comparação abaixo é por igualdade
+    // (ou com querystring), não por prefixo — `/health` NÃO cobre `/health/ready`,
+    // e sem esta linha a rota de prontidão exigiria sessão. Um monitor externo
+    // não tem sessão, e o sintoma seria um 401 lido como "a API caiu".
+    const publicas = ['/health', '/health/ready', '/auth/config', '/auth/sessao', '/auth/sair'];
     // `/auth/sair` é pública de propósito: ela lê o cookie por conta própria e
     // revoga por ele, porque sair da conta não pode falhar por falta de sessão.
     if (publicas.some((r) => req.url === r || req.url.startsWith(r + '?'))) return;
@@ -334,6 +340,66 @@ export function construirApp() {
       /** `true` = uma falha deste sistema não avisa ninguém. Detalhe em /config. */
       cegoParaAlertas: diagnosticoDoAmbiente().cego,
     };
+  });
+
+  /**
+   * PRONTIDÃO — "ele consegue trabalhar agora?". Ver apps/api/src/prontidao.ts
+   * para por que esta rota existe separada do `/health`, e por que o `/health`
+   * continua sempre 200.
+   *
+   * Pública, como o `/health`, e com corpo mínimo: nome e estado, nunca o texto
+   * do erro. Um monitor externo aponta para cá; o Coolify continua no `/health`.
+   */
+  app.get('/health/ready', async (_req, reply) => {
+    /*
+     * Cada checagem corre contra um prazo — ver `PRAZO_DA_CHECAGEM_MS`. Sem
+     * isto a rota levava 26s com o Toddle fora (medido), e monitor nenhum
+     * espera tanto: ele reportaria TIMEOUT em vez do 503 que diz QUAL
+     * dependência caiu.
+     */
+    const deps = await Promise.all([
+      comPrazo('postgres', () => checarDependencia('postgres', () => pgPool.query('SELECT 1'))),
+      comPrazo('toddle', () => checarToddleComCache()),
+    ]);
+
+    const prontidao = avaliarProntidao(deps);
+
+    /*
+     * ─── O ALERTA, E POR QUE ELE MORA AQUI ───────────────────────────────
+     *
+     * O vigia (no worker) cobre fila, DLQ e runs. Ele NÃO cobre "a API não
+     * alcança o Postgres" — é outro processo, com outra rede e outro pool.
+     *
+     * Disparar de dentro de um GET público parece arriscado e não é: o assunto
+     * é estável, então a supressão limita a uma notificação por janela por mais
+     * que batam aqui. E a rota já fazia uma query ao Postgres antes deste
+     * commit, então nenhuma superfície nova de carga foi aberta.
+     *
+     * 30 minutos: dependência fora é CONDIÇÃO, não evento — persiste até
+     * alguém consertar, e um monitor que pergunta a cada 30s não pode virar 120
+     * notificações por hora. Mais curto que as 6h do vigia porque isto é mais
+     * urgente: o plano de controle está sem banco.
+     *
+     * `limitado` NUNCA chega aqui: `fora` só contém `falha`. Rate limit do
+     * Toddle não acorda ninguém de madrugada.
+     */
+    if (!prontidao.pronto) {
+      void alertar({
+        assunto: assuntoDeDependenciaFora(prontidao.fora),
+        contexto: {
+          componente: 'api',
+          fora: prontidao.fora.join(', '),
+          degradadas: prontidao.degradadas.length > 0 ? prontidao.degradadas.join(', ') : undefined,
+          significado: 'a API está no ar mas não consegue trabalhar',
+        },
+        repetirApos: 30 * 60 * 1_000,
+      });
+    }
+
+    return reply.code(prontidao.status).send({
+      pronto: prontidao.pronto,
+      dependencias: prontidao.dependencias,
+    });
   });
 
   /**
