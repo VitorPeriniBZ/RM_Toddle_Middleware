@@ -10,7 +10,7 @@ Base: `docs/AUDITORIA.md` (FASE 1).
 | P0-2 Ligar o canal de alerta | **concluído** (código) 29/09 | `40462e1`, `+hardening` |
 | P0-3 Readiness honesto (`/health/ready`) | **concluído** 29/09 | `c97316a`, +P0-3 |
 | P0-4 Canário de Sentenças | **concluído** 29/09 (M→S) | ver commit do canário |
-| P0-5 Alerta sobre distribuição de vereditos | pendente | |
+| P0-5 Sinal de cruzamento (vereditos + colisão) | **concluído** 29/09 | ver commit do sinal |
 | P0-6 `?? ''` → falha alta, em sombra | pendente | |
 
 Suíte: 328 → 417 testes verdes. `typecheck` limpo. `checar:config` passa.
@@ -141,7 +141,7 @@ A última coluna é obrigatória em P0 e P1.
 | **P0-2** | **Ligar o canal de alerta.** Definir `ALERTA_WEBHOOK_URL` e os 4 `HEARTBEAT_URL_*`; fazer o estado "desligado" **gritar**: `error` no boot do worker e da API, campo `alertas: 'ativo' \| 'DESLIGADO'` no `/health`, e `npm run alerta:testar`. O avaliador do heartbeat tem de ser **externo ao processo** (Healthchecks.io/Uptime Kuma) — o desenho de `heartbeat.ts` já é esse. | Crítico | S | P0 | **Alerta sintético com resposta observável**: `npm run alerta:testar` chega no canal; um teste agendado semanal, porque canal mudo há 7 dias é indistinguível de canal quebrado. Teste de aceite: matar o worker em homologação e cronometrar o alerta. |
 | **P0-3** | **`/health/ready` NOVO, com 503 por dependência fora.** `/health` PERMANECE sempre 200 (liveness) e o healthcheck do Coolify não muda — ver "decisões negadas" §4.5. `limitado` não derruba prontidão. Cada checagem corre contra um prazo de 3s. | Alto | S | P0 | **Não é mais o reinício do container** (ver §4.5): a detecção é (a) alerta pelo canal do P0-2, com assunto estável e janela de 30 min, e (b) `/health/ready` devolvendo 503 para um monitor externo. Verificação feita: API no ar com Postgres e Toddle inalcançáveis → `/health` 200, `/health/ready` 503 em 3ms, um único alerta. |
 | **P0-4** | **Canário de Sentenças — AGENDAR o que já existe.** A exploração derrubou as premissas do item: `conferir()` já faz as três camadas (corpo vs `.sql` caractere a caractere, execução com `colunasAusentes`, volume), o manifesto já existe, e `INFORMATION_SCHEMA` é a ferramenta errada (Sentença é query salva, não tabela). Faltava só agendar e alertar. **M → S.** Cadência: corpo de hora em hora, execução 1×/dia — ver abaixo. | Crítico | ~~M~~ **S** | P0 | É ele próprio um detector, e o **único que avisa antes** de um run começar a processar. Que ele quebrou se detecta pelo alerta sintético do P0-2 e por `npm run canario` (saída 0 confere / 1 divergente / 2 não verificada). |
-| **P0-5** | **Alerta sobre a distribuição de vereditos.** Usar o `porVeredito` que já existe (`rmWriteDecision.ts:250`, presente em `sincronizarFrequencia.ts:320` e `:425`): alertar quando `ESCREVER_NOVO` passar de ~70% num fluxo com histórico, ou quando "faltas lidas do RM > 0 e chaves casadas = 0". | Crítico | S | P0 | Detector do modo de falha **original** — pega a proteção desligando em silêncio mesmo sem exceção nenhuma, inclusive quando a causa é a Sentença mudar sem commit. |
+| **P0-5** | **Sinal de cruzamento.** NÃO virou limiar de porcentagem: numa primeira execução 100% de `ESCREVER_NOVO` é o certo, e um limiar confundiria "primeira vez" com "a trava desligou". O discriminador é a CONTRADIÇÃO — "o RM tem N linhas e ZERO casou" — mais um segundo sinal aritmético e independente: linhas lidas vs chaves únicas (colisão faz linha sumir do índice sem mexer na distribuição). Ligado em frequência e notas. | Crítico | S | P0 | É ele próprio o detector, e é o único que pega o modo de falha **original**: a proteção desligando sem exceção, sem DLQ e com o relatório bonito. A distribuição vai para o log em TODA passada, suspeita ou não — é o que constrói a baseline que hoje não existe. |
 | **P0-6** | **Trocar o `?? ''` por falha alta**, no **leitor** (`rmAttendanceSource.ts:210-212`), antes de qualquer veredito — run aborta inteiro, sem escrita parcial. Atrás de flag `STRICT_NATURAL_KEY` (default `false`), primeiro deploy em **modo sombra**. **Depende de P0-1, P0-2, P0-4 e P0-5 estarem prontos.** | Crítico | M | P0 | Job vermelho com erro explícito ("coluna `ID_TURMADISC` ausente na Sentença") → DLQ → webhook, **que só existe depois do P0-2**. Sem o canal, este item troca um silêncio por outro. |
 
 ### P1 — as barreiras que faltam
@@ -275,6 +275,25 @@ Medido no código, não estimado:
 
 Configurável em `CANARIO_RELEITURA_MS` (piso 5 min) e `CANARIO_EXECUCAO_MS`
 (piso 1h). Abaixo dos pisos não é vigilância, é carga.
+
+### Linha de base medida contra o RM real (29/09)
+
+Antes de ligar o sinal, medi o que ele veria hoje, em duas janelas:
+
+| janela | lidas do RM | chaves únicas | perdidas | chaves com segmento vazio |
+|---|---:|---:|---:|---:|
+| 2026-08-24 a 28 | 810 | 810 | **0** | **0** |
+| 2026-03-02 a 06 | 223 | 223 | **0** | **0** |
+
+Três conclusões:
+
+1. **O sinal não dispara falso hoje** — nenhuma colisão nas duas janelas.
+2. **O defeito do `?? ''` ainda NÃO mordeu**: zero chaves com segmento vazio.
+   A Sentença está completa agora. É a linha de base que o P0-6 protege.
+3. `criadasPelaIntegracao: 0` nas 223 faltas de março — **todas lançadas por
+   humano**. Se a chave degradasse, as 223 virariam `ESCREVER_NOVO` e seriam
+   sobrescritas. É exatamente o dado que a trava existe para proteger, e ele
+   está todo exposto a esse único ponto de falha.
 
 ### Alerta-apenas, com gatilho de revisão
 

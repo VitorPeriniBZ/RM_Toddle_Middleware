@@ -1,4 +1,11 @@
-import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
+import {
+  alertar,
+  configVersion,
+  configVersionDetalhe,
+  env,
+  logger,
+  tenantConfig,
+} from '@rm-toddle/config';
 import {
   abrirRun,
   carregarProveniencia,
@@ -15,6 +22,8 @@ import {
 } from '@rm-toddle/db';
 import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 import {
+  assuntoDoSinal,
+  avaliarCruzamento,
   avaliarVolume,
   chaveNaturalRm,
   decidirEscrita,
@@ -318,6 +327,69 @@ export async function sincronizarFrequencia(
     );
   }
   const resumoDecisoes = resumirDecisoes([...decisoes.values()]);
+
+  /*
+   * ─── O SINAL DE QUE A TRAVA SE DESLIGOU SOZINHA ──────────────────────────
+   *
+   * Tudo acima pode ter rodado sem uma única exceção e ainda assim estar
+   * errado: se a chave natural degradar — coluna que some da Sentença vira
+   * segmento vazio —, `decidirEscrita` passa a receber `null` para toda linha,
+   * responde ESCREVER_NOVO para tudo, e a proteção contra sobrescrever
+   * lançamento de professor deixa de existir. Sem erro, sem DLQ, com o
+   * relatório bonito.
+   *
+   * Os dois números que denunciam isso já estavam aqui e ninguém comparava:
+   * quantas faltas o RM tem na janela, e quantas delas o cruzamento encontrou.
+   *
+   * Ver packages/domain/src/sinalDeCruzamento.ts.
+   */
+  const sinal = avaliarCruzamento({
+    lidasDoRm: noRm.faltas.length,
+    chavesUnicasDoRm: faltasPorChave.size,
+    porVeredito: resumoDecisoes.porVeredito,
+  });
+
+  /*
+   * A distribuição vai para o log SEMPRE, não só quando há suspeita.
+   *
+   * O limiar de hoje é a contradição, não uma porcentagem, justamente porque
+   * não existe baseline confiável. Registrar toda passada é o que constrói
+   * essa baseline — e é barato: uma linha por run.
+   */
+  logger.info(
+    {
+      fluxo: 'frequencia',
+      lidasDoRm: noRm.faltas.length,
+      chavesUnicasDoRm: faltasPorChave.size,
+      porVeredito: resumoDecisoes.porVeredito,
+      casaram: sinal.casaram,
+      suspeito: sinal.suspeito,
+    },
+    'Cruzamento da frequência: distribuição de vereditos',
+  );
+
+  if (sinal.suspeito) {
+    logger.error(
+      { fluxo: 'frequencia', motivos: sinal.motivos, porque: sinal.porque },
+      'CRUZAMENTO SUSPEITO — a proteção contra sobrescrever lançamento humano pode estar desligada',
+    );
+    for (const motivo of sinal.motivos) {
+      await alertar({
+        assunto: assuntoDoSinal('Frequência', motivo),
+        contexto: {
+          fluxo: 'frequencia',
+          lidasDoRm: noRm.faltas.length,
+          chavesUnicasDoRm: faltasPorChave.size,
+          casaram: sinal.casaram,
+          linhasPerdidas: sinal.linhasPerdidas > 0 ? sinal.linhasPerdidas : undefined,
+          porque: sinal.porque,
+          comoVer: 'npm run canario -- --executar',
+        },
+        // Condição, não evento: persiste até alguém consertar a Sentença.
+        repetirApos: 6 * 60 * 60 * 1_000,
+      });
+    }
+  }
 
   // Só o que a decisão liberou entra no XML.
   const liberados: Projetado[] = resumo.projetados.filter((pr) => {
