@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { alertar, limparJanelaDeAlerta } from './alerta';
 import { FLUXOS_COM_HEARTBEAT, diagnosticar, type UrlsDeAviso } from './canalDeAviso';
+import { limparAvisosDeHeartbeat, pingHeartbeat } from './heartbeat';
+import { logger } from './logger';
 
 /**
  * UM MONITOR DESLIGADO NÃO PODE SER SILENCIOSO SOBRE ESTAR DESLIGADO.
@@ -170,37 +171,147 @@ describe('o resumo nunca é vazio', () => {
 
 describe('o retorno silencioso não volta', () => {
   /**
-   * Teste estrutural, mesmo espírito de `suiteSerializada.test.ts`.
+   * COMPORTAMENTO, não estrutura — e a distinção importa.
    *
-   * O defeito aqui não é um valor errado: é uma AUSÊNCIA de log. Nenhum teste de
-   * comportamento sobre o valor de retorno pega isso — `alertar()` devolve
-   * `false` nos dois desenhos, o antigo e o novo. O que mudou é o que acontece
-   * ANTES do `return`, e é isso que estas asserções protegem.
+   * A primeira versão destes testes lia o fonte com regex procurando
+   * `if (!env.ALERTA_WEBHOOK_URL) return false;`. Funcionava, e era pior:
+   * `if (...) { return false; }` com chaves, ou renomear a variável, passariam
+   * calados com o defeito de volta. Falso VERDE num teste que existe para
+   * impedir silêncio é a ironia mais cara possível.
    *
-   * Comentários saem antes: o cabeçalho dos dois módulos CITA as linhas antigas
-   * para explicar por que elas saíram, e sem tirar comentário o teste acusaria
-   * a própria explicação.
+   * Aqui o defeito É observável: o que mudou não é o valor de retorno
+   * (`alertar()` devolve `false` nos dois desenhos) e sim a EMISSÃO do log.
+   * Espiar o logger observa exatamente isso.
+   *
+   * Em P0-1 o teste estrutural se justificou porque lá o defeito — duplicar a
+   * fórmula da chave — NÃO tem sintoma comportamental: uma reimplementação de
+   * saída idêntica passa por qualquer asserção sobre valores. Aqui tem sintoma.
+   * Regra que fica: estrutural só quando o comportamento não denuncia.
+   *
+   * O ambiente da suíte unit não define `ALERTA_WEBHOOK_URL` (ver o bloco `env`
+   * de vitest.workspace.ts), então "sem canal" é o estado natural aqui — não
+   * precisa ser simulado.
    */
-  const semComentarios = (arquivo: string): string =>
-    readFileSync(resolve(__dirname, arquivo), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/\/\/[^\n]*/g, '');
 
-  it('alerta.ts não volta a sair calado quando falta a URL', () => {
-    expect(
-      semComentarios('alerta.ts'),
-      'voltou o `if (!env.ALERTA_WEBHOOK_URL) return false;` sem log. Esse retorno é o motivo ' +
-        'de 62 jobs terem ficado sete dias na DLQ sem ninguém saber: o vigia encontrava o ' +
-        'problema, chamava alertar(), e o alerta evaporava. Quando não há canal, o conteúdo do ' +
-        'alerta tem de ir para o log em nível error — degradado, nunca perdido.',
-    ).not.toMatch(/if\s*\(\s*!env\.ALERTA_WEBHOOK_URL\s*\)\s*return\s+false\s*;/);
+  beforeEach(() => {
+    limparJanelaDeAlerta();
+    limparAvisosDeHeartbeat();
+    vi.restoreAllMocks();
   });
 
-  it('heartbeat.ts não volta a sair calado quando falta a URL', () => {
+  it('alertar() sem canal grita em error, com o conteúdo do alerta', async () => {
+    const espiao = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    const enviado = await alertar({
+      assunto: 'Jobs parados na DLQ',
+      contexto: { total: 62, fila: 'rm-to-toddle-students' },
+    });
+
+    expect(enviado, 'sem canal não há envio — isso não mudou').toBe(false);
     expect(
-      semComentarios('heartbeat.ts'),
-      'voltou o `if (!url) return;` sem log. Um fluxo sem heartbeat não tem quem reclame do ' +
-        'silêncio dele, e isso precisa aparecer em vez de ser presumido.',
-    ).not.toMatch(/if\s*\(\s*!url\s*\)\s*return\s*;/);
+      espiao,
+      'alertar() saiu calado sem canal. É o motivo de 62 jobs terem ficado sete dias na DLQ ' +
+        'sem ninguém saber: o vigia encontrava o problema, chamava alertar(), e o alerta ' +
+        'evaporava. Sem canal o conteúdo tem de ir para o log em error — degradado, não perdido.',
+    ).toHaveBeenCalledTimes(1);
+
+    const [dados, mensagem] = espiao.mock.calls[0] as [Record<string, unknown>, string];
+    expect(dados.canal).toBe('DESLIGADO');
+    expect(dados.contexto).toEqual({ total: 62, fila: 'rm-to-toddle-students' });
+    // O conteúdo tem de estar na mensagem, não só nos campos: quem lê o log
+    // agregado costuma ver a mensagem antes de expandir o objeto.
+    expect(mensagem).toContain('Jobs parados na DLQ');
+    expect(mensagem).toContain('ALERTA_WEBHOOK_URL');
   });
+
+  it('pingHeartbeat() sem URL avisa que aquele fluxo não tem quem reclame', async () => {
+    const espiao = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    await pingHeartbeat(undefined, 'sucesso', { job: 'frequencia' });
+
+    expect(
+      espiao,
+      'pingHeartbeat() saiu calado sem URL. Um fluxo sem heartbeat não tem quem reclame do ' +
+        'silêncio dele — e o de frequência escreve falta no registro acadêmico.',
+    ).toHaveBeenCalledTimes(1);
+
+    const [dados, mensagem] = espiao.mock.calls[0] as [Record<string, unknown>, string];
+    expect(dados.fluxo).toBe('frequencia');
+    expect(dados.heartbeat).toBe('DESLIGADO');
+    expect(mensagem).toContain('HEARTBEAT_URL_FREQUENCIA');
+  });
+
+  /**
+   * O estrangulamento é o que impede o conserto de virar o próximo problema.
+   *
+   * O fluxo de notas roda a cada 15 minutos (`NOTA_SYNC_CRON`). Um warn por run
+   * seriam ~96 linhas por dia por fluxo, num projeto cuja última crise foi
+   * 6,3 GB de log repetido.
+   */
+  it('o aviso de heartbeat é estrangulado: 3 pings seguidos, 1 warn', async () => {
+    const espiao = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    await pingHeartbeat(undefined, 'sucesso', { job: 'notas' });
+    await pingHeartbeat(undefined, 'sucesso', { job: 'notas' });
+    await pingHeartbeat(undefined, 'falha', { job: 'notas' });
+
+    expect(espiao).toHaveBeenCalledTimes(1);
+  });
+
+  it('o estrangulamento é POR FLUXO: quatro fluxos mudos são quatro avisos', async () => {
+    const espiao = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    for (const fluxo of FLUXOS_COM_HEARTBEAT) {
+      await pingHeartbeat(undefined, 'sucesso', { job: fluxo });
+    }
+
+    // Colapsar os quatro num aviso só esconderia três problemas distintos:
+    // cada fluxo tem o próprio monitor e o próprio conserto.
+    expect(espiao).toHaveBeenCalledTimes(FLUXOS_COM_HEARTBEAT.length);
+  });
+
+  /**
+   * O log degradado também é estrangulado — senão o conserto vira o problema.
+   *
+   * Sem isto, os 62 jobs da DLQ virariam 62 linhas de `error` com contexto
+   * inteiro, que é a mesma tempestade que a janela de envio existe para conter.
+   */
+  it('o log degradado é estrangulado: dois alertas iguais, um error', async () => {
+    const espiao = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await alertar({ assunto: 'Jobs parados na DLQ', contexto: { total: 1 } });
+    await alertar({ assunto: 'Jobs parados na DLQ', contexto: { total: 2 } });
+
+    expect(espiao).toHaveBeenCalledTimes(1);
+  });
+
+  it('assuntos diferentes não se suprimem: é repetição, não volume', async () => {
+    const espiao = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await alertar({ assunto: 'Jobs parados na DLQ' });
+    await alertar({ assunto: 'Run(s) preso(s) em "executing"' });
+
+    expect(espiao).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * ─── O QUE NÃO DÁ PARA TESTAR AQUI, E POR QUÊ ────────────────────────────
+   *
+   * `alertar()` mantém DOIS mapas de supressão: um do envio, um do log
+   * degradado. A separação existe para que um alerta que nunca teve canal não
+   * mexa na contabilidade de quem envia, e para que o caminho sem canal não
+   * povoe um mapa que antes ficava vazio.
+   *
+   * Isso NÃO é observável nesta suíte, e a primeira versão deste arquivo tinha
+   * um teste que fingia observar: ele passava igual com os dois mapas fundidos
+   * num só — descoberto por mutação, não por leitura. O motivo é que
+   * `env.ALERTA_WEBHOOK_URL` é lido na importação do módulo e a suíte unit
+   * nunca o define; sem canal, o caminho de envio jamais executa, então não há
+   * como ver se a janela dele foi tocada.
+   *
+   * Preferi remover o teste a deixá-lo: um teste que não pode falhar dá a
+   * mesma sensação de cobertura de um que pode, e essa sensação é o que este
+   * projeto inteiro está tentando desmontar. A separação fica justificada no
+   * comentário de `alerta.ts` e coberta pela revisão, não por asserção falsa.
+   */
 });

@@ -103,7 +103,25 @@ consultas seguiram com 2 e 3 conselheiros, sempre declarado.
 
 ---
 
-## 3. Fora do escopo, achado na auditoria
+## 3. Corrigido durante o P0-2, registrado por ser não-óbvio
+
+O `assunto` dos alertas do vigia carregava número variável — `nenhum run
+bem-sucedido há 13.2h`. O número muda a cada 6 minutos, o vigia roda a cada 15,
+e o assunto é a CHAVE da supressão. Resultado: a supressão nunca acontecia.
+
+Isso não aparecia porque não havia canal. **No minuto em que
+`ALERTA_WEBHOOK_URL` fosse configurada**, um único fluxo travado passaria a
+notificar a cada 15 minutos, indefinidamente — e o canal seria silenciado no
+primeiro dia, desfazendo o item inteiro.
+
+Corrigido: assuntos estáveis (o número foi para o `contexto`, que é renderizado
+no corpo) e `repetirApos: 6h` para os achados do vigia, que são condição
+persistente e não evento. Achado pela pergunta de cardinalidade de um dos
+conselheiros.
+
+---
+
+## 4. Fora do escopo, achado na auditoria
 
 ### 3.1 `logs/` com 6,3 GB na máquina de desenvolvimento
 

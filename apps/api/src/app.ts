@@ -304,20 +304,25 @@ export function construirApp() {
       checarToddleComCache(),
     ]);
     /*
-     * ─── O ESTADO DO CANAL DE AVISO É PARTE DA SAÚDE ─────────────────────
+     * ─── UM BIT SÓ, E ESTA ROTA É PÚBLICA ────────────────────────────────
      *
      * Um sistema sem canal de alerta não está "saudável com uma configuração
-     * faltando": ele está incapaz de pedir socorro. Isso pertence à mesma tela
-     * onde se olha se o Postgres responde.
+     * faltando": está incapaz de pedir socorro, e isso pertence à saúde.
      *
-     * NÃO derruba o `ok`, de propósito: o serviço está no ar e funcionando, e
-     * transformar isto em container `unhealthy` faria o Coolify reiniciar em
-     * laço uma instalação que só não tem webhook. É informação, não falha.
+     * Mas aqui sai SÓ o booleano. A primeira versão publicava também quais
+     * variáveis faltam e o estado de cada heartbeat — para um chamador
+     * ANÔNIMO, isso é a postura operacional da escola, e uma vez exposta não
+     * se recolhe: fica em cache, em índice, no histórico de quem coletou. O
+     * detalhe mudou para `/config`, que exige papel `viewer`.
      *
-     * Só o ESTADO sai daqui — nunca as URLs. Esta rota é pública.
+     * Conferido antes de reduzir: o frontend só consome `ok` e `dependencias`
+     * (apps/web/src/api.ts:264), e o healthcheck do Coolify nem lê o corpo
+     * (`wget -qO- ... || exit 1`). Ninguém quebra.
+     *
+     * NÃO derruba o `ok`: transformar falta de webhook em container
+     * `unhealthy` faria o Coolify reiniciar em laço uma instalação que está
+     * funcionando. É informação, não falha.
      */
-    const avisos = diagnosticoDoAmbiente();
-
     return {
       // Limitado NÃO derruba o `ok`: o serviço está no ar, e um monitor externo
       // não deve ser paginado porque alguém abriu a tela duas vezes seguidas.
@@ -326,12 +331,8 @@ export function construirApp() {
       tenant: cfg.slug,
       configVersion: configVersion(),
       dependencias: deps,
-      avisos: {
-        alerta: avisos.alerta,
-        heartbeats: avisos.heartbeats,
-        cego: avisos.cego,
-        faltando: avisos.faltando,
-      },
+      /** `true` = uma falha deste sistema não avisa ninguém. Detalhe em /config. */
+      cegoParaAlertas: diagnosticoDoAmbiente().cego,
     };
   });
 
@@ -349,8 +350,28 @@ export function construirApp() {
     clientId: env.API_AUTH_MODE === 'google-oidc' ? env.GOOGLE_CLIENT_ID : null,
   }));
 
-  /** Configuração de escopo/destino em vigor. Nenhum segredo é exposto. */
-  app.get('/config', { preHandler: exigirPapel(['viewer']) }, async () => configVersionDetalhe());
+  /**
+   * Configuração de escopo/destino em vigor. Nenhum segredo é exposto.
+   *
+   * O detalhe do canal de aviso mora AQUI e não no `/health` porque exige papel
+   * `viewer`: quais monitores faltam é postura operacional, e `/health` é
+   * público. O `/health` publica só o booleano `cegoParaAlertas`.
+   *
+   * Continuam saindo apenas ESTADOS e NOMES de variável — nunca as URLs.
+   */
+  app.get('/config', { preHandler: exigirPapel(['viewer']) }, async () => {
+    const avisos = diagnosticoDoAmbiente();
+    return {
+      ...configVersionDetalhe(),
+      avisos: {
+        alerta: avisos.alerta,
+        heartbeats: avisos.heartbeats,
+        cego: avisos.cego,
+        faltando: avisos.faltando,
+        resumo: avisos.resumo,
+      },
+    };
+  });
 
   /** Contagem de mapeamentos por tipo e estado — o panorama que eu lia via psql. */
   app.get('/mappings/summary', { preHandler: exigirPapel(['viewer']) }, async () => {

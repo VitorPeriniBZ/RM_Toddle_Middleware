@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import {
   alertar,
   diagnosticoDoAmbiente,
@@ -33,11 +34,23 @@ import {
  *
  *   npm run alerta:testar
  *
- * Saída 0 = a mensagem foi aceita pelo canal. Vá olhar se ela chegou: aceitação
- * do webhook é evidência forte, não prova — um webhook do Slack apontando para
- * um canal arquivado responde 200.
+ * Códigos de saída, porque alguém vai automatizar em cima disto:
  *
- * Saída 1 = não chegou, e o motivo está impresso.
+ *   0  o canal ACEITOU a mensagem (HTTP 2xx). Não é o mesmo que "alguém leu":
+ *      um webhook do Slack apontando para canal arquivado responde 200. Vá
+ *      conferir uma vez; depois disso, 0 é sinal confiável de que o caminho
+ *      técnico está de pé.
+ *   1  não há canal configurado (`ALERTA_WEBHOOK_URL` ausente ou vazia).
+ *   2  há canal, e ele recusou — HTTP de erro, timeout ou rede inalcançável.
+ *
+ * 1 e 2 são problemas DIFERENTES: o primeiro se conserta no `.env`, o segundo
+ * no Slack ou na rede. Por isso não compartilham código.
+ *
+ * ─── RODE DE DENTRO DE ONDE O WORKER RODA ───────────────────────────────────
+ *
+ * Este script prova a conectividade da máquina em que ELE rodou. Rodado no
+ * laptop, atesta o laptop — e "rede de saída bloqueada" é justamente uma falha
+ * que só aparece dentro do container. Para provar produção, rode lá dentro.
  *
  * ─── RODE ISTO PERIODICAMENTE, NÃO SÓ UMA VEZ ───────────────────────────────
  *
@@ -55,6 +68,8 @@ async function main(): Promise<number> {
 
   console.log('');
   console.log(`  Tenant: ${cfg.slug}`);
+  // De onde rodou importa: a conectividade provada é a DESTA máquina.
+  console.log(`  Rodando em: ${hostname()} (${env.NODE_ENV})`);
   console.log(`  Webhook de alerta: ${d.alerta}`);
   for (const [fluxo, estado] of Object.entries(d.heartbeats)) {
     console.log(`  Heartbeat ${fluxo.padEnd(12)}: ${estado}`);
@@ -112,8 +127,11 @@ async function main(): Promise<number> {
 
   console.log('  ✓ O canal aceitou a mensagem.');
   console.log('');
-  console.log('    Agora CONFIRA se ela chegou. Aceitação não é entrega: um webhook');
-  console.log('    apontando para canal arquivado responde 200 e engole a mensagem.');
+  console.log('    Duas ressalvas, as duas importam:');
+  console.log('    1. Aceitação não é entrega. Um webhook apontando para canal');
+  console.log('       arquivado responde 200 e engole a mensagem. Confira uma vez.');
+  console.log(`    2. Isto provou a rede de ${hostname()}. Se o worker roda em`);
+  console.log('       outro lugar (container, servidor), rode lá também.');
   console.log('');
 
   if (d.faltando.length > 0) {
