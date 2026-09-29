@@ -9,7 +9,7 @@ Base: `docs/AUDITORIA.md` (FASE 1).
 | P0-1 Congelar a chave natural em teste | **concluído** 29/09 | `520b9c2`, `d203c20` |
 | P0-2 Ligar o canal de alerta | **concluído** (código) 29/09 | `40462e1`, `+hardening` |
 | P0-3 Readiness honesto (`/health/ready`) | **concluído** 29/09 | `c97316a`, +P0-3 |
-| P0-4 Canário de colunas da Sentença | pendente | |
+| P0-4 Canário de Sentenças | **concluído** 29/09 (M→S) | ver commit do canário |
 | P0-5 Alerta sobre distribuição de vereditos | pendente | |
 | P0-6 `?? ''` → falha alta, em sombra | pendente | |
 
@@ -140,7 +140,7 @@ A última coluna é obrigatória em P0 e P1.
 | **P0-1** | **Congelar a chave natural em teste.** Testes de caracterização que fixam a string de `chaveNaturalRm` exatamente como é hoje (ordem dos 5 segmentos, `Number(f.codColigada)`), mais um teste de que `chaveNaturalDeFalta` continua **chamando** `chaveNaturalRm` em vez de reimplementá-la. **Só CI, não toca produção.** | Crítico | S | P0 | Não se aplica — é rede para os itens seguintes. É o primeiro exatamente por isso: congela o comportamento antes que alguém o altere. |
 | **P0-2** | **Ligar o canal de alerta.** Definir `ALERTA_WEBHOOK_URL` e os 4 `HEARTBEAT_URL_*`; fazer o estado "desligado" **gritar**: `error` no boot do worker e da API, campo `alertas: 'ativo' \| 'DESLIGADO'` no `/health`, e `npm run alerta:testar`. O avaliador do heartbeat tem de ser **externo ao processo** (Healthchecks.io/Uptime Kuma) — o desenho de `heartbeat.ts` já é esse. | Crítico | S | P0 | **Alerta sintético com resposta observável**: `npm run alerta:testar` chega no canal; um teste agendado semanal, porque canal mudo há 7 dias é indistinguível de canal quebrado. Teste de aceite: matar o worker em homologação e cronometrar o alerta. |
 | **P0-3** | **`/health/ready` NOVO, com 503 por dependência fora.** `/health` PERMANECE sempre 200 (liveness) e o healthcheck do Coolify não muda — ver "decisões negadas" §4.5. `limitado` não derruba prontidão. Cada checagem corre contra um prazo de 3s. | Alto | S | P0 | **Não é mais o reinício do container** (ver §4.5): a detecção é (a) alerta pelo canal do P0-2, com assunto estável e janela de 30 min, e (b) `/health/ready` devolvendo 503 para um monitor externo. Verificação feita: API no ar com Postgres e Toddle inalcançáveis → `/health` 200, `/health/ready` 503 em 3ms, um único alerta. |
-| **P0-4** | **Canário de colunas da Sentença.** Job agendado que executa a Sentença, confere o conjunto de colunas esperado (`ID_TURMADISC`, `ID_HORARIO_TURMA`, `DATA`, `RA`…) e alerta no **drift git↔RM** — incluindo o caso em que o restauro automático regride a Sentença sem erro. | Crítico | M | P0 | É ele próprio um detector, e é o **único que avisa antes** de um run começar a processar. Que ele quebrou se detecta pelo alerta sintético do P0-2. |
+| **P0-4** | **Canário de Sentenças — AGENDAR o que já existe.** A exploração derrubou as premissas do item: `conferir()` já faz as três camadas (corpo vs `.sql` caractere a caractere, execução com `colunasAusentes`, volume), o manifesto já existe, e `INFORMATION_SCHEMA` é a ferramenta errada (Sentença é query salva, não tabela). Faltava só agendar e alertar. **M → S.** Cadência: corpo de hora em hora, execução 1×/dia — ver abaixo. | Crítico | ~~M~~ **S** | P0 | É ele próprio um detector, e o **único que avisa antes** de um run começar a processar. Que ele quebrou se detecta pelo alerta sintético do P0-2 e por `npm run canario` (saída 0 confere / 1 divergente / 2 não verificada). |
 | **P0-5** | **Alerta sobre a distribuição de vereditos.** Usar o `porVeredito` que já existe (`rmWriteDecision.ts:250`, presente em `sincronizarFrequencia.ts:320` e `:425`): alertar quando `ESCREVER_NOVO` passar de ~70% num fluxo com histórico, ou quando "faltas lidas do RM > 0 e chaves casadas = 0". | Crítico | S | P0 | Detector do modo de falha **original** — pega a proteção desligando em silêncio mesmo sem exceção nenhuma, inclusive quando a causa é a Sentença mudar sem commit. |
 | **P0-6** | **Trocar o `?? ''` por falha alta**, no **leitor** (`rmAttendanceSource.ts:210-212`), antes de qualquer veredito — run aborta inteiro, sem escrita parcial. Atrás de flag `STRICT_NATURAL_KEY` (default `false`), primeiro deploy em **modo sombra**. **Depende de P0-1, P0-2, P0-4 e P0-5 estarem prontos.** | Crítico | M | P0 | Job vermelho com erro explícito ("coluna `ID_TURMADISC` ausente na Sentença") → DLQ → webhook, **que só existe depois do P0-2**. Sem o canal, este item troca um silêncio por outro. |
 
@@ -263,6 +263,31 @@ Um ganho de sequência que o conselho apontou e eu não tinha: fazer **P1-4 ante
 P1-10** faz boa parte do P1-10 desaparecer — quebrar `agenda.ts` depois dos schemas é
 extrair o que sobrou, em vez de reorganizar com cuidado uma validação manual que o
 P1-4 vai apagar. A ordem acima já reflete isso.
+
+### Cadência do canário, e por que assimétrica
+
+Medido no código, não estimado:
+
+| camada | custo | cadência | por quê |
+|---|---|---|---|
+| corpo (`executar: false`) | 6 `readRecord` do GlbConsSQLData, sem executar nada | **1 hora** (144/dia) | Pega o evento comum: Sentença apagada ou rebaixada por cópia de base. A cada ciclo do vigia seriam 576/dia — 4× a carga, para adiantar no máximo 45 min a detecção de um evento que não é sub-horário, contra um RM que este projeto já viu ficar mudo por horas. |
+| execução (`executar: true`) | roda as seis; `TODDLE.NOTAS` **não aceita janela** e devolve o período inteiro (~7 mil linhas por SOAP). Só `FREQ` e `PLANOAULA` recortam 7 dias | **1 dia** | Pega o drift que não muda o corpo — coluna que some por permissão. Caro demais para cadência curta. |
+
+Configurável em `CANARIO_RELEITURA_MS` (piso 5 min) e `CANARIO_EXECUCAO_MS`
+(piso 1h). Abaixo dos pisos não é vigilância, é carga.
+
+### Alerta-apenas, com gatilho de revisão
+
+O canário **alerta e não bloqueia sync**. Decisão do usuário, e a razão é que
+são duas camadas de profundidade diferente: o canário detecta *drift*, o P0-6
+fecha a *execução* no ponto exato em que a coluna importa. Bloquear o sync de
+frequência por uma divergência que talvez não afete aquele fluxo troca um risco
+por outro. **A camada rasa não decide pela profunda.**
+
+**Fronteira, e ela é explícita:** isto vale ENQUANTO o P0-6 estiver pendente.
+**Gatilho de revisão: quando o P0-6 sair do modo sombra e a falha alta for
+ativada, reavaliar se o canário deve passar a bloquear.** Decisão reversível,
+registrada com o gatilho para não virar permanente por esquecimento.
 
 ## 4. Decisões negadas
 

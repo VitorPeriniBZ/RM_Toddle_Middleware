@@ -8,6 +8,65 @@ Ver também `docs/AUDITORIA.md` (o que foi medido) e `docs/PLANO.md` (a ordem).
 
 ---
 
+## 0. URGENTE — o usuário do RM está recusando a credencial correta (29/09, 15:51)
+
+**Eu causei isto, testando o canário. Precisa de ação humana.**
+
+Linha do tempo, medida:
+
+```
+15:50:32  npm run canario -> as SEIS Sentenças conferem. O RM respondeu normalmente.
+15:51:0x  contraprova minha: rodei o canário com RM_WS_PASS deliberadamente
+          errada, para provar que o check consegue falhar. Foram 6 tentativas
+          de autenticação recusadas, em sequência.
+15:51:42  npm run canario com a senha CORRETA do .env -> HTTP 401 nas seis.
+15:54:4x  nova tentativa, após 3 min de espera -> HTTP 401 de novo.
+```
+
+A resposta do RM é `HTTP 401: Usuário ou Senha inválidos!`. **Não** veio código
+`FE005` na resposta — o `FE005` que aparece no log é texto da nossa própria
+mensagem de ajuda, não do RM.
+
+**A correlação temporal é forte e a causa provável sou eu**: seis autenticações
+falhas seguidas podem ter disparado bloqueio do usuário no RM. As alternativas
+— senha expirada exatamente nesse minuto, ou janela de cópia de base começando
+ali — são possíveis e menos prováveis.
+
+### O que fazer
+
+1. Conferir no RM se o usuário da integração está **bloqueado** (não expirado):
+   é cadastro de usuário, não `.env`. A senha do `.env` estava correta às
+   15:50:32 — isso está provado pela leitura bem-sucedida das seis Sentenças.
+2. Desbloquear, e só então rodar `npm run canario` para confirmar.
+3. Se o bloqueio se confirmar, vale saber **quantas tentativas** o RM tolera:
+   é um dado operacional que não está documentado em lugar nenhum deste
+   repositório, e o canário agendado fará 144 autenticações por dia.
+
+### O que já está protegido, e o que não está
+
+O canário **não insiste**: cada Sentença é uma tentativa por passada, e a falha
+vira `NÃO VERIFICADA` — não há retry de autenticação. As 6 tentativas da
+contraprova foram 6 passadas minhas, não laço do código.
+
+O que **não** está protegido: nada no código detecta "o RM está recusando a
+credencial" como categoria distinta de "a Sentença divergiu". Hoje as duas caem
+em `naoVerificadas`. Ver a pendência §0.1 abaixo.
+
+### §0.1 O canário deveria distinguir 401 de outras falhas
+
+Uma Sentença que não pôde ser verificada por **credencial recusada** é um
+incidente operacional com dono e conserto claros; uma que não pôde ser
+verificada por timeout é outra coisa. Hoje as duas viram a mesma linha.
+
+Pior: seis Sentenças recusando por 401 produzem seis avisos idênticos, quando o
+fato é UM — o usuário está bloqueado. Merece um alerta próprio, com assunto
+estável (`Canário: o RM recusou a credencial`), emitido uma vez.
+
+Não implementado aqui: é achado desta sessão, não escopo do P0-4, e mexer no
+canário enquanto o RM está recusando impede de testar a mudança.
+
+---
+
 ## 1. Criar os canais de aviso — BLOQUEIA a conclusão do P0-2
 
 **Dono: humano. O código está pronto; faltam as contas.**

@@ -4,6 +4,7 @@ import { QUEUE, STUDENT_JOB } from '@rm-toddle/queues';
 import { wireDeadLetterQueue } from '@rm-toddle/queues';
 import { closeAllQueues } from '@rm-toddle/queues';
 import { manterAgendamento } from '../../agenda/reconciliar';
+import { ligarCanario } from '../../agenda/canarioDeSentencas';
 import { ligarVigia } from '../../agenda/vigia';
 import { pgPool, registrarEvento } from '@rm-toddle/db';
 import { closeRmSqlPool, observarRestauroAutomatico } from '@rm-toddle/integrations';
@@ -257,6 +258,16 @@ const pararVigia = ligarVigia();
 conferirCanalDeAviso('worker');
 
 /*
+ * O canário das Sentenças. Ver apps/worker/src/agenda/canarioDeSentencas.ts.
+ *
+ * O vigia acima pergunta se os JOBS estão rodando. Esta é a pergunta anterior:
+ * as Sentenças que os jobs leem ainda são as que o repositório conhece? Elas
+ * moram no RM, somem a cada cópia de base, e o restauro automático pode
+ * recolocar uma versão ATRÁS — sem um commit, sem um erro.
+ */
+const pararCanario = ligarCanario();
+
+/*
  * A TRILHA DO QUE O MIDDLEWARE ESCREVEU NO RM SOZINHO.
  *
  * O restauro automático de Sentença acontece lá embaixo, dentro do cliente do
@@ -330,6 +341,7 @@ async function shutdown(signal: string): Promise<void> {
     // processo não SAI no SIGTERM (o event loop segue com timer vivo) e o
     // encerramento gracioso vira `kill -9` depois do stop_grace_period.
     pararVigia();
+    pararCanario();
     await pararAgendamento();
     // TODOS os workers, e a lista precisa crescer junto com eles: um worker
     // esquecido aqui é um job morto no meio de uma escrita no Toddle ou no RM
