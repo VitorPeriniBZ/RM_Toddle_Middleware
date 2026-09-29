@@ -8,62 +8,51 @@ Ver também `docs/AUDITORIA.md` (o que foi medido) e `docs/PLANO.md` (a ordem).
 
 ---
 
-## 0. URGENTE — o usuário do RM está recusando a credencial correta (29/09, 15:51)
+## 0. RESOLVIDO — usuário do RM foi bloqueado por mim e liberado pelo usuário
 
-**Eu causei isto, testando o canário. Precisa de ação humana.**
-
-Linha do tempo, medida:
+**Encerrado em 29/09. Fica registrado porque o dado operacional é útil.**
 
 ```
-15:50:32  npm run canario -> as SEIS Sentenças conferem. O RM respondeu normalmente.
-15:51:0x  contraprova minha: rodei o canário com RM_WS_PASS deliberadamente
-          errada, para provar que o check consegue falhar. Foram 6 tentativas
-          de autenticação recusadas, em sequência.
-15:51:42  npm run canario com a senha CORRETA do .env -> HTTP 401 nas seis.
-15:54:4x  nova tentativa, após 3 min de espera -> HTTP 401 de novo.
+15:50:32  npm run canario -> as SEIS Sentenças conferem.
+15:51:0x  contraprova minha com RM_WS_PASS errada: 6 auth falhas seguidas.
+15:51:42  canário com a senha CORRETA -> HTTP 401 nas seis.
+15:54:4x  nova tentativa após 3 min -> 401 de novo.
+          [usuário desbloqueia o cadastro no RM]
+          npm run canario -> as seis conferem. Confirmado.
 ```
 
-A resposta do RM é `HTTP 401: Usuário ou Senha inválidos!`. **Não** veio código
-`FE005` na resposta — o `FE005` que aparece no log é texto da nossa própria
-mensagem de ajuda, não do RM.
+**Causa confirmada pelo desfecho:** seis autenticações falhas seguidas bloquearam
+o usuário da integração no RM. A senha do `.env` sempre esteve correta — provado
+pela leitura bem-sucedida às 15:50:32, antes das tentativas.
 
-**A correlação temporal é forte e a causa provável sou eu**: seis autenticações
-falhas seguidas podem ter disparado bloqueio do usuário no RM. As alternativas
-— senha expirada exatamente nesse minuto, ou janela de cópia de base começando
-ali — são possíveis e menos prováveis.
+**O erro de método foi meu**: para provar que o canário consegue falhar, usei
+credencial errada contra um sistema real. A contraprova certa é alterar o `.sql`
+local, que não toca o RM.
 
-### O que fazer
+### O que fica como pendência real
 
-1. Conferir no RM se o usuário da integração está **bloqueado** (não expirado):
-   é cadastro de usuário, não `.env`. A senha do `.env` estava correta às
-   15:50:32 — isso está provado pela leitura bem-sucedida das seis Sentenças.
-2. Desbloquear, e só então rodar `npm run canario` para confirmar.
-3. Se o bloqueio se confirmar, vale saber **quantas tentativas** o RM tolera:
-   é um dado operacional que não está documentado em lugar nenhum deste
-   repositório, e o canário agendado fará 144 autenticações por dia.
+**Quantas tentativas o RM tolera?** Não está documentado em lugar nenhum deste
+repositório, e agora sabe-se que 6 bastam para bloquear. O canário agendado fará
+**144 autenticações por dia** (uma por Sentença, de hora em hora). Se o RM
+contar tentativas falhas numa janela, uma indisponibilidade parcial poderia
+acumular falhas e bloquear o usuário sozinha — transformando o vigia em causa
+do incidente que ele deveria observar.
 
-### O que já está protegido, e o que não está
-
-O canário **não insiste**: cada Sentença é uma tentativa por passada, e a falha
-vira `NÃO VERIFICADA` — não há retry de autenticação. As 6 tentativas da
-contraprova foram 6 passadas minhas, não laço do código.
-
-O que **não** está protegido: nada no código detecta "o RM está recusando a
-credencial" como categoria distinta de "a Sentença divergiu". Hoje as duas caem
-em `naoVerificadas`. Ver a pendência §0.1 abaixo.
+Vale descobrir o limite e, se for baixo, considerar um disjuntor no canário:
+após N falhas de autenticação seguidas, parar de tentar e alertar, em vez de
+insistir de hora em hora.
 
 ### §0.1 O canário deveria distinguir 401 de outras falhas
 
-Uma Sentença que não pôde ser verificada por **credencial recusada** é um
-incidente operacional com dono e conserto claros; uma que não pôde ser
-verificada por timeout é outra coisa. Hoje as duas viram a mesma linha.
+Uma Sentença não verificada por **credencial recusada** é um incidente com dono
+e conserto claros; por timeout é outra coisa. Hoje as duas caem em
+`naoVerificadas` e produzem seis linhas idênticas quando o fato é UM: o usuário
+está bloqueado.
 
-Pior: seis Sentenças recusando por 401 produzem seis avisos idênticos, quando o
-fato é UM — o usuário está bloqueado. Merece um alerta próprio, com assunto
-estável (`Canário: o RM recusou a credencial`), emitido uma vez.
+Merece alerta próprio, com assunto estável (`Canário: o RM recusou a
+credencial`), emitido uma vez — e é o lugar natural para o disjuntor acima.
 
-Não implementado aqui: é achado desta sessão, não escopo do P0-4, e mexer no
-canário enquanto o RM está recusando impede de testar a mudança.
+Não implementado no P0-4: é achado desta sessão, não escopo do item.
 
 ---
 

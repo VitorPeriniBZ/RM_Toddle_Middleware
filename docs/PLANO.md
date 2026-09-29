@@ -271,7 +271,7 @@ Medido no código, não estimado:
 | camada | custo | cadência | por quê |
 |---|---|---|---|
 | corpo (`executar: false`) | 6 `readRecord` do GlbConsSQLData, sem executar nada | **1 hora** (144/dia) | Pega o evento comum: Sentença apagada ou rebaixada por cópia de base. A cada ciclo do vigia seriam 576/dia — 4× a carga, para adiantar no máximo 45 min a detecção de um evento que não é sub-horário, contra um RM que este projeto já viu ficar mudo por horas. |
-| execução (`executar: true`) | roda as seis; `TODDLE.NOTAS` **não aceita janela** e devolve o período inteiro (~7 mil linhas por SOAP). Só `FREQ` e `PLANOAULA` recortam 7 dias | **1 dia** | Pega o drift que não muda o corpo — coluna que some por permissão. Caro demais para cadência curta. |
+| execução (`executar: true`) | roda as seis; `TODDLE.NOTAS` **não aceita janela** e devolve o período inteiro (~7 mil linhas por SOAP). Só `FREQ` e `PLANOAULA` recortam 7 dias. **Medido contra o RM real: 1m10s para as seis.** | **1 dia** | Pega o drift que não muda o corpo — coluna que some por permissão. 70s/dia é desprezível; de hora em hora seriam 28 minutos de SOAP por dia contra um RM que já ficou mudo por horas. |
 
 Configurável em `CANARIO_RELEITURA_MS` (piso 5 min) e `CANARIO_EXECUCAO_MS`
 (piso 1h). Abaixo dos pisos não é vigilância, é carga.
