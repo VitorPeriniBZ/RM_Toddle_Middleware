@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   PRAZO_DA_CHECAGEM_MS,
   assuntoDeDependenciaFora,
+  assuntoDeDependenciaVoltou,
   avaliarProntidao,
   comPrazo,
+  transicoes,
   type DependenciaAvaliada,
 } from './prontidao';
 
@@ -173,39 +175,119 @@ describe('a prontidão tem prazo', () => {
   });
 });
 
-describe('assunto do alerta de dependência fora', () => {
+describe('assunto do alerta, por dependência', () => {
   /**
    * O assunto é a CHAVE da supressão. Esta regra já custou caro uma vez neste
    * projeto: o vigia montava `há ${idadeHoras.toFixed(1)}h` no assunto, o
-   * número mudava a cada 6 minutos, e a supressão nunca acontecia — o canal
-   * teria virado ruído no dia em que fosse configurado.
+   * número mudava a cada 6 minutos, e a supressão nunca acontecia.
+   *
+   * A primeira versão deste item repetiu o erro numa forma mais sutil: o
+   * assunto carregava o CONJUNTO de dependências fora. Ordenado, portanto
+   * estável para o mesmo conjunto — e ainda assim errado, porque o conjunto
+   * varia. Com N dependências são 2^N−1 chaves, e um Toddle intermitente
+   * enquanto o Postgres está fora DOBRA as notificações.
    */
-  it('é estável: a mesma dependência fora produz o mesmo assunto', () => {
-    expect(assuntoDeDependenciaFora(['postgres'])).toBe(assuntoDeDependenciaFora(['postgres']));
+  it('é estável para a mesma dependência', () => {
+    expect(assuntoDeDependenciaFora('postgres')).toBe(assuntoDeDependenciaFora('postgres'));
+  });
+
+  it('não depende do que mais está fora ao lado', () => {
+    // O ponto inteiro: o assunto de `postgres` é o mesmo esteja o Toddle no ar
+    // ou não, porque ele não fala do Toddle.
+    expect(assuntoDeDependenciaFora('postgres')).not.toContain('toddle');
+  });
+
+  it('dependências diferentes têm assuntos diferentes', () => {
+    expect(assuntoDeDependenciaFora('postgres')).not.toBe(assuntoDeDependenciaFora('toddle'));
+  });
+
+  it('cair e voltar são assuntos diferentes — janelas independentes', () => {
+    expect(assuntoDeDependenciaFora('postgres')).not.toBe(assuntoDeDependenciaVoltou('postgres'));
+  });
+
+  it('nomeia a dependência, para quem lê a notificação saber onde olhar', () => {
+    expect(assuntoDeDependenciaFora('postgres')).toContain('postgres');
+    expect(assuntoDeDependenciaVoltou('postgres')).toContain('postgres');
+  });
+});
+
+describe('transições — o incidente tem começo e fim', () => {
+  /**
+   * ─── O QUE FALTAVA, E OS DOIS CONSELHEIROS APONTARAM JUNTO ────────────────
+   *
+   * Não havia aviso de RECUPERAÇÃO. O operador é acordado às 02:00, abre o
+   * laptop às 02:05 e encontra tudo verde — sem saber se consertou sozinho, se
+   * vai voltar, ou se o alerta era falso. Incidente sem fechamento é incidente
+   * que ninguém aprende a confiar, e canal em que não se confia é canal
+   * silenciado: exatamente a falha que este bloco de trabalho existe para
+   * evitar.
+   */
+  const mapa = (e: Record<string, 'fora' | 'ok'>): Map<string, 'fora' | 'ok'> =>
+    new Map(Object.entries(e));
+
+  it('primeira observação já FORA conta como transição', () => {
+    // O processo pode ter subido com o banco caído. Não avisar aqui seria
+    // perder justamente o incidente que começou antes de nós.
+    expect(transicoes(mapa({}), [dep('postgres', 'falha')])).toEqual([
+      { nome: 'postgres', para: 'fora' },
+    ]);
+  });
+
+  it('primeira observação OK não gera nada — não há incidente a relatar', () => {
+    expect(transicoes(mapa({}), [dep('postgres', 'ok')])).toEqual([]);
+  });
+
+  it('continuar fora NÃO é transição: a supressão não é a única guarda', () => {
+    expect(transicoes(mapa({ postgres: 'fora' }), [dep('postgres', 'falha')])).toEqual([]);
+  });
+
+  it('continuar ok não gera nada', () => {
+    expect(transicoes(mapa({ postgres: 'ok' }), [dep('postgres', 'ok')])).toEqual([]);
+  });
+
+  it('voltar gera a transição de recuperação', () => {
+    expect(transicoes(mapa({ postgres: 'fora' }), [dep('postgres', 'ok')])).toEqual([
+      { nome: 'postgres', para: 'voltou' },
+    ]);
+  });
+
+  it('só a que MUDOU vira transição, não as vizinhas', () => {
+    const r = transicoes(mapa({ postgres: 'fora', toddle: 'ok' }), [
+      dep('postgres', 'falha'),
+      dep('toddle', 'falha'),
+    ]);
+    expect(r).toEqual([{ nome: 'toddle', para: 'fora' }]);
   });
 
   /**
-   * `Promise.all` não garante ordem de resolução entre as checagens, e sem
-   * ordenar, `postgres,toddle` e `toddle,postgres` seriam DOIS assuntos para o
-   * mesmo incidente — duas notificações, dependendo de qual respondeu primeiro.
+   * `limitado` conta como ok, pela mesma razão que não derruba o 503: rate
+   * limit do Toddle não é queda, e não pode acordar ninguém.
    */
-  it('ordena: a ordem em que as checagens resolveram não cria assunto novo', () => {
-    expect(assuntoDeDependenciaFora(['toddle', 'postgres'])).toBe(
-      assuntoDeDependenciaFora(['postgres', 'toddle']),
-    );
+  it('ir de ok para LIMITADO não é queda', () => {
+    expect(transicoes(mapa({ toddle: 'ok' }), [dep('toddle', 'limitado')])).toEqual([]);
   });
 
-  it('não muta o array recebido', () => {
-    const fora = ['toddle', 'postgres'];
-    assuntoDeDependenciaFora(fora);
-    expect(fora).toEqual(['toddle', 'postgres']);
+  it('ir de FORA para limitado conta como recuperação', () => {
+    // Saiu do ECONNREFUSED e agora só está sendo barrado por cota: voltou a
+    // responder, que é o que o aviso de recuperação afirma.
+    expect(transicoes(mapa({ toddle: 'fora' }), [dep('toddle', 'limitado')])).toEqual([
+      { nome: 'toddle', para: 'voltou' },
+    ]);
   });
 
-  it('incidentes diferentes têm assuntos diferentes', () => {
-    expect(assuntoDeDependenciaFora(['postgres'])).not.toBe(assuntoDeDependenciaFora(['toddle']));
-  });
-
-  it('nomeia o que está fora, para quem lê a notificação saber onde olhar', () => {
-    expect(assuntoDeDependenciaFora(['postgres'])).toContain('postgres');
+  it('oscilar produz um par por ciclo, não uma tempestade de um lado só', () => {
+    const anterior = mapa({});
+    const passos: Array<[DependenciaAvaliada['estado'], number]> = [
+      ['falha', 1],
+      ['falha', 0],
+      ['ok', 1],
+      ['ok', 0],
+      ['falha', 1],
+    ];
+    for (const [estado, esperado] of passos) {
+      const t = transicoes(anterior, [dep('postgres', estado)]);
+      expect(t).toHaveLength(esperado);
+      anterior.set('postgres', estado === 'falha' ? 'fora' : 'ok');
+    }
   });
 });

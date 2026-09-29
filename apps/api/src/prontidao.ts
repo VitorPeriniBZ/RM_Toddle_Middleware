@@ -133,17 +133,74 @@ export function avaliarProntidao(deps: DependenciaAvaliada[]): Prontidao {
 }
 
 /**
- * O assunto do alerta de dependência fora.
+ * O assunto do alerta, POR DEPENDÊNCIA.
  *
- * ESTÁVEL entre repetições, por contrato: o assunto é a chave da supressão, e
- * um assunto que carregue dado mutável — quantidade, horário, mensagem de erro
- * — produz chave nova a cada checagem e a supressão nunca acontece. Foi
- * exatamente assim que o vigia quase transformou o canal em ruído.
+ * ─── POR QUE NÃO UM ALERTA PELO CONJUNTO ──────────────────────────────────
  *
- * As dependências entram ORDENADAS: `postgres,toddle` e `toddle,postgres` são o
- * mesmo incidente, e sem ordenar seriam dois assuntos — duas notificações pela
- * mesma coisa, dependendo da ordem em que o `Promise.all` resolveu.
+ * A primeira versão montava um assunto com o conjunto inteiro —
+ * `Dependência fora: postgres, toddle`. Ordenado, portanto estável para o mesmo
+ * conjunto. E ainda assim errado, como o conselho apontou: o CONJUNTO varia.
+ *
+ * `{postgres}` e `{postgres, toddle}` são dois assuntos, com duas janelas
+ * independentes. Com N dependências são 2^N−1 chaves possíveis, e o efeito
+ * prático é perverso: um Toddle intermitente enquanto o Postgres está fora
+ * DOBRA as notificações, porque o conjunto alterna entre dois valores e cada um
+ * tem a própria supressão.
+ *
+ * Um alerta por dependência elimina isso: `postgres` fora é sempre o mesmo
+ * assunto, independentemente do que mais esteja acontecendo ao lado.
  */
-export function assuntoDeDependenciaFora(fora: string[]): string {
-  return `Dependência fora: ${[...fora].sort().join(', ')}`;
+export function assuntoDeDependenciaFora(nome: string): string {
+  return `Dependência fora: ${nome}`;
+}
+
+/** O par do anterior. Fechar o incidente é parte de relatá-lo. */
+export function assuntoDeDependenciaVoltou(nome: string): string {
+  return `Dependência voltou: ${nome}`;
+}
+
+/**
+ * ─── TRANSIÇÕES, NÃO ESTADOS ────────────────────────────────────────────────
+ *
+ * O que estava faltando, e os dois conselheiros apontaram junto: não havia
+ * aviso de RECUPERAÇÃO.
+ *
+ * O operador é acordado às 02:00, abre o laptop às 02:05 e encontra tudo verde.
+ * Ele não sabe se consertou sozinho, se ainda vai voltar, ou se o alerta era
+ * falso. Incidente sem fechamento é incidente que ninguém aprende a confiar —
+ * e um canal em que não se confia é um canal silenciado, que é a falha que este
+ * bloco inteiro de trabalho existe para evitar.
+ *
+ * Guardar o último estado conhecido também conserta um segundo caso: uma queda
+ * que cai e volta ENTRE duas sondas continua invisível, mas uma que dura mais
+ * que uma sonda agora tem começo e fim marcados.
+ */
+export type TransicaoDeDependencia = { nome: string; para: 'fora' | 'voltou' };
+
+/**
+ * Compara o estado atual com o anterior e devolve só o que MUDOU.
+ *
+ * Pura, e recebe o mapa do estado anterior em vez de guardá-lo: quem mantém a
+ * memória é o chamador. É o que torna testável "caiu, voltou, caiu de novo" sem
+ * esperar relógio nem derrubar dependência de verdade.
+ *
+ * A primeira observação de uma dependência já FORA conta como transição — o
+ * processo pode ter subido com o banco caído, e não avisar nesse caso seria
+ * perder exatamente o incidente que começou antes de nós.
+ */
+export function transicoes(
+  anterior: Map<string, 'fora' | 'ok'>,
+  atual: DependenciaAvaliada[],
+): TransicaoDeDependencia[] {
+  const mudou: TransicaoDeDependencia[] = [];
+  for (const d of atual) {
+    // `limitado` conta como ok aqui, pela mesma razão que não derruba o 503.
+    const agora: 'fora' | 'ok' = d.estado === 'falha' ? 'fora' : 'ok';
+    const antes = anterior.get(d.nome);
+    if (antes === agora) continue;
+    // Nunca vista e já ok: não há incidente a relatar.
+    if (antes === undefined && agora === 'ok') continue;
+    mudou.push({ nome: d.nome, para: agora === 'fora' ? 'fora' : 'voltou' });
+  }
+  return mudou;
 }

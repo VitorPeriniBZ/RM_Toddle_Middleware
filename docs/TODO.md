@@ -163,7 +163,32 @@ como `connect ECONNREFUSED 10.0.1.5:5432`, que nomeia a topologia interna.
 O `/health/ready`, criado no P0-3, já nasce sem esse vazamento: o tipo
 `DependenciaAvaliada` só tem `nome` e `estado`, então não há de onde vazar.
 
-### 4.5 `apps/worker` não declara nenhuma dependência
+### 4.5 `pgPool` sem `connectionTimeoutMillis`
+
+`packages/db/src/pool.ts` cria o pool com `max: 10` e nada mais. Um `SELECT 1`
+abandonado — pela corrida de prazo do `/health/ready`, por exemplo — segura um
+client do pool, e segura justamente quando o banco já está mal.
+
+Mitigado no P0-3 por outro caminho: o cache de prontidão garante no máximo UMA
+checagem em voo, então a pressão é de 1 client, não N. O ajuste do pool em si
+toca todos os consumidores (API e worker) e não cabia num PR de readiness.
+
+Levantado por uma pergunta do conselho na revisão do P0-3, e confirmado no
+código.
+
+### 4.6 Sem enforcement da regra "teste de `apps` não faz I/O"
+
+A suíte `unit` passou a incluir `apps/*/src/**/*.test.ts` no P0-3. A regra de
+que teste com I/O é `.itest.ts` está escrita no comentário do
+`vitest.workspace.ts` e **não é verificada por nada**.
+
+O risco concreto que o conselho nomeou: um teste futuro que chame o Toddle de
+verdade. O runner do CI tem saída de internet, o teste passaria, e queimaria
+cota de rate limit sem ninguém ver. Um stub global de `fetch` que lança na
+suíte unit resolveria — não feito aqui por ser mudança de infraestrutura de
+teste, fora do escopo do P0-3.
+
+### 4.7 `apps/worker` não declara nenhuma dependência
 
 `apps/worker/package.json` tem `dependencies` vazio e usa `bullmq`, `ioredis` e
 outros por hoisting do workspace raiz. Funciona com npm workspaces e com o
