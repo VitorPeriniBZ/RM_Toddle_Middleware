@@ -181,7 +181,17 @@ describe('os dois lados produzem a MESMA chave para o mesmo fato', () => {
     );
   });
 
-  it('casa independentemente dos campos que só existem do lado do RM', () => {
+  /**
+   * Acrescentar campo a `RmFalta` não pode mudar a chave.
+   *
+   * O nome anterior deste teste era "casa independentemente dos campos que só
+   * existem do lado do RM", o que era tautológico: a chave lê 5 campos, é
+   * impossível falhar. O valor real dele é outro e é prospectivo — ele falha no
+   * dia em que alguém ACRESCENTAR um desses campos à chave (`codHor` é o
+   * candidato óbvio), que é uma mudança plausível e que quebraria toda a
+   * proveniência já gravada.
+   */
+  it('acrescentar campo a RmFalta não muda a chave', () => {
     const comExtras = falta({
       codHor: 'SEG-0800',
       faixa: '1',
@@ -197,7 +207,13 @@ describe('os dois lados produzem a MESMA chave para o mesmo fato', () => {
     expect(chaveNaturalDeFalta(comExtras)).toBe(chaveNaturalRm(linha()));
   });
 
-  describe('duas aulas diferentes NUNCA casam', () => {
+  /**
+   * O nome deste bloco já foi "duas aulas diferentes NUNCA casam", e o "NUNCA"
+   * era falso — o próprio arquivo o desmente mais abaixo: sob a degradação do
+   * `?? ''`, duas aulas distintas colapsam na MESMA chave. Cinco mutações de
+   * campo único sobre um fixture fixo não provam "nunca"; provam isto aqui.
+   */
+  describe('mudar um campo separa as chaves', () => {
     const casos: Array<[string, Partial<RmFalta>, Partial<LinhaFrequencia>]> = [
       ['outro aluno', { ra: '2023100235' }, {}],
       ['outra turma-disciplina', { idTurmaDisc: '1715' }, {}],
@@ -211,6 +227,68 @@ describe('os dois lados produzem a MESMA chave para o mesmo fato', () => {
         expect(chaveNaturalDeFalta(falta(noRm))).not.toBe(chaveNaturalRm(linha(noDesejado)));
       });
     }
+  });
+});
+
+// ─── O QUE A CHAVE EXIGE DE QUEM A ALIMENTA ─────────────────────────────────
+
+describe('pré-condições que a chave NÃO verifica, e de quem depende', () => {
+  /**
+   * A chave é um `join`. Ela não normaliza nada além do `Number()` da coligada —
+   * confia em quem a alimenta. Estes testes documentam de QUEM ela depende, para
+   * que a dependência seja visível em vez de suposta.
+   *
+   * Verificado no código: quem garante cada pré-condição é o LEITOR,
+   * `fetchFrequenciaFromRm`, e não esta função:
+   *
+   *   data      `toIsoDate(pick(row, 'DATA'))` em rmAttendanceSource.ts:201,
+   *             e linha ilegível é DESCARTADA com warn (`continue`).
+   *   espaços   `trimValues: true` nos dois parsers XML
+   *             (wsConsultaSqlClient.ts:71 e wsDataServerClient.ts:78).
+   *
+   * Se qualquer uma dessas duas garantias sair de lugar, o sintoma não é erro:
+   * é o cruzamento parar de casar, silenciosamente. Por isso valem teste aqui,
+   * onde a consequência mora.
+   */
+
+  it('data em formato do RM NÃO casa — quem normaliza é o leitor, não a chave', () => {
+    // O que aconteceria se `toIsoDate` saísse do caminho de leitura.
+    const semNormalizar = chaveNaturalDeFalta(falta({ data: '2026-09-01T00:00:00' }));
+    expect(semNormalizar).not.toBe(chaveNaturalRm(linha()));
+  });
+
+  it('data em formato brasileiro NÃO casa — idem', () => {
+    expect(chaveNaturalDeFalta(falta({ data: '01/09/2026' }))).not.toBe(chaveNaturalRm(linha()));
+  });
+
+  it('espaço em volta do RA NÃO casa — quem apara é o parser XML', () => {
+    expect(chaveNaturalDeFalta(falta({ ra: ' 2023100234 ' }))).not.toBe(chaveNaturalRm(linha()));
+  });
+
+  it('espaço em volta do IDTURMADISC NÃO casa — idem', () => {
+    expect(chaveNaturalDeFalta(falta({ idTurmaDisc: ' 1714 ' }))).not.toBe(
+      chaveNaturalRm(linha()),
+    );
+  });
+
+  /**
+   * A coerção que os testes de simetria celebram é também um caminho de
+   * corrupção, e vale registrar antes que alguém a use como garantia.
+   *
+   * `Number('')` é `0` — e `0` pode ser uma coligada legítima em outra
+   * instalação do RM. `Number('X')` é `NaN`, que vira a string `'NaN'`.
+   * Nos dois casos a chave sai FORMADA, com cara de válida.
+   */
+  it('[DEFEITO P0-6] coligada vazia vira 0, não erro', () => {
+    expect(chaveNaturalDeFalta(falta({ codColigada: '' }))).toBe(
+      '0|48211|1714|2023100234|2026-09-01',
+    );
+  });
+
+  it('[DEFEITO P0-6] coligada não numérica vira NaN, não erro', () => {
+    expect(chaveNaturalDeFalta(falta({ codColigada: 'X' }))).toBe(
+      'NaN|48211|1714|2023100234|2026-09-01',
+    );
   });
 });
 
@@ -229,14 +307,48 @@ describe('chaveNaturalDeFalta não reimplementa a fórmula', () => {
    *
    * Por isso este teste olha para o código, e não para o resultado.
    */
-  const fonte = readFileSync(resolve(__dirname, 'rmAttendanceSource.ts'), 'utf8');
+  const fonteCrua = readFileSync(resolve(__dirname, 'rmAttendanceSource.ts'), 'utf8');
+
+  /**
+   * Comentários saem ANTES de qualquer asserção; strings FICAM.
+   *
+   * Sem tirar comentários, a asserção positiva é satisfeita por um
+   * `chaveNaturalRm(` escrito dentro de um comentário — e o comentário da
+   * própria função menciona a fórmula. O teste passaria exatamente no cenário
+   * que ele existe para pegar.
+   *
+   * Tirar as STRINGS, por outro lado, seria um erro: é o conteúdo da string que
+   * distingue `join('|')` (montar a chave) de `join(', ')` (formatar uma
+   * mensagem de erro). Neutralizá-las tornaria a proibição de `join` ampla de
+   * novo — que é justamente o falso vermelho que este bloco quer evitar.
+   */
+  const semComentarios = fonteCrua
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+
+  /**
+   * Aceita as DUAS formas de declaração.
+   *
+   * `chaveNaturalDeFalta` é `export function` hoje, mas `chaveNaturalRm`, no
+   * módulo vizinho, é `export const … =>`. Padronizar o estilo é uma mudança
+   * cosmética plausível, e um teste que quebra por causa dela gasta a confiança
+   * de quem o lê — da próxima vez ele é desligado em vez de investigado.
+   */
+  const corpoDaFuncao = (fonte: string): string =>
+    /export\s+(?:function\s+chaveNaturalDeFalta|const\s+chaveNaturalDeFalta\s*(?::[^=]+)?=)[\s\S]*?\n}/.exec(
+      fonte,
+    )?.[0] ?? '';
 
   it('chama chaveNaturalRm em vez de montar a string por conta própria', () => {
-    const corpo = /export function chaveNaturalDeFalta[\s\S]*?\n}/.exec(fonte)?.[0] ?? '';
+    const corpo = corpoDaFuncao(semComentarios);
 
-    expect(corpo, 'não encontrei a função chaveNaturalDeFalta em rmAttendanceSource.ts').not.toBe(
-      '',
-    );
+    expect(
+      corpo,
+      'não encontrei a declaração de chaveNaturalDeFalta em rmAttendanceSource.ts. Se ela foi ' +
+        'renomeada ou movida, este teste precisa acompanhar — não o apague: ele é a única ' +
+        'barreira contra a fórmula da chave ser duplicada.',
+    ).not.toBe('');
+
     expect(
       corpo,
       'chaveNaturalDeFalta parou de chamar chaveNaturalRm. Há agora DUAS fórmulas para a mesma ' +
@@ -244,14 +356,26 @@ describe('chaveNaturalDeFalta não reimplementa a fórmula', () => {
         'ESCREVER_NOVO e a proteção contra sobrescrever lançamento de professor se desliga em ' +
         'silêncio, com o relatório parecendo normal. Ver o comentário na própria função.',
     ).toContain('chaveNaturalRm(');
+
+    /*
+     * A proibição é do SEPARADOR, não de `join`.
+     *
+     * A versão anterior proibia qualquer `.join(`, e isso teria dado falso
+     * vermelho no próprio P0-6: a mensagem de erro que ele vai adicionar aqui
+     * provavelmente lista as colunas ausentes com `join(', ')`. Proibir
+     * `join('|')` mira o que de fato caracteriza uma reimplementação da chave —
+     * uma mensagem de erro não usa a barra vertical.
+     */
     expect(
       corpo,
-      'chaveNaturalDeFalta passou a montar a chave com join() próprio. Ver acima.',
-    ).not.toMatch(/\.join\(/);
+      "chaveNaturalDeFalta passou a montar a chave com join('|') próprio. Ver acima.",
+    ).not.toMatch(/\.join\(\s*['"`]\|['"`]\s*\)/);
   });
 
   it('importa a fórmula do módulo da projeção', () => {
-    expect(fonte).toMatch(/import\s*\{[^}]*chaveNaturalRm[^}]*\}\s*from\s*'\.\/attendanceProjection'/);
+    expect(semComentarios).toMatch(
+      /import\s*\{[^}]*chaveNaturalRm[^}]*\}\s*from\s*'\.\/attendanceProjection'/,
+    );
   });
 });
 
@@ -316,13 +440,13 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
    * silenciosa: o RM não disse que a turma-disciplina é vazia, ele não disse nada.
    */
 
-  it('coluna ausente vira segmento VAZIO na chave, em vez de erro', () => {
+  it('[DEFEITO P0-6] coluna ausente vira segmento VAZIO na chave, em vez de erro', () => {
     expect(chaveNaturalDeFalta(falta({ idTurmaDisc: '' }))).toBe(
       '1|48211||2023100234|2026-09-01',
     );
   });
 
-  it('duas colunas ausentes viram dois segmentos vazios', () => {
+  it('[DEFEITO P0-6] duas colunas ausentes viram dois segmentos vazios', () => {
     expect(chaveNaturalDeFalta(falta({ idTurmaDisc: '', idHorarioTurma: '' }))).toBe(
       '1|||2023100234|2026-09-01',
     );
@@ -336,13 +460,42 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
    * professor continua lá, o sistema simplesmente não a enxerga, e escreve por
    * cima achando que o RM estava vazio.
    */
-  it('a chave degradada NÃO casa com a projetada — é por aqui que a trava se desliga', () => {
+  it('[DEFEITO P0-6] a chave degradada NÃO casa com a projetada — a trava se desliga aqui', () => {
     const doRm = chaveNaturalDeFalta(falta({ idTurmaDisc: '' }));
     const desejada = chaveNaturalRm(linha());
     expect(doRm).not.toBe(desejada);
   });
 
-  it('com a coluna ausente, NENHUMA falta do RM é encontrada no índice', () => {
+  /**
+   * ─── PIOR QUE NÃO ENCONTRAR: PERDER ──────────────────────────────────────
+   *
+   * O caso acima é um miss — a falta do RM existe e não é vista. Existe um caso
+   * pior, e ele só aparece com dados realistas.
+   *
+   * O mesmo aluno, no mesmo dia, tem duas aulas: matemática no 1º horário e
+   * português no 2º. As duas linhas diferem SOMENTE por `idTurmaDisc` e
+   * `idHorarioTurma` — que são exatamente as duas colunas que o `?? ''`
+   * degrada. Com as duas ausentes, as duas aulas colapsam na MESMA chave, e
+   * `indexaFaltasPorChave` descarta uma ("a última vence").
+   *
+   * A linha não é só invisível: ela some do índice. E `indice.size` menor que a
+   * quantidade de faltas lidas é um sinal observável que hoje ninguém afirma em
+   * lugar nenhum — é candidato a virar alerta no P0-5.
+   */
+  it('[DEFEITO P0-6] duas aulas do mesmo aluno no mesmo dia colapsam numa chave só', () => {
+    const matematica = falta({ idTurmaDisc: '', idHorarioTurma: '', presenca: 'A' });
+    const portugues = falta({ idTurmaDisc: '', idHorarioTurma: '', presenca: 'P' });
+
+    expect(chaveNaturalDeFalta(matematica)).toBe(chaveNaturalDeFalta(portugues));
+
+    const indice = indexaFaltasPorChave([matematica, portugues]);
+    expect(
+      indice.size,
+      'duas faltas entraram e o índice ficou com uma: a outra foi descartada em silêncio',
+    ).toBe(1);
+  });
+
+  it('[DEFEITO P0-6] com a coluna ausente, NENHUMA falta do RM é encontrada no índice', () => {
     // O cenário real: a Sentença perdeu ID_TURMADISC, então TODAS as linhas
     // lidas do RM ficam com o segmento vazio — e o índice inteiro fica inútil.
     const doRm = [
@@ -372,19 +525,29 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
   });
 
   /**
-   * ─── O QUE O P0-6 TEM DE FAZER ────────────────────────────────────────────
+   * ─── O CRITÉRIO DE ACEITE DO P0-6 ─────────────────────────────────────────
    *
-   * Este teste está desligado DE PROPÓSITO. Ele descreve o comportamento
-   * desejado, não o atual, e é o critério de aceite do P0-6.
+   * `it.fails` em vez de `it.skip`, e a diferença é o ponto inteiro.
+   *
+   * `skip` não tem dono nem prazo: ele envelhece calado, e daqui a seis meses é
+   * só uma linha cinza que ninguém lê. `it.fails` RODA. Hoje ele é verde,
+   * porque a asserção de fato falha — a função não lança. No dia em que o P0-6
+   * fizer a função lançar, a asserção passa, e `it.fails` fica VERMELHO.
+   *
+   * Ou seja: quem consertar não tem a opção de deixar o bloco "[DEFEITO P0-6]"
+   * acima apodrecendo ao lado do conserto. A suíte o obriga a voltar aqui.
+   *
+   * (Semântica confirmada no vitest 2.1.9 antes de adotar, não suposta.)
    *
    * TODO(P0-6): trocar o `?? ''` de rmAttendanceSource.ts:210-212 por falha
-   * alta, no LEITOR — antes de qualquer veredito, para que o run aborte inteiro
-   * em vez de escrever parte das linhas. Atrás da flag
+   * alta no LEITOR — antes de qualquer veredito, para o run abortar inteiro em
+   * vez de escrever parte das linhas. Atrás da flag
    * `FALHA_ALTA_EM_COLUNA_AUSENTE`, default false, com período de sombra antes
-   * de ligar. Quando isso estiver pronto, remover o `.skip` e apagar o bloco
-   * "comportamento ATUAL" acima.
+   * de ligar. Quando este teste ficar vermelho: trocar o `.fails` por `it`,
+   * apagar os testes marcados `[DEFEITO P0-6]` e escrever no lugar deles o
+   * comportamento novo.
    */
-  it.skip('P0-6: coluna ausente deve ERRAR, nunca produzir chave com segmento vazio', () => {
+  it.fails('P0-6: coluna ausente deve ERRAR, nunca produzir chave com segmento vazio', () => {
     expect(() => chaveNaturalDeFalta(falta({ idTurmaDisc: '' }))).toThrow(/ID_TURMADISC|ausente/i);
   });
 });
