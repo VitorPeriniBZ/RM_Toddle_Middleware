@@ -1,6 +1,19 @@
 # Plano priorizado — 29/09/2026
 
-Base: `docs/AUDITORIA.md` (FASE 1). Nenhum item deste plano foi executado ainda.
+Base: `docs/AUDITORIA.md` (FASE 1).
+
+## Progresso da execução (FASE 3)
+
+| Item | Estado | Commits |
+|---|---|---|
+| P0-1 Congelar a chave natural em teste | **concluído** 29/09 | `520b9c2`, `d203c20` |
+| P0-2 Ligar o canal de alerta | em execução | |
+| P0-3 `/health` 503 com dependência fora | pendente | |
+| P0-4 Canário de colunas da Sentença | pendente | |
+| P0-5 Alerta sobre distribuição de vereditos | pendente | |
+| P0-6 `?? ''` → falha alta, em sombra | pendente | |
+
+Suíte: 328 → 366 testes verdes. `typecheck` limpo.
 
 Esforço em unidades relativas: **S** (uma sessão), **M** (algumas sessões), **L** (dias).
 
