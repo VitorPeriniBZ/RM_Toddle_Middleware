@@ -21,7 +21,21 @@ import { logger } from './logger';
  * ─── MESMA DISCIPLINA DO HEARTBEAT ──────────────────────────────────────────
  *
  * NUNCA lança e NUNCA rejeita. Canal de alerta que derruba o que ele observa é
- * pior que canal nenhum. Falha de envio fica no log em nível warn.
+ * pior que canal nenhum.
+ *
+ * ─── TRÊS MANEIRAS DE NINGUÉM SER AVISADO, UM SÓ DESFECHO ───────────────────
+ *
+ *   DESLIGADO      não há ALERTA_WEBHOOK_URL         conserto: .env
+ *   RECUSADO       o canal respondeu erro            conserto: o canal
+ *   INALCANCAVEL   rede ou timeout                   conserto: rede
+ *
+ * As causas são distintas e vão distintas para o log. O desfecho é o mesmo — o
+ * aviso não chegou — e por isso os três caem no MESMO caminho degradado: o
+ * conteúdo inteiro do alerta em nível `error`, estrangulado por assunto.
+ *
+ * Antes, só o primeiro caso preservava o conteúdo; os outros dois logavam a
+ * mensagem do erro em `warn` e perdiam o alerta. Sobrava "não consegui avisar",
+ * sem dizer sobre o quê.
  *
  * ─── FORMATO DO CORPO ───────────────────────────────────────────────────────
  *
@@ -137,7 +151,23 @@ function dentroDaJanela(mapa: Map<string, number>, chave: string, agora: number,
  * falha faz 50 lotes falharem atrás dele, e 51 linhas de `error` idênticas é a
  * mesma tempestade que a janela existe para conter.
  */
-export async function alertar(alerta: Alerta): Promise<boolean> {
+export async function alertar(
+  alerta: Alerta,
+  /*
+   * O transporte, injetável. Default: o webhook de verdade.
+   *
+   * Mesmo idioma de `configVersionDetalhe(cfg = tenantConfig)`: parâmetro com
+   * default, não mock de módulo. Existe porque o caminho de ENVIO é
+   * inalcançável na suíte unit — `env.ALERTA_WEBHOOK_URL` é lido na importação
+   * e a suíte não o define, de propósito (um token falso ali faz chamada real
+   * falhar alto em vez de usar a credencial de quem rodou).
+   *
+   * Sem isto, a regra "a janela conta sucesso, não tentativa" ficaria sem
+   * teste — e foi exatamente uma regra sem teste que produziu o defeito que
+   * este arquivo vem consertando.
+   */
+  entregar: (texto: string) => Promise<Entrega> = tentarEntregar,
+): Promise<boolean> {
   const agora = Date.now();
   const janela = alerta.repetirApos ?? JANELA_REPETICAO_MS;
 
@@ -147,24 +177,22 @@ export async function alertar(alerta: Alerta): Promise<boolean> {
   const texto = [`[${env.TENANT_SLUG}] ${alerta.assunto}`, ...linhas].join('\n');
 
   /*
-   * ─── SEM CANAL: SAI PELO LOG, COM CONTABILIDADE PRÓPRIA ──────────────────
+   * ─── A JANELA CONTA QUANDO O HUMANO SOUBE, NÃO QUANDO TENTAMOS ───────────
    *
-   * Este ramo vem ANTES da janela de envio, e isso é deliberado: um alerta que
-   * nunca teve para onde ir não pode marcar a janela de envio do assunto. Do
-   * contrário o caminho sem canal ficaria mexendo numa contabilidade que só faz
-   * sentido para quem de fato envia.
+   * A versão anterior marcava `ultimoEnvio` ANTES do `fetch` e nunca desfazia
+   * em caso de falha. Consequência: um único blip de rede na PRIMEIRA
+   * ocorrência de uma condição calava o assunto pela janela inteira — 6h, no
+   * caso dos achados do vigia. E a primeira ocorrência é justamente o alerta
+   * que não pode se perder.
+   *
+   * Entre os dois modos de errar, a escolha não é simétrica: reenviar um alerta
+   * que já chegou custa uma notificação repetida; suprimir um que nunca chegou
+   * custa o incidente. Por isso a janela passa a registrar SUCESSO.
+   *
+   * O martelo contra canal morto não desapareceu: um canal fora do ar recebe
+   * uma tentativa por passada do vigia (4 por hora, 5s de timeout cada), o que
+   * é desprezível — e o LOG dessa falha continua estrangulado, abaixo.
    */
-  if (!env.ALERTA_WEBHOOK_URL) {
-    if (dentroDaJanela(ultimoDegradado, alerta.assunto, agora, janela)) return false;
-    registrar(ultimoDegradado, alerta.assunto, agora);
-    logger.error(
-      { assunto: alerta.assunto, contexto: alerta.contexto, canal: 'DESLIGADO' },
-      `ALERTA SEM CANAL — ninguém foi avisado. Defina ALERTA_WEBHOOK_URL (Slack, Discord ou ` +
-        `ntfy) para que este aviso chegue a alguém. Conteúdo do alerta:\n${texto}`,
-    );
-    return false;
-  }
-
   if (dentroDaJanela(ultimoEnvio, alerta.assunto, agora, janela)) {
     logger.debug(
       { assunto: alerta.assunto, janelaMs: janela },
@@ -172,7 +200,68 @@ export async function alertar(alerta: Alerta): Promise<boolean> {
     );
     return false;
   }
-  registrar(ultimoEnvio, alerta.assunto, agora);
+
+  const entrega = await entregar(texto);
+  if (entrega.entregue) {
+    registrar(ultimoEnvio, alerta.assunto, agora);
+    logger.debug({ assunto: alerta.assunto }, 'Alerta enviado');
+    return true;
+  }
+
+  /*
+   * ─── NINGUÉM FOI AVISADO: DEGRADA PARA O LOG ─────────────────────────────
+   *
+   * "Não há canal" e "o canal falhou" são causas diferentes com o MESMO
+   * desfecho: o aviso não chegou em ninguém. Por isso os dois caem aqui.
+   *
+   * Isto conserta uma perda que passava batida: no desenho anterior a falha de
+   * envio logava só a mensagem do erro em `warn`, e o CONTEÚDO do alerta —
+   * qual defeito tinha acontecido — evaporava. Sobrava "não consegui avisar",
+   * sem dizer sobre o quê.
+   */
+  if (!dentroDaJanela(ultimoDegradado, alerta.assunto, agora, janela)) {
+    registrar(ultimoDegradado, alerta.assunto, agora);
+    logger.error(
+      {
+        assunto: alerta.assunto,
+        contexto: alerta.contexto,
+        canal: entrega.motivo,
+        detalhe: entrega.detalhe,
+      },
+      `${CABECALHO_POR_MOTIVO[entrega.motivo]} Conteúdo do alerta:\n${texto}`,
+    );
+  }
+  return false;
+}
+
+/** Por que ninguém foi avisado. Causas distintas, consertos distintos. */
+export type MotivoDeNaoEntrega = 'DESLIGADO' | 'RECUSADO' | 'INALCANCAVEL';
+
+const CABECALHO_POR_MOTIVO: Record<MotivoDeNaoEntrega, string> = {
+  DESLIGADO:
+    'ALERTA SEM CANAL — ninguém foi avisado. Defina ALERTA_WEBHOOK_URL (Slack, Discord ou ntfy).',
+  RECUSADO:
+    'ALERTA NÃO ENTREGUE — o canal existe e RECUSOU a mensagem. O conserto é no canal ' +
+    '(webhook revogado? canal arquivado? URL errada?), não no .env.',
+  INALCANCAVEL:
+    'ALERTA NÃO ENTREGUE — o canal não foi alcançado (rede ou timeout). Se isto persistir, ' +
+    'nenhum aviso deste sistema está saindo.',
+};
+
+export interface Entrega {
+  entregue: boolean;
+  motivo: MotivoDeNaoEntrega;
+  detalhe?: string;
+}
+
+/**
+ * A tentativa de entrega, isolada. Nunca lança.
+ *
+ * Separada de `alertar` para que a política (janela, degradação, o que logar)
+ * fique legível sem o transporte no meio.
+ */
+async function tentarEntregar(texto: string): Promise<Entrega> {
+  if (!env.ALERTA_WEBHOOK_URL) return { entregue: false, motivo: 'DESLIGADO' };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.ALERTA_WEBHOOK_TIMEOUT_MS);
@@ -184,21 +273,11 @@ export async function alertar(alerta: Alerta): Promise<boolean> {
       signal: controller.signal,
     });
     if (!res.ok) {
-      logger.warn(
-        { status: res.status, assunto: alerta.assunto },
-        'Canal de alerta recusou a mensagem — o worker seguiu normalmente',
-      );
-      return false;
+      return { entregue: false, motivo: 'RECUSADO', detalhe: `HTTP ${res.status}` };
     }
-    logger.debug({ assunto: alerta.assunto }, 'Alerta enviado');
-    return true;
+    return { entregue: true, motivo: 'DESLIGADO' };
   } catch (err) {
-    logger.warn(
-      { err: (err as Error).message, assunto: alerta.assunto },
-      'Alerta não pôde ser enviado — o worker seguiu normalmente. ' +
-        'ATENÇÃO: este defeito ficou SEM aviso; só o log registra',
-    );
-    return false;
+    return { entregue: false, motivo: 'INALCANCAVEL', detalhe: (err as Error).message };
   } finally {
     clearTimeout(timer);
   }
