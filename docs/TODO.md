@@ -56,25 +56,15 @@ Não implementado no P0-4: é achado desta sessão, não escopo do item.
 
 ---
 
-## 0.2 `semChave > 0` deveria virar suspeita no sinal de cruzamento
+## 0.2 O leitor de NOTAS ainda não descarta linha sem chave
 
-O P0-6 passou a descartar a linha do RM quando um componente da chave vem vazio
-(a coluna EXISTE no result set, o valor é que não veio). O contador saiu em
-`ResumoLeituraFrequencia.semChave`.
+O P0-6 tocou só `rmAttendanceSource.ts`. O leitor de notas
+(`rmGradeSource.ts`) não foi auditado quanto ao mesmo padrão `?? ''`, e
+`sincronizarNotas` passa `linhasSemChave: 0` ao sinal — o que é honesto (não é
+"nenhuma descartada", é "esta via ainda não conta") e é um ponto cego.
 
-**Descartar é contenção, não proteção.** Vale dizer com todas as letras porque a
-tentação de achar que resolve é real: descartar a linha e manter a chave
-degradada levam ao MESMO desfecho para aquela aula — a projeção não encontra
-nada, responde `ESCREVER_NOVO`, e a falta lançada pelo professor é sobrescrita.
-
-O que o descarte evita é o caso PIOR: duas linhas degradadas colidindo entre si
-na mesma chave, onde uma some do índice e a outra pode casar com a aula de outro
-professor.
-
-A proteção de verdade é `semChave > 0` entrar como motivo em `avaliarCruzamento`
-(P0-5): se há faltas humanas que não conseguimos enxergar, ninguém deveria
-escrever por cima. Não feito no P0-6 por ser mudança no contrato do sinal, fora
-do escopo do item.
+A consequência de nota sobrescrita é mais pesada que a de falta: entra no
+boletim e no histórico. Vale o mesmo tratamento.
 
 ---
 

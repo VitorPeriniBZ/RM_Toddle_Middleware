@@ -164,7 +164,27 @@ export function colunasDaChaveAusentes(rows: readonly ConsultaRow[]): string[] {
   // estado legítimo. Acusar drift aqui seria alarme por fim de semana.
   if (rows.length === 0) return [];
 
-  const presentes = new Set(Object.keys(rows[0]).map((k) => k.toLowerCase()));
+  /*
+   * ─── A UNIÃO DE TODAS AS LINHAS, E NÃO A PRIMEIRA ────────────────────────
+   *
+   * A versão anterior olhava só `rows[0]`, supondo que o result set tem schema
+   * fixo. Não tem, neste transporte: o dataset chega como XML no formato
+   * `<NewDataSet><Resultado>…`, e a serialização do .NET OMITE o elemento
+   * quando o valor é DBNull. Uma linha com `ID_TURMADISC` nulo simplesmente
+   * não traz a tag — e `linhasDoDataset.test.ts:31` já documenta um
+   * `<Resultado>` com um campo só.
+   *
+   * Com amostra de uma linha, dois erros simétricos:
+   *   coluna nula na linha 0 e presente no resto  -> acusa drift que não existe
+   *                                                  (em ESTRITO, aborta o run)
+   *   coluna presente na 0 e nula na 400          -> não acusa drift que existe
+   *
+   * A união custa 698 × 23 iterações na janela medida — ruído de perfil, não de
+   * relógio. Uma coluna só é "ausente" quando falta em TODAS as linhas, que é a
+   * assinatura de a Sentença ter deixado de declará-la.
+   */
+  const presentes = new Set<string>();
+  for (const row of rows) for (const k of Object.keys(row)) presentes.add(k.toLowerCase());
   return COLUNAS_DA_CHAVE.filter(
     (variantes) => !variantes.some((v) => presentes.has(v.toLowerCase())),
   ).map((variantes) => variantes[0]);

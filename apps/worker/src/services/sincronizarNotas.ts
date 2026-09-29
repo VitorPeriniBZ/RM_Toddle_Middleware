@@ -118,7 +118,14 @@ export interface RelatorioNotas {
     notasNoRmDepois: number;
   };
   /** Por que não escreveu, quando não escreveu. */
-  naoEscreveu?: 'ensaio' | 'nada-a-escrever' | 'recusado-pelo-teto' | 'precisa-aprovacao' | 'desligado';
+  naoEscreveu?:
+    | 'ensaio'
+    | 'nada-a-escrever'
+    | 'recusado-pelo-teto'
+    | 'precisa-aprovacao'
+    | 'desligado'
+    /** O cruzamento está suspeito: a trava pode estar desligada. Ver o P0-5. */
+    | 'cruzamento-suspeito';
 }
 
 /** Um único campus: o contexto do wsDataServer exige UM CODFILIAL. */
@@ -408,6 +415,11 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
   const sinal = avaliarCruzamento({
     lidasDoRm: noRm.notas.length,
     chavesUnicasDoRm: notasPorChave.size,
+    // O leitor de notas ainda não descarta linha por componente vazio da
+    // chave — o P0-6 só tocou o de frequência. Enquanto não tocar, não há o
+    // que contar aqui, e declarar 0 é honesto: não é "nenhuma descartada", é
+    // "esta via ainda não conta". Registrado em docs/TODO.md.
+    linhasSemChave: 0,
     porVeredito: resumoDecisoes.porVeredito,
   });
 
@@ -563,6 +575,14 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
   }
 
   if (!op.executar) return { ...base, naoEscreveu: 'ensaio' };
+
+  /*
+   * Mesma trava da frequência, e aqui a consequência é mais pesada: nota
+   * sobrescrita entra no boletim e no histórico. Escrever errado é
+   * irreversível; não escrever é atraso. Ver o comentário longo em
+   * sincronizarFrequencia.ts.
+   */
+  if (sinal.suspeito) return registrarPassada('cruzamento-suspeito', 'succeeded');
   if (lotes.length === 0) return registrarPassada('nada-a-escrever', 'succeeded');
 
   // ─── GATE DE APROVAÇÃO ────────────────────────────────────────────────────

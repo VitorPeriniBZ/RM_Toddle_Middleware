@@ -25,6 +25,7 @@ import {
   assuntoDoSinal,
   avaliarCruzamento,
   avaliarVolume,
+  chaveNaturalDeFalta,
   chaveNaturalRm,
   decidirEscrita,
   estadoNoRmDeFalta,
@@ -131,7 +132,13 @@ export interface RelatorioDeFrequencia {
   /** `true` quando chegou a enviar algo ao RM. */
   escrita: boolean;
   /** Por que não escreveu. Ausente quando escreveu. */
-  naoEscreveu?: 'ensaio' | 'nada-a-escrever' | 'recusado-pelo-teto' | 'precisa-aprovacao';
+  naoEscreveu?:
+    | 'ensaio'
+    | 'nada-a-escrever'
+    | 'recusado-pelo-teto'
+    | 'precisa-aprovacao'
+    /** O cruzamento está suspeito: a trava pode estar desligada. Ver o P0-5/P0-6. */
+    | 'cruzamento-suspeito';
 
   /** Só quando `escrita` é `true`. */
   envio?: {
@@ -343,9 +350,29 @@ export async function sincronizarFrequencia(
    *
    * Ver packages/domain/src/sinalDeCruzamento.ts.
    */
+  /*
+   * ─── O ESCOPO DOS DOIS LADOS TEM DE SER O MESMO ──────────────────────────
+   *
+   * `noRm.faltas` é filtrado por coligada e campus, NÃO por turma. Numa
+   * implantação parcial do Toddle — um segmento, um piloto — o RM devolve
+   * faltas humanas de turmas que nem projetamos. Contá-las aqui faria
+   * "nada casou" ser verdade permanente e CORRETA, e o alerta dispararia
+   * quatro vezes por dia, para sempre, sobre um sistema saudável.
+   *
+   * A pergunta certa não é "o RM tem linhas?", é "das turmas que projetamos, o
+   * RM tem linhas?".
+   */
+  const turmasProjetadas = new Set(resumo.projetados.map((pr) => pr.linha.idTurmaDisc));
+  const doEscopoProjetado = noRm.faltas.filter((f) => turmasProjetadas.has(f.idTurmaDisc));
+  const chavesDoEscopoProjetado = new Set(doEscopoProjetado.map((f) => chaveNaturalDeFalta(f)));
+
   const sinal = avaliarCruzamento({
-    lidasDoRm: noRm.faltas.length,
-    chavesUnicasDoRm: faltasPorChave.size,
+    lidasDoRm: doEscopoProjetado.length,
+    chavesUnicasDoRm: chavesDoEscopoProjetado.size,
+    // Vem do leitor: linhas que ele descartou por IDTURMADISC/IDHORARIOTURMA
+    // vazios. Sem isto o descarte do P0-6 cegaria este sinal — a linha sairia
+    // dos DOIS lados da conta e a aritmética fecharia.
+    linhasSemChave: noRm.semChave,
     porVeredito: resumoDecisoes.porVeredito,
   });
 
@@ -360,7 +387,9 @@ export async function sincronizarFrequencia(
     {
       fluxo: 'frequencia',
       lidasDoRm: noRm.faltas.length,
-      chavesUnicasDoRm: faltasPorChave.size,
+      noEscopoProjetado: doEscopoProjetado.length,
+      chavesUnicasDoRm: chavesDoEscopoProjetado.size,
+      linhasSemChave: noRm.semChave,
       porVeredito: resumoDecisoes.porVeredito,
       casaram: sinal.casaram,
       suspeito: sinal.suspeito,
@@ -378,8 +407,9 @@ export async function sincronizarFrequencia(
         assunto: assuntoDoSinal('Frequência', motivo),
         contexto: {
           fluxo: 'frequencia',
-          lidasDoRm: noRm.faltas.length,
-          chavesUnicasDoRm: faltasPorChave.size,
+          lidasDoRm: doEscopoProjetado.length,
+          chavesUnicasDoRm: chavesDoEscopoProjetado.size,
+          linhasSemChave: noRm.semChave > 0 ? noRm.semChave : undefined,
           casaram: sinal.casaram,
           linhasPerdidas: sinal.linhasPerdidas > 0 ? sinal.linhasPerdidas : undefined,
           porque: sinal.porque,
@@ -543,6 +573,41 @@ export async function sincronizarFrequencia(
   }
 
   if (!op.executar) return { ...base, naoEscreveu: 'ensaio' };
+
+  /*
+   * ─── SOMBRA NÃO ESCREVE. A ASSIMETRIA DECIDE. ────────────────────────────
+   *
+   * A primeira versão do modo sombra seguia escrevendo: "comporta-se como
+   * hoje, mas grita". Os dois conselheiros apontaram que está errado, e está.
+   *
+   * Escrever por cima de lançamento humano é IRREVERSÍVEL — a proveniência só
+   * guarda o que NÓS criamos, então o valor do professor não tem backup. Não
+   * escrever é ATRASO, curável com um novo run depois de alguém olhar.
+   *
+   * E o argumento legítimo da sombra — "descobrir se alguma Sentença já está
+   * degradada sem virar job vermelho" — é atendido igualmente bem lendo,
+   * decidindo, relatando e NÃO emitindo o XML. A sombra que escreve não coleta
+   * um bit a mais de informação; só adiciona o risco.
+   *
+   * Não é job vermelho: o run fecha `succeeded` com o motivo registrado. O
+   * alerta já saiu lá em cima, com assunto estável.
+   *
+   * ─── POR QUE `avaliarVolume` NÃO BASTA COMO ANTEPARO ─────────────────────
+   *
+   * Ele quase basta: uma degradação TOTAL faz `aEscrever` saltar de ~40 para
+   * ~800, o que estoura o desvio (50%) e o teto de escopo (30%) e vira
+   * PRECISA_APROVACAO. Mas `abaixoDoPiso` desarma as duas checagens quando
+   * `aEscrever <= WRITE_PISO_SEM_APROVACAO` (default 50) — e o piso existe por
+   * uma boa razão, que é não pedir aprovação por correção miúda.
+   *
+   * O resultado é que a degradação PARCIAL — uma turma perdendo a coluna,
+   * trinta faltas sobrescritas — passa por baixo de todas as guardas de
+   * volume. É exatamente o caso que este bloqueio pega.
+   */
+  if (sinal.suspeito) {
+    return registrarPassada('cruzamento-suspeito', 'succeeded');
+  }
+
   if (escreviveisLotes.length === 0) return registrarPassada('nada-a-escrever', 'succeeded');
 
   // RECUSADO não tem porta: nem aprovação humana libera, porque o veredito

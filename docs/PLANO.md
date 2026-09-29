@@ -322,6 +322,19 @@ Linha de base medida contra o RM real, no mesmo dia:
 | chaves com segmento vazio (810 e 223 faltas, duas janelas) | **0** |
 | drift simulado (removendo `ID_TURMADISC`) | detectado |
 
+**A sombra deixou de escrever.** Na primeira versão ela seguia escrevendo
+("comporta-se como hoje, mas grita"). Os dois conselheiros apontaram o erro e a
+assimetria decide: escrever por cima de lançamento humano é IRREVERSÍVEL — a
+proveniência só guarda o que nós criamos —, e não escrever é ATRASO. A sombra
+que escreve não coleta um bit a mais de informação; só adiciona o risco. Hoje
+um cruzamento suspeito fecha o run com `naoEscreveu: 'cruzamento-suspeito'` e
+status `succeeded` — não é job vermelho.
+
+`avaliarVolume` quase bastava como anteparo: degradação TOTAL salta de ~40 para
+~800 escritas e estoura desvio (50%) e teto de escopo (30%). Mas `abaixoDoPiso`
+desarma as duas quando `aEscrever <= 50` — então a degradação PARCIAL (uma
+turma, trinta faltas) passava por baixo de tudo. É esse caso que o bloqueio pega.
+
 **Critério para ligar o estrito:** um período de sombra sem nenhum alerta de
 coluna ausente. Como a cadência de frequência é diária (`FREQ_SYNC_CRON` às
 23h), uma semana dá sete observações — suficiente para cobrir uma cópia de base

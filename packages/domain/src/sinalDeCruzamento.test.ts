@@ -14,6 +14,7 @@ import { assuntoDoSinal, avaliarCruzamento, type EntradaDoSinal } from './sinalD
 const entrada = (m: Partial<EntradaDoSinal> = {}): EntradaDoSinal => ({
   lidasDoRm: 2449,
   chavesUnicasDoRm: 2449,
+  linhasSemChave: 0,
   porVeredito: { NADA_A_FAZER: 2400, ESCREVER_NOVO: 40, CONFLITO_HUMANO: 9 },
   ...m,
 });
@@ -143,6 +144,7 @@ describe('os dois sinais juntos', () => {
     const r = avaliarCruzamento({
       lidasDoRm: 2449,
       chavesUnicasDoRm: 900,
+      linhasSemChave: 0,
       porVeredito: { ESCREVER_NOVO: 2449 },
     });
     expect(r.motivos).toEqual(['nada-casou', 'colisao-de-chave']);
@@ -175,5 +177,73 @@ describe('assunto estável — contrato do P0-2', () => {
     expect(assuntoDoSinal('Frequência', 'nada-casou')).not.toBe(
       assuntoDoSinal('Notas', 'nada-casou'),
     );
+  });
+});
+
+describe('linha sem chave — o buraco entre o P0-6 e este sinal', () => {
+  /**
+   * ─── O DEFEITO QUE AS DUAS MUDANÇAS JUNTAS CRIARAM ────────────────────────
+   *
+   * O P0-6 passou a descartar a linha do RM cujo IDTURMADISC ou IDHORARIOTURMA
+   * veio vazio. O descarte é a reação certa — e cegou este sinal.
+   *
+   * A linha sai do array, some do numerador E do denominador, a aritmética
+   * fica consistente (`linhasPerdidas = 0`), e se as demais casarem nenhum
+   * motivo dispara. Enquanto isso aquela aula não tem correspondência no
+   * índice, a projeção responde ESCREVER_NOVO, e a falta do professor é
+   * sobrescrita — o mesmo dano, agora invisível para os dois sinais.
+   *
+   * Os dois conselheiros apontaram isto independentemente, e a verificação no
+   * código confirmou: `lidasDoRm` usa `noRm.faltas.length`, que é o array
+   * DEPOIS dos descartes.
+   */
+  it('linhas descartadas por chave vazia são suspeitas, mesmo com tudo casando', () => {
+    const r = avaliarCruzamento(
+      entrada({ lidasDoRm: 2400, chavesUnicasDoRm: 2400, linhasSemChave: 49 }),
+    );
+    expect(
+      r.suspeito,
+      'o P0-6 descartou 49 faltas humanas e este sinal não viu: a aritmética fecha porque ' +
+        'as descartadas saíram dos dois lados da conta',
+    ).toBe(true);
+    expect(r.motivos).toEqual(['linha-sem-chave']);
+  });
+
+  it('UMA linha descartada já é sinal — é falta de aluno', () => {
+    expect(avaliarCruzamento(entrada({ linhasSemChave: 1 })).suspeito).toBe(true);
+  });
+
+  /**
+   * Motivo PRÓPRIO, não somado em `lidasDoRm`. Somar produziria
+   * `colisao-de-chave` com explicação factualmente errada — "sumiram por
+   * colisão" — e o conserto que cada um pede é diferente: colisão manda olhar
+   * as colunas da chave, linha sem chave manda olhar os dados daquelas turmas.
+   */
+  it('não é confundido com colisão', () => {
+    const r = avaliarCruzamento(entrada({ linhasSemChave: 49 }));
+    expect(r.motivos).not.toContain('colisao-de-chave');
+    expect(r.linhasPerdidas).toBe(0);
+  });
+
+  it('a frase diz que são faltas que o cruzamento não enxerga', () => {
+    const r = avaliarCruzamento(entrada({ linhasSemChave: 49 }));
+    expect(r.porque).toContain('49');
+    expect(r.porque).toContain('não consegue enxergá-las');
+  });
+
+  it('os três motivos podem coexistir', () => {
+    const r = avaliarCruzamento({
+      lidasDoRm: 2449,
+      chavesUnicasDoRm: 900,
+      linhasSemChave: 17,
+      porVeredito: { ESCREVER_NOVO: 2449 },
+    });
+    expect(r.motivos).toEqual(['nada-casou', 'colisao-de-chave', 'linha-sem-chave']);
+  });
+
+  it('tem assunto estável próprio, sem número', () => {
+    const a = assuntoDoSinal('Frequência', 'linha-sem-chave');
+    expect(a).not.toMatch(/\d/);
+    expect(a).not.toBe(assuntoDoSinal('Frequência', 'colisao-de-chave'));
   });
 });
