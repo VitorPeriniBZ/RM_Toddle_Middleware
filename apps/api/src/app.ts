@@ -1,7 +1,14 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
-import { configVersion, configVersionDetalhe, env, logger, tenantConfig } from '@rm-toddle/config';
+import {
+  configVersion,
+  configVersionDetalhe,
+  diagnosticoDoAmbiente,
+  env,
+  logger,
+  tenantConfig,
+} from '@rm-toddle/config';
 import { pgPool, idMappingRepository, ENTITY_TYPES, type EntityType } from '@rm-toddle/db';
 import { toddleClient } from '@rm-toddle/integrations';
 import { autenticar } from './auth';
@@ -296,6 +303,21 @@ export function construirApp() {
       checarDependencia('postgres', () => pgPool.query('SELECT 1')),
       checarToddleComCache(),
     ]);
+    /*
+     * ─── O ESTADO DO CANAL DE AVISO É PARTE DA SAÚDE ─────────────────────
+     *
+     * Um sistema sem canal de alerta não está "saudável com uma configuração
+     * faltando": ele está incapaz de pedir socorro. Isso pertence à mesma tela
+     * onde se olha se o Postgres responde.
+     *
+     * NÃO derruba o `ok`, de propósito: o serviço está no ar e funcionando, e
+     * transformar isto em container `unhealthy` faria o Coolify reiniciar em
+     * laço uma instalação que só não tem webhook. É informação, não falha.
+     *
+     * Só o ESTADO sai daqui — nunca as URLs. Esta rota é pública.
+     */
+    const avisos = diagnosticoDoAmbiente();
+
     return {
       // Limitado NÃO derruba o `ok`: o serviço está no ar, e um monitor externo
       // não deve ser paginado porque alguém abriu a tela duas vezes seguidas.
@@ -304,6 +326,12 @@ export function construirApp() {
       tenant: cfg.slug,
       configVersion: configVersion(),
       dependencias: deps,
+      avisos: {
+        alerta: avisos.alerta,
+        heartbeats: avisos.heartbeats,
+        cego: avisos.cego,
+        faltando: avisos.faltando,
+      },
     };
   });
 

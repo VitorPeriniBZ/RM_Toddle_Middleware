@@ -4,6 +4,7 @@ export * from './tenantConfig';
 export * from './cronProfessor';
 export * from './cron';
 export * from './alerta';
+export * from './canalDeAviso';
 export * from './configVersion';
 export * from './logger';
 export * from './heartbeat';

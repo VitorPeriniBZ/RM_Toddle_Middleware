@@ -51,10 +51,27 @@ export interface Alerta {
 const JANELA_REPETICAO_MS = 10 * 60 * 1_000;
 const ultimoEnvio = new Map<string, number>();
 
-/** Envia o alerta. Nunca lança. Devolve `false` quando não enviou (e por quê fica no log). */
+/**
+ * Envia o alerta. Nunca lança. Devolve `false` quando não enviou.
+ *
+ * ─── SEM CANAL, O ALERTA É DEGRADADO — NUNCA PERDIDO ────────────────────────
+ *
+ * Esta função abria com `if (!env.ALERTA_WEBHOOK_URL) return false;`, comentado
+ * como "não configurado = desligado, de propósito". A intenção era não obrigar
+ * quem roda local a montar um webhook. O efeito foi outro: como NENHUMA URL
+ * estava configurada em lugar nenhum, o vigia rodava, encontrava o problema,
+ * chamava esta função, e ela devolvia `false` calada. Toda vez.
+ *
+ * Foi assim que 62 jobs ficaram sete dias parados na DLQ.
+ *
+ * Continua legítimo rodar sem webhook. O que deixou de ser legítimo é o alerta
+ * EVAPORAR: sem canal, o conteúdo inteiro vai para o log em nível `error`, que
+ * é o nível que sobrevive a um filtro de produção. A informação perde alcance,
+ * não existência. A supressão por repetição vale também aqui — um extract que
+ * falha faz 50 lotes falharem atrás dele, e 51 linhas de `error` idênticas é a
+ * mesma tempestade que a janela existe para conter.
+ */
 export async function alertar(alerta: Alerta): Promise<boolean> {
-  if (!env.ALERTA_WEBHOOK_URL) return false; // não configurado = desligado, de propósito
-
   const agora = Date.now();
   const anterior = ultimoEnvio.get(alerta.assunto);
   if (anterior !== undefined && agora - anterior < JANELA_REPETICAO_MS) {
@@ -70,6 +87,15 @@ export async function alertar(alerta: Alerta): Promise<boolean> {
     .filter(([, v]) => v !== undefined && v !== null)
     .map(([k, v]) => `• ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
   const texto = [`[${env.TENANT_SLUG}] ${alerta.assunto}`, ...linhas].join('\n');
+
+  if (!env.ALERTA_WEBHOOK_URL) {
+    logger.error(
+      { assunto: alerta.assunto, contexto: alerta.contexto, canal: 'DESLIGADO' },
+      `ALERTA SEM CANAL — ninguém foi avisado. Defina ALERTA_WEBHOOK_URL (Slack, Discord ou ` +
+        `ntfy) para que este aviso chegue a alguém. Conteúdo do alerta:\n${texto}`,
+    );
+    return false;
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.ALERTA_WEBHOOK_TIMEOUT_MS);
