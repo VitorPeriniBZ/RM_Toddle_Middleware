@@ -64,10 +64,45 @@ export class RmDataServerError extends Error {
   constructor(
     message: string,
     readonly dataServer: string,
+    /**
+     * O RM recusou a CREDENCIAL DELE (HTTP 401/403).
+     *
+     * ─── POR QUE NÃO SE CHAMA `status` ────────────────────────────────────
+     *
+     * Esta classe existe, entre outras coisas, para NÃO carregar `status`: o
+     * Fastify usa esse campo como status da resposta da API, e um 401 do RM
+     * virava "sessão expirada" na tela de quem estava olhando — seis logins em
+     * treze minutos, em 21/09/2026, com a sessão viva o tempo todo.
+     *
+     * A informação, porém, é necessária para quem chama: uma recusa de
+     * credencial é a única falha do RM em que INSISTIR faz mal. O RM bloqueia
+     * o usuário depois de poucas tentativas inválidas (medido: seis bastaram,
+     * em 29/09/2026), então quem faz varredura precisa parar na primeira.
+     *
+     * O nome diferente é o ponto: nenhum handler HTTP vai confundi-lo com um
+     * status, e quem precisa da informação a encontra.
+     */
+    readonly recusouCredencial: boolean = false,
   ) {
     super(message);
     this.name = 'RmDataServerError';
   }
+}
+
+/**
+ * O RM recusou a credencial? Funciona para os dois caminhos de erro do SOAP.
+ *
+ * `wsDataServerClient` lança `RmDataServerError` com o campo estruturado;
+ * `wsConsultaSqlClient` lança `Error` com o mesmo campo anexado. A leitura da
+ * MENSAGEM fica como último recurso, para erro que venha de um caminho ainda
+ * não marcado — e é por isso que ela procura o texto que os dois constroem.
+ */
+export function recusouCredencialDoRm(erro: unknown): boolean {
+  if (erro === null || typeof erro !== 'object') return false;
+  const marcado = (erro as { recusouCredencial?: unknown }).recusouCredencial;
+  if (typeof marcado === 'boolean') return marcado;
+  const msg = (erro as { message?: unknown }).message;
+  return typeof msg === 'string' && /\(HTTP 40[13]\)/.test(msg);
 }
 
 class WsDataServerClient {
@@ -321,6 +356,7 @@ class WsDataServerClient {
     return new RmDataServerError(
       `${operacao} ${dataServer} falhou${status ? ` (HTTP ${status})` : ''}: ${causa}${pista}`,
       dataServer,
+      status === 401 || status === 403,
     );
   }
 

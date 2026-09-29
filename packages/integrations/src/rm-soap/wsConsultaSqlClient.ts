@@ -220,9 +220,18 @@ class WsConsultaSqlClient {
         axios.isAxiosError(error) && typeof error.response?.data === 'string'
           ? this.extractFault(error.response.data)
           : (error as Error).message;
-      throw new Error(
+      const falha = new Error(
         `wsConsultaSQL falhou (${codSentenca})${status ? ` (HTTP ${status})` : ''}: ${corpo}`,
       );
+      /*
+       * Marca ESTRUTURADA de recusa de credencial. Não se chama `status` pelo
+       * mesmo motivo explicado acima: o Fastify usaria o campo como status da
+       * resposta da API. Quem precisa dela é quem faz varredura — o canário
+       * de Sentenças para no primeiro 401 em vez de gastar as seis tentativas
+       * e bloquear o usuário do RM.
+       */
+      Object.assign(falha, { recusouCredencial: status === 401 || status === 403 });
+      throw falha;
     }
 
     try {
