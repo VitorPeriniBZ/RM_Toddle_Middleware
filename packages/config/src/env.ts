@@ -312,6 +312,26 @@ const envSchema = z.object({
    * Piso de 5 min na releitura e de 1h na execução: abaixo disso não é
    * vigilância, é carga.
    */
+  /*
+   * ─── FALHA ALTA QUANDO UMA COLUNA DA CHAVE SOME DO RESULT SET ────────────
+   *
+   * `rmAttendanceSource.ts` montava a chave natural com `?? ''`, convertendo
+   * "a coluna sumiu da Sentença" em "o valor é vazio". São coisas diferentes:
+   * o RM não disse que a turma-disciplina é vazia, ele não disse nada.
+   *
+   * O efeito é o pior modo de falha deste sistema: a chave degradada não casa
+   * com nada, TUDO vira ESCREVER_NOVO, e a proteção contra sobrescrever
+   * lançamento de professor se desliga em silêncio, com o relatório bonito.
+   *
+   * `false` = SOMBRA (default): comporta-se como hoje, mas grita no log e
+   * alerta o que TERIA falhado. É assim que se descobre se alguma Sentença em
+   * uso já está sem a coluna, antes de transformar isso em job vermelho.
+   *
+   * `true` = ESTRITO: o run aborta INTEIRO, antes de qualquer veredito. Ligar
+   * só depois de um período de sombra limpo.
+   */
+  FALHA_ALTA_EM_COLUNA_AUSENTE: z.enum(['true', 'false']).default('false'),
+
   CANARIO_RELEITURA_MS: z.coerce.number().int().min(300_000).default(3_600_000),
   CANARIO_EXECUCAO_MS: z.coerce.number().int().min(3_600_000).default(86_400_000),
 

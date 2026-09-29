@@ -56,6 +56,23 @@ Não implementado no P0-4: é achado desta sessão, não escopo do item.
 
 ---
 
+## 0.2  deveria virar suspeita no sinal de cruzamento
+
+O P0-6 passou a descartar a linha do RM quando um componente da chave vem vazio
+(a coluna existe, o valor não). O contador saiu em .
+
+**Descartar é contenção, não proteção**: aquela aula continua sem casamento, e a
+projeção correspondente vira  do mesmo jeito. O que o descarte
+evita é o caso pior — duas linhas degradadas colidindo entre si e uma casando
+com a aula errada.
+
+A proteção de verdade é  entrar como motivo em
+ (P0-5): se há faltas humanas que não conseguimos enxergar,
+ninguém deveria escrever por cima. Não feito no P0-6 por ser mudança no
+contrato do sinal, fora do escopo do item.
+
+---
+
 ## 1. Criar os canais de aviso — BLOQUEIA a conclusão do P0-2
 
 **Dono: humano. O código está pronto; faltam as contas.**

@@ -11,7 +11,7 @@ Base: `docs/AUDITORIA.md` (FASE 1).
 | P0-3 Readiness honesto (`/health/ready`) | **concluído** 29/09 | `c97316a`, +P0-3 |
 | P0-4 Canário de Sentenças | **concluído** 29/09 (M→S) | ver commit do canário |
 | P0-5 Sinal de cruzamento (vereditos + colisão) | **concluído** 29/09 | ver commit do sinal |
-| P0-6 `?? ''` → falha alta, em sombra | pendente | |
+| P0-6 `?? ''` → falha alta, em SOMBRA | **concluído** 29/09 (sombra ativa, estrito desligado) | ver commit da falha alta |
 
 Suíte: 328 → 417 testes verdes. `typecheck` limpo. `checar:config` passa.
 
@@ -142,7 +142,7 @@ A última coluna é obrigatória em P0 e P1.
 | **P0-3** | **`/health/ready` NOVO, com 503 por dependência fora.** `/health` PERMANECE sempre 200 (liveness) e o healthcheck do Coolify não muda — ver "decisões negadas" §4.5. `limitado` não derruba prontidão. Cada checagem corre contra um prazo de 3s. | Alto | S | P0 | **Não é mais o reinício do container** (ver §4.5): a detecção é (a) alerta pelo canal do P0-2, com assunto estável e janela de 30 min, e (b) `/health/ready` devolvendo 503 para um monitor externo. Verificação feita: API no ar com Postgres e Toddle inalcançáveis → `/health` 200, `/health/ready` 503 em 3ms, um único alerta. |
 | **P0-4** | **Canário de Sentenças — AGENDAR o que já existe.** A exploração derrubou as premissas do item: `conferir()` já faz as três camadas (corpo vs `.sql` caractere a caractere, execução com `colunasAusentes`, volume), o manifesto já existe, e `INFORMATION_SCHEMA` é a ferramenta errada (Sentença é query salva, não tabela). Faltava só agendar e alertar. **M → S.** Cadência: corpo de hora em hora, execução 1×/dia — ver abaixo. | Crítico | ~~M~~ **S** | P0 | É ele próprio um detector, e o **único que avisa antes** de um run começar a processar. Que ele quebrou se detecta pelo alerta sintético do P0-2 e por `npm run canario` (saída 0 confere / 1 divergente / 2 não verificada). |
 | **P0-5** | **Sinal de cruzamento.** NÃO virou limiar de porcentagem: numa primeira execução 100% de `ESCREVER_NOVO` é o certo, e um limiar confundiria "primeira vez" com "a trava desligou". O discriminador é a CONTRADIÇÃO — "o RM tem N linhas e ZERO casou" — mais um segundo sinal aritmético e independente: linhas lidas vs chaves únicas (colisão faz linha sumir do índice sem mexer na distribuição). Ligado em frequência e notas. | Crítico | S | P0 | É ele próprio o detector, e é o único que pega o modo de falha **original**: a proteção desligando sem exceção, sem DLQ e com o relatório bonito. A distribuição vai para o log em TODA passada, suspeita ou não — é o que constrói a baseline que hoje não existe. |
-| **P0-6** | **Trocar o `?? ''` por falha alta**, no **leitor** (`rmAttendanceSource.ts:210-212`), antes de qualquer veredito — run aborta inteiro, sem escrita parcial. Atrás de flag `STRICT_NATURAL_KEY` (default `false`), primeiro deploy em **modo sombra**. **Depende de P0-1, P0-2, P0-4 e P0-5 estarem prontos.** | Crítico | M | P0 | Job vermelho com erro explícito ("coluna `ID_TURMADISC` ausente na Sentença") → DLQ → webhook, **que só existe depois do P0-2**. Sem o canal, este item troca um silêncio por outro. |
+| **P0-6** | **Trocar o `?? ''` por falha alta**, no **leitor**. A execução separou o que o `?? ''` confundia: **coluna ausente do result set** (drift da Sentença, vale para todas as linhas → detectada UMA vez antes do laço, aborta o run) × **valor vazio numa linha** (registro incompleto → descarta a linha, como `DATA` ilegível já fazia). Flag `FALHA_ALTA_EM_COLUNA_AUSENTE`, default `false` = **sombra**. | Crítico | M | P0 | Em sombra: `error` no log + alerta com assunto estável, e o run segue. Em estrito: run abortado com a coluna nomeada → job vermelho → DLQ → webhook. **Medido no result set real (29/09): 698 linhas, 23 colunas, nenhuma coluna da chave ausente — a sombra está silenciosa hoje.** |
 
 ### P1 — as barreiras que faltam
 
@@ -307,6 +307,28 @@ por outro. **A camada rasa não decide pela profunda.**
 **Gatilho de revisão: quando o P0-6 sair do modo sombra e a falha alta for
 ativada, reavaliar se o canário deve passar a bloquear.** Decisão reversível,
 registrada com o gatilho para não virar permanente por esquecimento.
+
+### Estado da sombra do P0-6 (29/09)
+
+`FALHA_ALTA_EM_COLUNA_AUSENTE=false`. **O estrito NÃO foi ativado.**
+
+Linha de base medida contra o RM real, no mesmo dia:
+
+| medida | valor |
+|---|---|
+| linhas no result set (janela 02–06/03) | 698 |
+| colunas devolvidas pela Sentença | 23 |
+| colunas da chave ausentes | **0** |
+| chaves com segmento vazio (810 e 223 faltas, duas janelas) | **0** |
+| drift simulado (removendo `ID_TURMADISC`) | detectado |
+
+**Critério para ligar o estrito:** um período de sombra sem nenhum alerta de
+coluna ausente. Como a cadência de frequência é diária (`FREQ_SYNC_CRON` às
+23h), uma semana dá sete observações — suficiente para cobrir uma cópia de base
+típica, que é o evento que o item existe para pegar.
+
+**Quando ligar, reavaliar também o bloqueio do canário** (P0-4), que hoje é
+alerta-apenas justamente porque a falha alta ainda não existia no ponto de uso.
 
 ## 4. Decisões negadas
 

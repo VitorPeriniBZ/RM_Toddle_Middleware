@@ -279,13 +279,13 @@ describe('pré-condições que a chave NÃO verifica, e de quem depende', () => 
    * instalação do RM. `Number('X')` é `NaN`, que vira a string `'NaN'`.
    * Nos dois casos a chave sai FORMADA, com cara de válida.
    */
-  it('[DEFEITO P0-6] coligada vazia vira 0, não erro', () => {
+  it('[CHAVE CRUA] coligada vazia vira 0, não erro', () => {
     expect(chaveNaturalDeFalta(falta({ codColigada: '' }))).toBe(
       '0|48211|1714|2023100234|2026-09-01',
     );
   });
 
-  it('[DEFEITO P0-6] coligada não numérica vira NaN, não erro', () => {
+  it('[CHAVE CRUA] coligada não numérica vira NaN, não erro', () => {
     expect(chaveNaturalDeFalta(falta({ codColigada: 'X' }))).toBe(
       'NaN|48211|1714|2023100234|2026-09-01',
     );
@@ -418,12 +418,21 @@ describe('indexaFaltasPorChave', () => {
 
 // ─── O MODO DE FALHA ────────────────────────────────────────────────────────
 
-describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
+describe('A CHAVE É CRUA — e quem a protege está acima dela', () => {
   /**
-   * ATENÇÃO, quem estiver lendo: os testes deste bloco PASSAM, e o que eles
-   * descrevem é o defeito. Eles não estão aqui para aprovar o comportamento, e
-   * sim para que a mudança do P0-6 tenha de encará-los explicitamente em vez de
-   * alterar o sistema sem perceber o que estava alterando.
+   * Este bloco descrevia "o defeito, a corrigir no P0-6". O P0-6 foi feito, e
+   * o comportamento aqui NÃO mudou — mudou o entendimento de onde ele é
+   * problema.
+   *
+   * `chaveNaturalRm` é um `join`. Dar a ela um componente vazio produz uma
+   * chave degradada, e isso continua verdade. O que mudou é que agora nada
+   * chega aqui nesse estado: o leitor detecta coluna ausente do result set
+   * ANTES do laço (`colunasDaChaveAusentes`) e descarta a linha quando o valor
+   * vem vazio, do mesmo jeito que já fazia com `DATA` ilegível.
+   *
+   * Os testes seguem valendo, e por uma razão que ficou mais forte: eles
+   * documentam o que acontece se alguém construir um `RmFalta` por outro
+   * caminho — um script, um teste, um fluxo novo — sem passar pelo leitor.
    *
    * O gatilho não é hipotético neste projeto. As Sentenças SQL moram DENTRO do
    * RM e são apagadas por toda cópia de base (13-15/08, 16/09 e 20/09/2026). O
@@ -440,13 +449,13 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
    * silenciosa: o RM não disse que a turma-disciplina é vazia, ele não disse nada.
    */
 
-  it('[DEFEITO P0-6] coluna ausente vira segmento VAZIO na chave, em vez de erro', () => {
+  it('[CHAVE CRUA] coluna ausente vira segmento VAZIO na chave, em vez de erro', () => {
     expect(chaveNaturalDeFalta(falta({ idTurmaDisc: '' }))).toBe(
       '1|48211||2023100234|2026-09-01',
     );
   });
 
-  it('[DEFEITO P0-6] duas colunas ausentes viram dois segmentos vazios', () => {
+  it('[CHAVE CRUA] duas colunas ausentes viram dois segmentos vazios', () => {
     expect(chaveNaturalDeFalta(falta({ idTurmaDisc: '', idHorarioTurma: '' }))).toBe(
       '1|||2023100234|2026-09-01',
     );
@@ -460,7 +469,7 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
    * professor continua lá, o sistema simplesmente não a enxerga, e escreve por
    * cima achando que o RM estava vazio.
    */
-  it('[DEFEITO P0-6] a chave degradada NÃO casa com a projetada — a trava se desliga aqui', () => {
+  it('[CHAVE CRUA] a chave degradada NÃO casa com a projetada — a trava se desliga aqui', () => {
     const doRm = chaveNaturalDeFalta(falta({ idTurmaDisc: '' }));
     const desejada = chaveNaturalRm(linha());
     expect(doRm).not.toBe(desejada);
@@ -482,7 +491,7 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
    * quantidade de faltas lidas é um sinal observável que hoje ninguém afirma em
    * lugar nenhum — é candidato a virar alerta no P0-5.
    */
-  it('[DEFEITO P0-6] duas aulas do mesmo aluno no mesmo dia colapsam numa chave só', () => {
+  it('[CHAVE CRUA] duas aulas do mesmo aluno no mesmo dia colapsam numa chave só', () => {
     const matematica = falta({ idTurmaDisc: '', idHorarioTurma: '', presenca: 'A' });
     const portugues = falta({ idTurmaDisc: '', idHorarioTurma: '', presenca: 'P' });
 
@@ -495,7 +504,7 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
     ).toBe(1);
   });
 
-  it('[DEFEITO P0-6] com a coluna ausente, NENHUMA falta do RM é encontrada no índice', () => {
+  it('[CHAVE CRUA] com a coluna ausente, NENHUMA falta do RM é encontrada no índice', () => {
     // O cenário real: a Sentença perdeu ID_TURMADISC, então TODAS as linhas
     // lidas do RM ficam com o segmento vazio — e o índice inteiro fica inútil.
     const doRm = [
@@ -525,29 +534,41 @@ describe('MODO DE FALHA — comportamento ATUAL, a corrigir no P0-6', () => {
   });
 
   /**
-   * ─── O CRITÉRIO DE ACEITE DO P0-6 ─────────────────────────────────────────
+   * ─── O CRITÉRIO DE ACEITE MUDOU DE LUGAR, E ISSO É UMA CORREÇÃO ───────────
    *
-   * `it.fails` em vez de `it.skip`, e a diferença é o ponto inteiro.
+   * Este teste era um `it.fails` afirmando que `chaveNaturalDeFalta` passaria a
+   * LANÇAR quando um componente viesse vazio. O P0-6 foi feito e ele NÃO lança
+   * — e a razão é que o critério que escrevi no P0-1 apontava para o lugar
+   * errado.
    *
-   * `skip` não tem dono nem prazo: ele envelhece calado, e daqui a seis meses é
-   * só uma linha cinza que ninguém lê. `it.fails` RODA. Hoje ele é verde,
-   * porque a asserção de fato falha — a função não lança. No dia em que o P0-6
-   * fizer a função lançar, a asserção passa, e `it.fails` fica VERMELHO.
+   * A revisão do conselho disse, sobre a blindagem do P0-6: "fail-high no
+   * LEITOR, não no comparador — falhar na montagem da linha, antes de qualquer
+   * veredito, para o run abortar inteiro em vez de escrever parte das linhas".
+   * Estava certa, e por um motivo que só fica visível com o código na frente:
    *
-   * Ou seja: quem consertar não tem a opção de deixar o bloco "[DEFEITO P0-6]"
-   * acima apodrecendo ao lado do conserto. A suíte o obriga a voltar aqui.
+   *   coluna ausente do RESULT SET   é drift da Sentença. Vale para TODAS as
+   *                                  linhas. O lugar de detectar é UMA vez,
+   *                                  antes do laço — `colunasDaChaveAusentes`.
+   *   valor vazio numa LINHA         é registro incompleto. Vale para uma.
+   *                                  A linha é descartada, como a `DATA`
+   *                                  ilegível já era.
    *
-   * (Semântica confirmada no vitest 2.1.9 antes de adotar, não suposta.)
+   * `chaveNaturalRm` é um `join` puro, chamada depois de as duas checagens já
+   * terem acontecido. Fazê-la lançar seria uma terceira guarda no lugar mais
+   * quente do laço, para um estado que o leitor já não deixa passar.
    *
-   * TODO(P0-6): trocar o `?? ''` de rmAttendanceSource.ts:210-212 por falha
-   * alta no LEITOR — antes de qualquer veredito, para o run abortar inteiro em
-   * vez de escrever parte das linhas. Atrás da flag
-   * `FALHA_ALTA_EM_COLUNA_AUSENTE`, default false, com período de sombra antes
-   * de ligar. Quando este teste ficar vermelho: trocar o `.fails` por `it`,
-   * apagar os testes marcados `[DEFEITO P0-6]` e escrever no lugar deles o
-   * comportamento novo.
+   * Registro em vez de apagar porque o raciocínio errado é a parte útil: o
+   * `it.fails` cumpriu o papel de forçar esta conversa no momento do conserto,
+   * que era exatamente o desenho.
+   *
+   * ONDE O CRITÉRIO VIVE AGORA:
+   *   packages/domain/src/colunasDaChaveAusentes.test.ts  (a detecção)
+   *   FALHA_ALTA_EM_COLUNA_AUSENTE em env.ts              (sombra × estrito)
    */
-  it.fails('P0-6: coluna ausente deve ERRAR, nunca produzir chave com segmento vazio', () => {
-    expect(() => chaveNaturalDeFalta(falta({ idTurmaDisc: '' }))).toThrow(/ID_TURMADISC|ausente/i);
+  it('a chave continua sendo um join puro — quem barra o vazio é o leitor', () => {
+    // Comportamento ATUAL e deliberado: ela não valida, e não deve.
+    expect(chaveNaturalDeFalta(falta({ idTurmaDisc: '' }))).toBe(
+      '1|48211||2023100234|2026-09-01',
+    );
   });
 });
