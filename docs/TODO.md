@@ -38,21 +38,27 @@ contar tentativas falhas numa janela, uma indisponibilidade parcial poderia
 acumular falhas e bloquear o usuário sozinha — transformando o vigia em causa
 do incidente que ele deveria observar.
 
-Vale descobrir o limite e, se for baixo, considerar um disjuntor no canário:
-após N falhas de autenticação seguidas, parar de tentar e alertar, em vez de
-insistir de hora em hora.
+**Mitigado no P1-0, sem depender de conhecer a janela.** O canário para na
+PRIMEIRA recusa de credencial, não tenta as outras cinco, e entra em recuo de 6
+horas. Provado ponta a ponta contra um RM falso que devolve 401: **1 tentativa**,
+contra as 6 que bloquearam.
 
-### §0.1 O canário deveria distinguir 401 de outras falhas
+**Ainda vale descobrir o limite e a janela** — vira documentação no RUNBOOK
+(P2-2), não pré-requisito de nada. Duas fontes: documentação da TOTVS sobre
+bloqueio por tentativas inválidas, e/ou teste controlado com um usuário
+descartável do RM. Saber se a contagem é por minuto, por hora ou cumulativa
+muda o quanto o recuo de 6h é folgado ou apertado.
 
-Uma Sentença não verificada por **credencial recusada** é um incidente com dono
-e conserto claros; por timeout é outra coisa. Hoje as duas caem em
-`naoVerificadas` e produzem seis linhas idênticas quando o fato é UM: o usuário
-está bloqueado.
+### §0.1 RESOLVIDO no P1-0 — o canário distingue 401
 
-Merece alerta próprio, com assunto estável (`Canário: o RM recusou a
-credencial`), emitido uma vez — e é o lugar natural para o disjuntor acima.
+Feito junto com o disjuntor, porque é a mesma mudança: `recusouCredencialDoRm`
+lê uma marca ESTRUTURADA nos dois clientes SOAP (e cai para a mensagem só como
+último recurso). O alerta é UM, com assunto estável
+`Canário: o RM recusou a credencial` — não seis linhas sobre um fato único.
 
-Não implementado no P0-4: é achado desta sessão, não escopo do item.
+O campo não se chama `status` de propósito: `RmDataServerError` existe, entre
+outras coisas, para não carregar esse nome, senão o Fastify o usaria como
+status da resposta da API e um 401 do RM viraria "sessão expirada" na tela.
 
 ---
 

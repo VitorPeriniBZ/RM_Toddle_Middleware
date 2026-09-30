@@ -1,4 +1,5 @@
 import { logger } from '@rm-toddle/config';
+import { SENTENCAS_DO_TODDLE } from '@rm-toddle/integrations';
 import { conferirSentencasUmaVez } from '../agenda/canarioDeSentencas';
 
 /**
@@ -23,10 +24,12 @@ import { conferirSentencasUmaVez } from '../agenda/canarioDeSentencas';
  *                                   linhas por SOAP só na TODDLE.NOTAS)
  *
  * Saída 0 = todas conferem. 1 = há divergência. 2 = alguma não pôde ser
- * verificada (rede, permissão) — que NÃO é o mesmo que estar boa.
+ * verificada (rede) — que NÃO é o mesmo que estar boa. 3 = o RM recusou a
+ * CREDENCIAL, o ciclo foi interrompido e as demais NÃO foram tentadas: seis
+ * tentativas inválidas seguidas bloqueiam o usuário do RM.
  */
 
-const SAIDA = { ok: 0, divergente: 1, naoVerificada: 2 } as const;
+const SAIDA = { ok: 0, divergente: 1, naoVerificada: 2, credencial: 3 } as const;
 
 async function main(): Promise<number> {
   const executar = process.argv.includes('--executar');
@@ -54,6 +57,22 @@ async function main(): Promise<number> {
   }
 
   console.log('');
+
+  if (passada.credencialRecusada) {
+    const naoTentadas =
+      SENTENCAS_DO_TODDLE.length - passada.avaliadas.length - passada.naoVerificadas.length;
+    console.log('  ✗ O RM RECUSOU A CREDENCIAL. O ciclo foi INTERROMPIDO.');
+    console.log('');
+    console.log(`    ${naoTentadas} Sentença(s) não foram sequer tentadas, de propósito:`);
+    console.log('    elas usam a mesma credencial, e seis tentativas inválidas seguidas');
+    console.log('    bloqueiam o usuário do RM — medido em 29/09/2026, causando.');
+    console.log('');
+    console.log('    O conserto é no CADASTRO do usuário no RM (bloqueio ou senha');
+    console.log('    expirada), não no .env: o valor de lá costuma estar certo.');
+    console.log('    Ver docs/TODO.md §0.');
+    console.log('');
+    return SAIDA.credencial;
+  }
 
   if (passada.achados.length > 0) {
     console.log('  Uma Sentença divergente não dá erro em job nenhum: ela devolve');

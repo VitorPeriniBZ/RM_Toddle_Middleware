@@ -2,6 +2,7 @@ import { alertar, env, logger } from '@rm-toddle/config';
 import {
   SENTENCAS_DO_TODDLE,
   conferir,
+  recusouCredencialDoRm,
   type CamadaDeAceite,
   type CodigoDeSentenca,
   type ConferenciaDeSentenca,
@@ -239,6 +240,53 @@ export interface PassadaDoCanario {
   achados: AchadoDeSentenca[];
   /** Sentenças que nem deu para verificar (erro na conferência). */
   naoVerificadas: string[];
+  /**
+   * O RM recusou a credencial e o ciclo foi INTERROMPIDO.
+   *
+   * Não é "mais uma que falhou": é um fato único que invalida a passada
+   * inteira e que EXIGE parar. Ver `conferirSentencasUmaVez`.
+   */
+  credencialRecusada: boolean;
+}
+
+/**
+ * ─── O CANÁRIO NÃO PODE BLOQUEAR A CONTA QUE ELE OBSERVA ────────────────────
+ *
+ * Medido em 29/09/2026, causando: SEIS autenticações inválidas seguidas
+ * bloquearam o usuário da integração no RM. A senha estava certa; o que
+ * bloqueou foi a repetição.
+ *
+ * O canário autentica 6 vezes por ciclo (uma por Sentença) e roda de hora em
+ * hora — 144 autenticações por dia. Se a credencial expirar ou o cadastro for
+ * alterado, UM ciclo já gasta as seis tentativas e bloqueia o usuário. O vigia
+ * viraria a causa do incidente que existe para observar.
+ *
+ * ─── A MITIGAÇÃO NÃO DEPENDE DE CONHECER A JANELA ──────────────────────────
+ *
+ * Ninguém sabe se o RM conta tentativas por minuto, por hora ou desde sempre —
+ * está em docs/TODO.md como pendência de descoberta. A regra abaixo é segura
+ * em qualquer uma das hipóteses, porque nunca chega perto de seis:
+ *
+ *   1. na PRIMEIRA recusa de credencial, abortar o ciclo inteiro. As outras
+ *      cinco Sentenças usam a MESMA credencial — tentá-las é gastar as
+ *      tentativas restantes para descobrir o que já se sabe;
+ *   2. entrar em recuo de HORAS, não de minutos. Recusa de credencial não se
+ *      resolve sozinha em quinze minutos: ou alguém desbloqueia, ou troca a
+ *      senha no cadastro;
+ *   3. alertar UMA vez, por CAUSA. Seis linhas idênticas sobre um único fato
+ *      são seis chances de alguém silenciar o canal.
+ */
+const RECUO_APOS_RECUSA_MS = 6 * 60 * 60 * 1_000;
+let recuandoAte = 0;
+
+/** Existe para o teste não depender do relógio de parede. */
+export function limparRecuoDoCanario(): void {
+  recuandoAte = 0;
+}
+
+/** `true` quando o canário está em recuo por recusa de credencial. */
+export function emRecuo(agora: number = Date.now()): boolean {
+  return agora < recuandoAte;
 }
 
 /**
@@ -255,7 +303,11 @@ export async function conferirSentencasUmaVez(
   const avaliadas: string[] = [];
   const naoVerificadas: string[] = [];
 
-  await emSerie(SENTENCAS_DO_TODDLE, async (codigo) => {
+  let credencialRecusada = false;
+
+  for (const codigo of SENTENCAS_DO_TODDLE) {
+    // Abortado: as restantes NÃO são tentadas. Ver o comentário do recuo.
+    if (credencialRecusada) break;
     try {
       const c = await conferir(codigo, undefined, { executar: opcoes.executar });
       avaliadas.push(codigo);
@@ -263,20 +315,85 @@ export async function conferirSentencasUmaVez(
       if (achado) achados.push(achado);
     } catch (err) {
       naoVerificadas.push(codigo);
+
+      if (recusouCredencialDoRm(err)) {
+        credencialRecusada = true;
+        const restantes = SENTENCAS_DO_TODDLE.length - avaliadas.length - 1;
+        logger.error(
+          { codigo, restantes, err: (err as Error).message.slice(0, 200) },
+          `Canário INTERROMPIDO: o RM recusou a credencial. As outras ${restantes} Sentenças ` +
+            'NÃO foram tentadas — elas usam a mesma credencial, e seis tentativas inválidas ' +
+            'seguidas bloqueiam o usuário do RM (medido em 29/09/2026)',
+        );
+        continue;
+      }
+
       logger.warn(
         { codigo, err: (err as Error).message },
         'Canário: não consegui conferir esta Sentença nesta passada',
       );
     }
-  });
+  }
 
-  return { executou: opcoes.executar, avaliadas, achados, naoVerificadas };
+  return { executou: opcoes.executar, avaliadas, achados, naoVerificadas, credencialRecusada };
 }
 
 /** Confere e alerta o que mudou. Nunca lança. */
 export async function canariarEAlertar(opcoes: { executar: boolean }): Promise<void> {
   try {
+    /*
+     * Em recuo, a passada nem COMEÇA. Não é economia: cada passada custaria
+     * mais uma autenticação contra um RM que já recusou, e é exatamente a
+     * repetição que bloqueia o usuário.
+     */
+    if (emRecuo()) {
+      logger.debug(
+        { voltaEm: new Date(recuandoAte).toISOString() },
+        'Canário em recuo por recusa de credencial — passada pulada',
+      );
+      return;
+    }
+
     const passada = await conferirSentencasUmaVez(opcoes);
+
+    /*
+     * ─── UM FATO, UM ALERTA ──────────────────────────────────────────────
+     *
+     * A credencial recusada não é "seis Sentenças não verificadas": é UMA
+     * coisa, e o conserto é um só — desbloquear ou renovar o usuário do RM.
+     * Emitir seis linhas seria seis chances de alguém silenciar o canal.
+     *
+     * Assunto estável e próprio, distinto dos achados de divergência: a causa
+     * é outra, o dono é outro, e as janelas de supressão têm de ser separadas.
+     */
+    if (passada.credencialRecusada) {
+      recuandoAte = Date.now() + RECUO_APOS_RECUSA_MS;
+      logger.error(
+        {
+          avaliadas: passada.avaliadas.length,
+          naoTentadas: SENTENCAS_DO_TODDLE.length - passada.naoVerificadas.length - passada.avaliadas.length,
+          recuoHoras: RECUO_APOS_RECUSA_MS / 3_600_000,
+        },
+        'Canário: o RM recusou a credencial. Ciclo interrompido e em recuo',
+      );
+      await alertar({
+        assunto: 'Canário: o RM recusou a credencial',
+        contexto: {
+          verificadasAntesDeParar: passada.avaliadas.length,
+          recuo: `${RECUO_APOS_RECUSA_MS / 3_600_000}h`,
+          porqueParou:
+            'as demais Sentenças usam a mesma credencial, e seis tentativas inválidas ' +
+            'seguidas bloqueiam o usuário do RM (medido em 29/09/2026)',
+          ondeConsertar:
+            'cadastro do usuário no RM — bloqueio ou senha expirada. O valor do .env ' +
+            'costuma estar certo; ver docs/TODO.md §0',
+          comoVer: 'npm run canario',
+        },
+        // Condição que só passa com intervenção humana. Recuo e janela casam.
+        repetirApos: RECUO_APOS_RECUSA_MS,
+      });
+      return;
+    }
 
     for (const t of transicoesDeSentenca(estadoAnterior, passada.achados, passada.avaliadas)) {
       if (t.para === 'achado' && t.achado) {
