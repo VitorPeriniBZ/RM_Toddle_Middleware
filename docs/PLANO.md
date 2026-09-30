@@ -2,6 +2,38 @@
 
 Base: `docs/AUDITORIA.md` (FASE 1).
 
+## Janela de deploy — main congelada em 30/09
+
+**Decisão: o deploy tem prioridade sobre o P1 restante.** Registrada aqui
+porque inverte a ordem que vinha sendo seguida, e a razão não é conveniência:
+
+1. **As proteções construídas valem zero até rodar.** Quatro caminhos de
+   escrita fechados, canal de alerta, canário, duas sombras — nada disso
+   existe em produção.
+2. **O lote do primeiro deploy cresce a cada merge.** Um deploy grande é mais
+   difícil de diagnosticar quando algo sai errado, e este já tem 4 itens P1
+   além do bloco P0.
+3. **A cópia de base é gatilho periódico.** Ela aconteceu em 13-15/08, 16/09 e
+   20/09. Cada ciclo sem canário é exposição ao evento que o canário existe
+   para pegar.
+4. **O risco do deploy é baixo e conhecido:** nenhuma migration, rollback é só
+   código (`827c2ac`), e as duas flags de falha alta estão em `false` (sombra).
+
+**Regra até a verificação pós-deploy terminar: nada mergeia em `main`.**
+Branches podem avançar; merges não. O candidato é `420bae9`.
+
+### Estado do candidato, verificado em 30/09
+
+| verificação | resultado |
+|---|---|
+| `npm run lint` | limpo |
+| `npm run typecheck` | limpo |
+| `npm test` | **565 verdes**, 35 arquivos |
+| `npm run checar:config` | passa |
+| `npm run canario` | saída 0, as seis Sentenças conferem (RM real) |
+
+---
+
 ## Decisão de orçamento: `noUncheckedIndexedAccess` fica DESLIGADA (P1-C, 30/09)
 
 Medido, não estimado — a flag foi ligada temporariamente só para contar:

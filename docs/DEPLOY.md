@@ -1,6 +1,6 @@
-# Deploy do bloco P0 — procedimento manual
+# Deploy — procedimento manual
 
-Consolidado em `main` em **30/09/2026**. Este documento existe porque o deploy
+Candidato: `main` em **30/09/2026** (bloco P0 + P1-0/A/B/C). Este documento existe porque o deploy
 deste projeto é manual: não há webhook, e **merge em `main` não sobe nada**.
 
 Enquanto este checklist não for executado, o código novo não está rodando:
@@ -53,10 +53,12 @@ MORTO, e o webhook sozinho já cobre os dois modos de falha com o processo vivo
 
 Todas têm default e **nenhuma é obrigatória para subir**.
 
-### 2.1 Novas — o P0 as criou
+### 2.1 Novas
 
-Conferido no diff `827c2ac..main` de `packages/config/src/env.ts`: são estas
-três, e só.
+Conferido no diff `827c2ac..main` de `packages/config/src/env.ts`. As duas do
+canário vieram no P0-4; a flag de frequência no P0-6 e a de notas no P1-A,
+quando a medição das cadências mostrou que um interruptor só faria um dos
+relógios mentir.
 
 | variável | default | efeito do default |
 |---|---|---|
@@ -96,6 +98,31 @@ observações levam sete dias na frequência e cinco horas nas notas. Um
 interruptor único obrigaria a ligar a frequência cedo demais ou a segurar as
 notas por uma semana sem motivo.
 
+### 2.3 O que NÃO tem flag, e por quê
+
+Três guardas entraram **sem** interruptor, e isso é decisão, não esquecimento.
+Elas abortam a operação na hora se o componente da chave faltar:
+
+| guarda | onde | o que faz |
+|---|---|---|
+| `chaveComposta` | índice de provas e de etapas de nota | recusa componente vazio, nulo, só-espaço ou a string `"undefined"` |
+| `chaveNaturalNotaAvaliacao` | chave da nota de avaliação | idem |
+| `chaveCourse` | de-para de turma (já existia) | idem |
+
+**Por que sem sombra:** sombra existe para reunir evidência de que a regra nova
+não quebra nada, e serve a gatilho **recorrente e indeterminado** — a Sentença
+SQL mora no RM e some a cada cópia de base, então não dá para saber quando vai
+faltar. Estas três leem do **DataServer**, cujo schema é do produto TOTVS: não
+há Sentença a ser apagada.
+
+E foi **medido** antes de ligar: 245 linhas de `SProvas`, 3.507 de `SNotas`,
+11.890 da `TODDLE.NOTAS` e 698 da `TODDLE.FREQ` — **zero** componentes de chave
+ausentes ou vazios em todas. Sombra sobre zero medido é cerimônia.
+
+**O que esperar se disparar:** exceção com o componente NOMEADO, job vermelho,
+DLQ, e o alerta pelo canal. Falhar alto com nome é o desenho — não é o defeito.
+Investigar a Sentença ou o DataServer apontado, não reverter o deploy.
+
 ---
 
 ## 3. Pós-deploy, nesta ordem
@@ -128,7 +155,16 @@ Saída `3` significa que o RM recusou a credencial: o ciclo parou na primeira
 tentativa de propósito, e o conserto é no **cadastro do usuário no RM**, não no
 `.env`. Ver `docs/TODO.md §0`.
 
-**4. No dia seguinte**, confirmar que o cron de frequência das 23h rodou e
+```bash
+# 4. as regras que pescam a classe do acesso indexado cru
+npm run lint
+```
+
+Saída vazia. Se acusar, alguém reintroduziu `String(row.X)` ou template literal
+com campo cru do RM — os dois padrões que produziram defeito em caminho de
+escrita irreversível.
+
+**5. No dia seguinte**, confirmar que o cron de frequência das 23h rodou e
 registrou a primeira observação da sombra. No log do worker:
 
 ```
@@ -137,6 +173,10 @@ Cruzamento da frequência: distribuição de vereditos
 
 Essa linha sai em **toda** passada, com ou sem suspeita — é ela que constrói a
 linha de base que hoje não existe. Primeira aparição = **dia 1 de 7**.
+
+**O relógio de NOTAS é outro, e corre muito mais rápido.** `NOTA_SYNC_CRON` é
+`15,45 6-22 * * *` — 34 passadas por dia. Sete observações completam em ~5
+horas, contra sete dias na frequência. Ver a ressalva em §4.
 
 ---
 
@@ -181,13 +221,30 @@ unificar os critérios sem decidir.
 do canário ser alerta-apenas — as duas andam juntas, e o gatilho está
 registrado em `docs/PLANO.md`.
 
+### Uma ressalva sobre o relógio de NOTAS
+
+O critério "7 observações" foi desenhado pensando na frequência, onde 7
+observações são 7 dias e cobrem uma cópia de base típica.
+
+Em notas, 7 observações completam em **cinco horas** — e cinco horas **não
+cobrem uma cópia de base por construção**. Contar passadas e contar dias
+deixam de ser a mesma coisa aqui.
+
+Quando o critério de notas completar, a decisão é: aceitar a contagem (7
+passadas, evidência concentrada) ou exigir espalhamento de calendário (N dias,
+evidência que atravessa uma cópia de base). **Decidir no momento, com os dados
+na mão** — não antecipar.
+
 ---
 
 ## 5. O launchd local não faz parte deste deploy
 
 O worker sob launchd nesta máquina (`com.escolaamericana.rm-toddle.worker-students`)
-martela um Redis local fora do ar desde 16/09 e produz ~1 GB/dia de log. É
-independente do deploy e não bloqueia nada aqui.
+martela um Redis local fora do ar desde 16/09 e produz ~1 GB/dia de log.
+
+**Medido em 30/09: 7,2 GB** — eram 6,3 GB em 29/09, o que confirma a taxa. É
+independente do deploy e não bloqueia nada aqui, mas é a limpeza mais barata
+da lista.
 
 ```bash
 launchctl bootout gui/$(id -u)/com.escolaamericana.rm-toddle.worker-students
