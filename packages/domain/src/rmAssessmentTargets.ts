@@ -52,6 +52,16 @@ export class RmAssessmentTargets {
     readonly notasPorChave: Map<string, NotaAvaliacaoRm>,
     readonly totalProvas: number,
     readonly totalNotas: number,
+    /**
+     * Linhas do RM descartadas por componente de chave ausente ou vazio.
+     *
+     * Contado e exposto pelo mesmo motivo de `semChave` na frequência e nas
+     * notas: uma nota que existe no RM e que não conseguimos indexar é uma
+     * nota que a projeção vai considerar inexistente — e escrever por cima.
+     * Descartar contém o dano pior (chave degradada casando com a avaliação
+     * ERRADA de outro aluno), mas não o elimina, então precisa ser VISÍVEL.
+     */
+    readonly semChave: number,
   ) {}
 
   static async carregar(idsTurmaDisc: string[], codFilial: string): Promise<RmAssessmentTargets> {
@@ -67,6 +77,7 @@ export class RmAssessmentTargets {
     const notasPorChave = new Map<string, NotaAvaliacaoRm>();
     let totalProvas = 0;
     let totalNotas = 0;
+    let semChave = 0;
 
     const LOTE = 25;
     const lista = [...emEscopo];
@@ -114,16 +125,32 @@ export class RmAssessmentTargets {
           nota: canonizarNota(row.NOTA),
           descProva: row.DESCPROVA ?? null,
         };
-        notasPorChave.set(
-          chaveNaturalNotaAvaliacao({
-            codColigada: String(cfg.rm.escopo.coligada),
-            codProva: nota.codProva,
-            codEtapa: nota.codEtapa,
-            idTurmaDisc: nota.idTurmaDisc,
-            ra: nota.ra,
-          }),
-          nota,
-        );
+        /*
+         * A chave RECUSA componente vazio ou `"undefined"` — ver a guarda em
+         * `chaveNaturalNotaAvaliacao`. Aqui a recusa vira descarte da linha,
+         * não morte do carregamento: uma nota ilegível não pode custar as
+         * outras 3.506.
+         */
+        try {
+          notasPorChave.set(
+            chaveNaturalNotaAvaliacao({
+              codColigada: String(cfg.rm.escopo.coligada),
+              codProva: nota.codProva,
+              codEtapa: nota.codEtapa,
+              idTurmaDisc: nota.idTurmaDisc,
+              ra: nota.ra,
+            }),
+            nota,
+          );
+        } catch (err) {
+          semChave += 1;
+          logger.warn(
+            { idTurmaDisc: nota.idTurmaDisc, erro: (err as Error).message.slice(0, 160) },
+            'Nota de avaliação sem componente da chave — descartada. Ela existe no RM e o ' +
+              'cruzamento não vai enxergá-la',
+          );
+          continue;
+        }
         totalNotas += 1;
       }
     }
@@ -133,7 +160,7 @@ export class RmAssessmentTargets {
       'Índice de avaliações do RM carregado',
     );
 
-    return new RmAssessmentTargets(provasPorEtapa, notasPorChave, totalProvas, totalNotas);
+    return new RmAssessmentTargets(provasPorEtapa, notasPorChave, totalProvas, totalNotas, semChave);
   }
 
   provasDe(idTurmaDisc: string, codEtapa: string): ProvaRm[] {

@@ -1,4 +1,5 @@
-import { configVersion, env, logger, tenantConfig } from '@rm-toddle/config';
+import {
+  alertar, configVersion, env, logger, tenantConfig } from '@rm-toddle/config';
 import {
   abrirRun,
   carregarProveniencia,
@@ -18,6 +19,8 @@ import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 // e estes serviços rodam em CLI que precisa encerrar. Ver importDoIndex.test.ts.
 import { FLOW } from '@rm-toddle/queues/src/fluxos';
 import {
+  assuntoDoSinal,
+  avaliarCruzamento,
   achataAvaliacoes,
   ambiguidadesDeEtapa,
   avaliarVolume,
@@ -153,6 +156,8 @@ export interface RelatorioAvaliacoes {
     | 'nada-a-escrever'
     | 'recusado-pelo-teto'
     | 'precisa-aprovacao'
+    /** O cruzamento está suspeito: a trava pode estar desligada. Ver o P0-5/P1-B. */
+    | 'cruzamento-suspeito'
     | 'desligado';
 }
 
@@ -358,6 +363,61 @@ export async function sincronizarAvaliacoes(
   }
   const resumoDecisoes = resumirDecisoes([...decisoes.values()]);
 
+  /*
+   * ─── O TERCEIRO CAMINHO DE ESCRITA GANHA O MESMO SINAL ───────────────────
+   *
+   * O P0-5 ligou o `avaliarCruzamento` em frequência e notas e deixou este de
+   * fora, com a justificativa de que `alvos.notasPorChave` tinha origem fora
+   * do escopo daquele item. A origem foi auditada no P1-B e os números estão
+   * à mão — não há mais motivo para o caminho que escreve em `EduProvasData`
+   * e `EduNotasData` ser o único sem checagem cruzada.
+   *
+   * `lidasDoRm` é o total de notas de avaliação que o RM tem PARA AS TURMAS
+   * PROJETADAS: `RmAssessmentTargets` só carrega o que está em `emEscopo`, o
+   * que já é o recorte que o P0-5 teve de construir à mão na frequência.
+   */
+  const sinal = avaliarCruzamento({
+    lidasDoRm: alvos.totalNotas,
+    chavesUnicasDoRm: alvos.notasPorChave.size,
+    linhasSemChave: alvos.semChave,
+    porVeredito: resumoDecisoes.porVeredito,
+  });
+
+  logger.info(
+    {
+      fluxo: 'avaliacoes',
+      lidasDoRm: alvos.totalNotas,
+      chavesUnicasDoRm: alvos.notasPorChave.size,
+      linhasSemChave: alvos.semChave,
+      porVeredito: resumoDecisoes.porVeredito,
+      casaram: sinal.casaram,
+      suspeito: sinal.suspeito,
+    },
+    'Cruzamento das avaliações: distribuição de vereditos',
+  );
+
+  if (sinal.suspeito) {
+    logger.error(
+      { fluxo: 'avaliacoes', motivos: sinal.motivos, porque: sinal.porque },
+      'CRUZAMENTO SUSPEITO — a proteção contra sobrescrever nota de avaliação lançada por ' +
+        'professor pode estar desligada',
+    );
+    for (const motivo of sinal.motivos) {
+      await alertar({
+        assunto: assuntoDoSinal('Avaliações', motivo),
+        contexto: {
+          fluxo: 'avaliacoes',
+          lidasDoRm: alvos.totalNotas,
+          chavesUnicasDoRm: alvos.notasPorChave.size,
+          casaram: sinal.casaram,
+          linhasSemChave: alvos.semChave > 0 ? alvos.semChave : undefined,
+          porque: sinal.porque,
+        },
+        repetirApos: 6 * 60 * 60 * 1_000,
+      });
+    }
+  }
+
   const liberados = proj.projetados.filter((x) => {
     const d = decisoes.get(x.origemId);
     return d?.veredito === 'ESCREVER_NOVO' || d?.veredito === 'ATUALIZAR_NOSSO';
@@ -492,6 +552,14 @@ export async function sincronizarAvaliacoes(
   // O ensaio NÃO registra run: é um humano olhando, não uma passada agendada, e
   // gravá-lo faria o histórico mentir sobre quando o fluxo rodou sozinho.
   if (!op.executar) return { ...base, naoEscreveu: 'ensaio' };
+
+  /*
+   * Mesma trava dos outros dois caminhos, pela mesma assimetria: escrever por
+   * cima de nota lançada por professor é irreversível — a proveniência só
+   * guarda o que NÓS criamos —, e não escrever é atraso. Ver o comentário
+   * longo em sincronizarFrequencia.ts.
+   */
+  if (sinal.suspeito) return registrarPassada('cruzamento-suspeito', 'succeeded');
   if (lotes.length === 0) return registrarPassada('nada-a-escrever', 'succeeded');
   if (volume.veredito === 'RECUSADO') return registrarPassada('recusado-pelo-teto', 'failed');
   if (volume.veredito === 'PRECISA_APROVACAO' && !(await estaAprovado(chaveDeAprovacao))) {

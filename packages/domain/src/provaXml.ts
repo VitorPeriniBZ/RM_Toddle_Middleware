@@ -190,6 +190,32 @@ export function montaLotesNotasAvaliacao(notas: NotaParaEscrever[]): LoteNotasAv
 /**
  * Chave natural da nota de avaliação no RM, na ORDEM do `xs:unique` do XSD:
  * CODCOLIGADA, CODPROVA, CODETAPA, TIPOETAPA, IDTURMADISC, RA.
+ *
+ * ─── RECUSA COMPONENTE VAZIO, COMO `chaveCourse` JÁ FAZIA ───────────────────
+ *
+ * Esta chave é montada a partir de `readView` do DataServer, cujo tipo é
+ * `Record<string, string>`. O índice MENTE: sem `noUncheckedIndexedAccess`, o
+ * TypeScript promete `string` mesmo para chave que não existe, e em runtime
+ * `String(row.CODETAPA)` de um campo ausente devolve **`"undefined"`** — uma
+ * string não-vazia, plausível, que nenhuma guarda de "está vazio?" pega.
+ *
+ * É a mesma família do `?? ''` consertado no P0-6 e no P1-A, numa forma pior:
+ * `''` ao menos parece errado quando alguém lê o log.
+ *
+ * ─── POR QUE LANÇAR, E NÃO ENTRAR EM MODO SOMBRA ───────────────────────────
+ *
+ * Os outros dois caminhos ganharam flag e período de sombra porque o gatilho
+ * deles é real e recorrente: a Sentença SQL mora no RM e some a cada cópia de
+ * base. Aqui não há Sentença — o schema do DataServer é do produto TOTVS.
+ *
+ * E foi MEDIDO em 30/09/2026: 245 linhas de `SProvas` e 3.507 de `SNotas`,
+ * **zero** componentes de chave ausentes ou vazios. Um período de sombra
+ * existe para reunir evidência de que a regra nova não quebra nada; aqui a
+ * evidência já está reunida, e seriam sete observações para confirmar um zero
+ * já medido.
+ *
+ * `chaveCourse` faz exatamente isto desde antes, com 13 testes. Seguir o
+ * padrão que já existe no projeto vale mais que inventar um terceiro.
  */
 export const chaveNaturalNotaAvaliacao = (n: {
   codColigada: string;
@@ -197,5 +223,21 @@ export const chaveNaturalNotaAvaliacao = (n: {
   codEtapa: string;
   idTurmaDisc: string;
   ra: string;
-}): string =>
-  `${n.codColigada}|${n.codProva}|${n.codEtapa}|${TIPOETAPA_NOTA}|${n.idTurmaDisc}|${n.ra}`;
+}): string => {
+  const partes = { ...n };
+  const nomes = ['codColigada', 'codProva', 'codEtapa', 'idTurmaDisc', 'ra'] as const;
+  const ruim = nomes.find((k) => {
+    const v = partes[k];
+    // `undefined` chega como a STRING "undefined" quando o campo some do
+    // readView — é o caso que motiva esta guarda, e o mais difícil de ver.
+    return v == null || String(v).trim() === '' || String(v) === 'undefined';
+  });
+  if (ruim) {
+    throw new Error(
+      `chaveNaturalNotaAvaliacao: "${ruim}" veio vazio ou ausente (${JSON.stringify(n)}). ` +
+        'Chave incompleta não casa com nada: toda nota viraria ESCREVER_NOVO e a proteção ' +
+        'contra sobrescrever lançamento de professor ficaria desligada, sem erro.',
+    );
+  }
+  return `${n.codColigada}|${n.codProva}|${n.codEtapa}|${TIPOETAPA_NOTA}|${n.idTurmaDisc}|${n.ra}`;
+};
