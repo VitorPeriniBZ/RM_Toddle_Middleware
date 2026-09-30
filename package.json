@@ -18,6 +18,7 @@
     "seed:yeargroups": "tsx apps/worker/src/scripts/seedYearGroups.ts",
     "check:student": "tsx apps/worker/src/scripts/checkStudent.ts",
     "dlq": "tsx apps/worker/src/scripts/dlq.ts",
+    "alerta:testar": "tsx apps/worker/src/scripts/alertaTestar.ts",
     "api": "tsx apps/api/src/server.ts",
     "web": "npm run dev --workspace @rm-toddle/web",
     "typecheck:web": "npm run typecheck --workspace @rm-toddle/web",

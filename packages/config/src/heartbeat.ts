@@ -31,6 +31,37 @@ import { logger } from './logger';
 export type ResultadoRun = 'sucesso' | 'falha';
 
 /**
+ * Estrangulamento do aviso de "este fluxo não tem heartbeat".
+ *
+ * Por FLUXO, e não global: quatro fluxos sem monitor são quatro problemas
+ * distintos, e colapsá-los num aviso só esconderia três. Uma hora é a janela
+ * porque o fluxo mais frequente roda a cada 15 minutos — o aviso precisa
+ * aparecer todo dia sem virar ele mesmo uma fonte de ruído.
+ */
+const JANELA_DO_AVISO_MS = 60 * 60 * 1_000;
+const ultimoAviso = new Map<string, number>();
+
+function avisarUmaVezPorHora(contexto: Record<string, unknown>): void {
+  const fluxo = typeof contexto.job === 'string' ? contexto.job : 'desconhecido';
+  const agora = Date.now();
+  const anterior = ultimoAviso.get(fluxo);
+  if (anterior !== undefined && agora - anterior < JANELA_DO_AVISO_MS) return;
+  ultimoAviso.set(fluxo, agora);
+
+  logger.warn(
+    { fluxo, heartbeat: 'DESLIGADO' },
+    `O fluxo "${fluxo}" rodou sem heartbeat configurado: se ele parar de rodar, NINGUÉM será ` +
+      `avisado. Defina HEARTBEAT_URL_${fluxo.toUpperCase()} apontando para um monitor externo ` +
+      `(Healthchecks.io, Uptime Kuma). Ver docs/TODO.md.`,
+  );
+}
+
+/** Zera o estrangulamento do aviso. Existe para o teste não depender do relógio. */
+export function limparAvisosDeHeartbeat(): void {
+  ultimoAviso.clear();
+}
+
+/**
  * Dispara o ping. NUNCA lança e NUNCA rejeita.
  *
  * Isto é regra, não descuido: se o monitor estiver fora do ar, o sync tem de
@@ -42,7 +73,24 @@ export async function pingHeartbeat(
   resultado: ResultadoRun,
   contexto: Record<string, unknown> = {},
 ): Promise<void> {
-  if (!url) return; // não configurado = desligado, de propósito
+  /*
+   * ─── SEM URL, O SILÊNCIO APARECE NO LOG ──────────────────────────────────
+   *
+   * Esta linha era `if (!url) return;`, comentada como "não configurado =
+   * desligado, de propósito". O problema não era a intenção: era que NENHUMA
+   * das quatro URLs estava configurada, e portanto nenhum fluxo deste sistema
+   * tinha quem reclamasse do silêncio dele — inclusive o de FREQUÊNCIA, que
+   * escreve falta no registro acadêmico.
+   *
+   * O aviso é estrangulado por FLUXO e por hora, não emitido a cada ping: o
+   * fluxo de notas roda a cada 15 minutos, e um warn por run transformaria o
+   * log numa segunda fonte de ruído — que é exatamente o problema que os 6,3 GB
+   * de `ECONNREFUSED` representam.
+   */
+  if (!url) {
+    avisarUmaVezPorHora(contexto);
+    return;
+  }
 
   const alvo = resultado === 'falha' ? `${url.replace(/\/+$/, '')}/fail` : url;
   const controller = new AbortController();

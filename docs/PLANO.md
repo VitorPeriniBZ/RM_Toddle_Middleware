@@ -7,13 +7,16 @@ Base: `docs/AUDITORIA.md` (FASE 1).
 | Item | Estado | Commits |
 |---|---|---|
 | P0-1 Congelar a chave natural em teste | **concluído** 29/09 | `520b9c2`, `d203c20` |
-| P0-2 Ligar o canal de alerta | em execução | |
+| P0-2 Ligar o canal de alerta | **concluído** (código) 29/09 | `40462e1`, `+hardening` |
 | P0-3 `/health` 503 com dependência fora | pendente | |
 | P0-4 Canário de colunas da Sentença | pendente | |
 | P0-5 Alerta sobre distribuição de vereditos | pendente | |
 | P0-6 `?? ''` → falha alta, em sombra | pendente | |
 
-Suíte: 328 → 366 testes verdes. `typecheck` limpo.
+Suíte: 328 → 388 testes verdes. `typecheck` limpo. `checar:config` passa.
+
+**P0-2 depende de ação humana para ficar completo de ponta a ponta**: as URLs de
+webhook e heartbeat são contas do usuário. Ver `docs/TODO.md` §1.
 
 Esforço em unidades relativas: **S** (uma sessão), **M** (algumas sessões), **L** (dias).
 

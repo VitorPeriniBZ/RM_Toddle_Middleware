@@ -16,7 +16,7 @@ import { processTermGradesSync } from '../toddle-to-rm/termGrades.processor';
 import { processAttendanceSync } from '../toddle-to-rm/attendance.processor';
 import { processCourseSync } from './courseSync.processor';
 import { ATTENDANCE_JOB, COURSE_JOB, STAFF_JOB, TERM_GRADE_JOB } from '@rm-toddle/queues';
-import { env, heartbeat, logger } from '@rm-toddle/config';
+import { conferirCanalDeAviso, env, heartbeat, logger } from '@rm-toddle/config';
 
 /**
  * O job esgotou as tentativas? Só então a falha é definitiva.
@@ -241,6 +241,20 @@ const pararAgendamento = manterAgendamento();
 // O vigia grita pelo que o heartbeat não pega: job morrendo com o worker VIVO.
 // Foi esse o modo de falha dos 62 registros na DLQ, sete dias sem ninguém saber.
 const pararVigia = ligarVigia();
+
+/*
+ * ─── O VIGIA GRITA PARA ONDE? ────────────────────────────────────────────────
+ *
+ * A pergunta que faltava fazer. O vigia acima roda, encontra o problema e chama
+ * `alertar()` — e `alertar()` devolvia `false` calado quando não havia webhook,
+ * que era o caso em todo lugar. Três mecanismos de aviso bem desenhados, todos
+ * mudos, e ninguém tinha como perceber porque a mudez era o comportamento
+ * documentado de cada um.
+ *
+ * Esta linha é o que torna essa situação visível no segundo em que o worker
+ * sobe, em vez de no dia em que alguém for procurar por que não foi avisado.
+ */
+conferirCanalDeAviso('worker');
 
 /*
  * A TRILHA DO QUE O MIDDLEWARE ESCREVEU NO RM SOZINHO.

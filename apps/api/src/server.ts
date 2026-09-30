@@ -1,5 +1,5 @@
 import { construirApp } from './app';
-import { env, logger, tenantConfig } from '@rm-toddle/config';
+import { conferirCanalDeAviso, env, logger, tenantConfig } from '@rm-toddle/config';
 import { apagarSessoesMortas, pgPool } from '@rm-toddle/db';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
@@ -7,6 +7,16 @@ const cfg = tenantConfig;
 
 /** Entrypoint da API. Rodar com: npm run api */
 async function main(): Promise<void> {
+  /*
+   * O estado do canal de aviso, ANTES de aceitar a primeira requisição.
+   *
+   * Se estiver cego, sai em nível `error` — que é o nível que sobrevive quando
+   * alguém filtra `warn` em produção. Não impede o boot: um processo não pode
+   * deixar de subir porque falta webhook, isso trocaria "falha sem aviso" por
+   * "sem sistema nenhum".
+   */
+  conferirCanalDeAviso('api');
+
   const app = construirApp();
   await app.listen({ port: env.API_PORT, host: env.API_HOST });
   logger.info(
