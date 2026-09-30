@@ -563,7 +563,7 @@ describe('A CHAVE É CRUA — e quem a protege está acima dela', () => {
    *
    * ONDE O CRITÉRIO VIVE AGORA:
    *   packages/domain/src/colunasDaChaveAusentes.test.ts  (a detecção)
-   *   FALHA_ALTA_EM_COLUNA_AUSENTE em env.ts              (sombra × estrito)
+   *   FALHA_ALTA_COLUNA_AUSENTE_FREQUENCIA em env.ts      (sombra × estrito)
    */
   it('a chave continua sendo um join puro — quem barra o vazio é o leitor', () => {
     // Comportamento ATUAL e deliberado: ela não valida, e não deve.

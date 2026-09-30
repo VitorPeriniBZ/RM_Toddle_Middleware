@@ -415,11 +415,14 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
   const sinal = avaliarCruzamento({
     lidasDoRm: noRm.notas.length,
     chavesUnicasDoRm: notasPorChave.size,
-    // O leitor de notas ainda não descarta linha por componente vazio da
-    // chave — o P0-6 só tocou o de frequência. Enquanto não tocar, não há o
-    // que contar aqui, e declarar 0 é honesto: não é "nenhuma descartada", é
-    // "esta via ainda não conta". Registrado em docs/TODO.md.
-    linhasSemChave: 0,
+    /*
+     * Vem do leitor (P1-A). Sem isto, o descarte de linha sem chave cegaria
+     * este sinal exatamente como o P0-6 cegou o P0-5 na frequência: a linha
+     * sai do array, some dos dois lados da conta, a aritmética fecha e nenhum
+     * motivo dispara — enquanto a nota do professor fica invisível e é
+     * sobrescrita.
+     */
+    linhasSemChave: noRm.semChave,
     porVeredito: resumoDecisoes.porVeredito,
   });
 
