@@ -56,6 +56,18 @@ Não implementado no P0-4: é achado desta sessão, não escopo do item.
 
 ---
 
+## 0.2 O leitor de NOTAS ainda não descarta linha sem chave
+
+O P0-6 tocou só `rmAttendanceSource.ts`. O leitor de notas
+(`rmGradeSource.ts`) não foi auditado quanto ao mesmo padrão `?? ''`, e
+`sincronizarNotas` passa `linhasSemChave: 0` ao sinal — o que é honesto (não é
+"nenhuma descartada", é "esta via ainda não conta") e é um ponto cego.
+
+A consequência de nota sobrescrita é mais pesada que a de falta: entra no
+boletim e no histórico. Vale o mesmo tratamento.
+
+---
+
 ## 1. Criar os canais de aviso — BLOQUEIA a conclusão do P0-2
 
 **Dono: humano. O código está pronto; faltam as contas.**

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
+import { alertar, env, logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
 import { chaveNaturalRm } from './attendanceProjection';
 import type { EstadoNoRm } from './rmWriteDecision';
@@ -88,6 +88,8 @@ export interface ResumoLeituraFrequencia {
   faltas: RmFalta[];
   foraDoEscopo: number;
   semRa: number;
+  /** Linhas descartadas por componente vazio da chave natural. Ver o laço. */
+  semChave: number;
   /** Domínios observados, para detectar mudança no RM sem ninguém avisar. */
   dominioPresenca: Record<string, number>;
   /** Quantas foram criadas pela integração (hoje: 0). */
@@ -120,6 +122,72 @@ function classificaAutor(autor: string | undefined): { integracao: boolean; hash
     integracao: usuarioIntegracao !== '' && bruto.toLowerCase() === usuarioIntegracao.toLowerCase(),
     hash: createHash('sha256').update(`${cfg.slug}:${bruto}`).digest('hex').slice(0, 16),
   };
+}
+
+/**
+ * ─── AS COLUNAS SEM AS QUAIS A CHAVE NÃO EXISTE ─────────────────────────────
+ *
+ * Não é a lista de tudo que a Sentença devolve: é só o que compõe a chave
+ * natural, que é onde a ausência causa dano silencioso. Uma `JUSTIFICATIVA`
+ * que suma empobrece o relatório; uma `ID_TURMADISC` que suma desliga a
+ * proteção contra sobrescrever lançamento de professor.
+ *
+ * Cada entrada lista as variantes aceitas, iguais às que o `pick` tenta.
+ */
+const COLUNAS_DA_CHAVE: ReadonlyArray<readonly string[]> = [
+  ['RA'],
+  ['DATA'],
+  ['ID_TURMADISC', 'IDTURMADISC'],
+  ['ID_HORARIO_TURMA', 'IDHORARIOTURMA'],
+];
+
+/**
+ * Quais colunas da chave NÃO existem no result set.
+ *
+ * ─── COLUNA AUSENTE NÃO É VALOR VAZIO, E CONFUNDIR AS DUAS FOI O DEFEITO ────
+ *
+ * O `?? ''` tratava as duas do mesmo jeito, e elas pedem reações opostas:
+ *
+ *   coluna ausente do RESULT SET  a Sentença mudou. Vale para TODAS as linhas.
+ *                                 É drift, e o run inteiro está comprometido.
+ *   valor vazio numa LINHA        aquele registro é que está incompleto. Vale
+ *                                 para uma linha. Descarta-se a linha, como já
+ *                                 se faz com `DATA` ilegível.
+ *
+ * A distinção é observável: olha-se as CHAVES do objeto de linha, não os
+ * valores. Uma coluna que existe e vem nula continua existindo.
+ *
+ * Pura, e recebe as linhas já lidas — dá para testar sem RM.
+ */
+export function colunasDaChaveAusentes(rows: readonly ConsultaRow[]): string[] {
+  // Sem linha nenhuma não há result set para inspecionar, e "janela sem aula" é
+  // estado legítimo. Acusar drift aqui seria alarme por fim de semana.
+  if (rows.length === 0) return [];
+
+  /*
+   * ─── A UNIÃO DE TODAS AS LINHAS, E NÃO A PRIMEIRA ────────────────────────
+   *
+   * A versão anterior olhava só `rows[0]`, supondo que o result set tem schema
+   * fixo. Não tem, neste transporte: o dataset chega como XML no formato
+   * `<NewDataSet><Resultado>…`, e a serialização do .NET OMITE o elemento
+   * quando o valor é DBNull. Uma linha com `ID_TURMADISC` nulo simplesmente
+   * não traz a tag — e `linhasDoDataset.test.ts:31` já documenta um
+   * `<Resultado>` com um campo só.
+   *
+   * Com amostra de uma linha, dois erros simétricos:
+   *   coluna nula na linha 0 e presente no resto  -> acusa drift que não existe
+   *                                                  (em ESTRITO, aborta o run)
+   *   coluna presente na 0 e nula na 400          -> não acusa drift que existe
+   *
+   * A união custa 698 × 23 iterações na janela medida — ruído de perfil, não de
+   * relógio. Uma coluna só é "ausente" quando falta em TODAS as linhas, que é a
+   * assinatura de a Sentença ter deixado de declará-la.
+   */
+  const presentes = new Set<string>();
+  for (const row of rows) for (const k of Object.keys(row)) presentes.add(k.toLowerCase());
+  return COLUNAS_DA_CHAVE.filter(
+    (variantes) => !variantes.some((v) => presentes.has(v.toLowerCase())),
+  ).map((variantes) => variantes[0]);
 }
 
 /**
@@ -165,10 +233,49 @@ export async function fetchFrequenciaFromRm(
     );
   }
 
+  /*
+   * ─── DRIFT DE SENTENÇA: ANTES DE QUALQUER LINHA ──────────────────────────
+   *
+   * A checagem vem AQUI, antes do laço, e não dentro dele, porque coluna
+   * ausente é propriedade do RESULT SET: se sumiu, sumiu para todas as linhas.
+   * Falhar no meio do laço deixaria metade das faltas lidas e a outra metade
+   * não — estado parcial é pior que falha limpa quando o próximo passo é
+   * decidir escrita no registro acadêmico.
+   */
+  const ausentes = colunasDaChaveAusentes(rows);
+  if (ausentes.length > 0) {
+    const estrito = env.FALHA_ALTA_EM_COLUNA_AUSENTE === 'true';
+    const explicacao =
+      `A Sentença ${cfg.rm.sentencas.frequencia} devolveu um result set SEM as colunas ` +
+      `${ausentes.join(', ')}, que compõem a chave natural. Sem elas a chave sai com ` +
+      `segmento vazio, não casa com nada, TUDO vira ESCREVER_NOVO e a proteção contra ` +
+      `sobrescrever lançamento de professor fica desligada — sem erro e sem DLQ. ` +
+      `Causa provável: cópia de base apagou a Sentença e o restauro automático recolocou ` +
+      `uma versão do repositório mais antiga que a que estava no RM. Confira com ` +
+      `\`npm run canario -- --executar\`.`;
+
+    logger.error({ ausentes, estrito, sentenca: cfg.rm.sentencas.frequencia }, explicacao);
+    await alertar({
+      // Assunto ESTÁVEL: as colunas vão no contexto. Contrato do P0-2.
+      assunto: 'Frequência: a Sentença perdeu coluna da chave natural',
+      contexto: {
+        colunasAusentes: ausentes.join(', '),
+        sentenca: cfg.rm.sentencas.frequencia,
+        modo: estrito ? 'ESTRITO — o run foi abortado' : 'SOMBRA — o run seguiu como antes',
+        porqueImporta: 'a proteção contra sobrescrever lançamento de professor depende desta chave',
+        comoVer: 'npm run canario -- --executar',
+      },
+      repetirApos: 6 * 60 * 60 * 1_000,
+    });
+
+    if (estrito) throw new Error(explicacao);
+  }
+
   const faltas: RmFalta[] = [];
   const dominioPresenca: Record<string, number> = {};
   let foraDoEscopo = 0;
   let semRa = 0;
+  let semChave = 0;
   let criadasPelaIntegracao = 0;
   let alteradasDepoisDeCriadas = 0;
   let marcaDagua: string | undefined;
@@ -204,12 +311,55 @@ export async function fetchFrequenciaFromRm(
       continue;
     }
 
+    /*
+     * ─── VALOR VAZIO NUMA LINHA: DESCARTA A LINHA ────────────────────────
+     *
+     * Aqui a coluna EXISTE no result set — isso já foi conferido antes do laço
+     * — e mesmo assim veio vazia neste registro. É problema de uma linha, não
+     * da Sentença, e a reação é a mesma que a `DATA` ilegível já recebia:
+     * descartar com aviso.
+     *
+     * ─── E ISTO NÃO É PROTEÇÃO. É CONTENÇÃO. ────────────────────────────
+     *
+     * Vale dizer com todas as letras, porque a tentação de achar que resolve é
+     * real: descartar a linha e manter a chave degradada levam ao MESMO
+     * desfecho para aquela aula — a projeção não encontra nada, responde
+     * ESCREVER_NOVO, e a falta lançada pelo professor é sobrescrita.
+     *
+     * O que o descarte evita é o caso PIOR: duas linhas degradadas colidindo
+     * entre si na mesma chave (o `1|||RA|data` do teste de colisão em
+     * `chaveNaturalFrequencia.test.ts`), onde uma some do índice e a outra pode
+     * casar com a aula ERRADA. Chave inexistente é ruim; chave que aponta para
+     * a aula de outro professor é pior.
+     *
+     * A proteção de verdade para este caso é `semChave > 0` virar suspeita no
+     * sinal de cruzamento (P0-5) — está registrado em docs/TODO.md, não foi
+     * feito aqui.
+     */
+    const idTurmaDisc = pick(row, 'ID_TURMADISC', 'IDTURMADISC');
+    const idHorarioTurma = pick(row, 'ID_HORARIO_TURMA', 'IDHORARIOTURMA');
+    if (!idTurmaDisc || !idHorarioTurma) {
+      semChave += 1;
+      logger.warn(
+        {
+          ra,
+          data,
+          idTurmaDisc: idTurmaDisc ?? '(vazio)',
+          idHorarioTurma: idHorarioTurma ?? '(vazio)',
+        },
+        'Frequência sem componente da chave natural — descartada. A coluna existe no result ' +
+          'set, mas veio vazia nesta linha; seguir com segmento vazio faria a chave casar com ' +
+          'a aula errada',
+      );
+      continue;
+    }
+
     faltas.push({
       codColigada: pick(row, 'CODCOLIGADA') ?? String(cfg.rm.escopo.coligada),
       ra,
-      idTurmaDisc: pick(row, 'ID_TURMADISC', 'IDTURMADISC') ?? '',
+      idTurmaDisc,
       data,
-      idHorarioTurma: pick(row, 'ID_HORARIO_TURMA', 'IDHORARIOTURMA') ?? '',
+      idHorarioTurma,
       presenca,
       justificada: (pick(row, 'JUSTIFICADA') ?? '').toUpperCase() === 'S',
       idJustificativa: pick(row, 'ID_JUSTIFICATIVA', 'IDJUSTIFICATIVAFALTA'),
@@ -240,6 +390,7 @@ export async function fetchFrequenciaFromRm(
       faltas: faltas.length,
       foraDoEscopo,
       semRa,
+      semChave,
       dominioPresenca,
       criadasPelaIntegracao,
       alteradasDepoisDeCriadas,
@@ -254,6 +405,7 @@ export async function fetchFrequenciaFromRm(
     faltas,
     foraDoEscopo,
     semRa,
+    semChave,
     dominioPresenca,
     criadasPelaIntegracao,
     alteradasDepoisDeCriadas,

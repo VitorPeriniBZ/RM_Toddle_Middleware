@@ -61,15 +61,41 @@ const VEREDITOS_DE_CASAMENTO = [
 ] as const;
 
 export interface EntradaDoSinal {
-  /** Linhas lidas do RM na janela (antes de indexar). */
+  /**
+   * Linhas do RM que estão NO ESCOPO DO QUE SE PROJETOU.
+   *
+   * Não é "tudo que o RM devolveu". O leitor filtra por coligada e campus, não
+   * por turma — então numa implantação parcial do Toddle o RM devolve faltas
+   * humanas de turmas que não projetamos. Contá-las aqui faria "nada casou" ser
+   * verdade permanente e correta, e o alerta dispararia quatro vezes por dia
+   * para sempre, sobre um sistema saudável.
+   */
   lidasDoRm: number;
   /** Chaves únicas que essas linhas produziram. Menor que `lidasDoRm` = colisão. */
   chavesUnicasDoRm: number;
+  /**
+   * Linhas que o leitor DESCARTOU por componente vazio da chave.
+   *
+   * ─── SEM ISTO, O CONSERTO DO P0-6 CEGA ESTE SINAL ──────────────────────
+   *
+   * O P0-6 passou a descartar a linha cujo `IDTURMADISC` ou `IDHORARIOTURMA`
+   * veio vazio. O descarte é a reação certa, e tem um efeito colateral que os
+   * dois conselheiros apontaram independentemente: a linha sai do array, some
+   * do numerador E do denominador, a aritmética fica perfeitamente consistente
+   * (`linhasPerdidas = 0`), e se as demais casarem o sinal não acusa nada.
+   *
+   * Enquanto isso, aquela aula não tem correspondência no índice, a projeção
+   * responde ESCREVER_NOVO, e a falta do professor é sobrescrita — o mesmo
+   * dano de sempre, agora invisível para os dois sinais.
+   *
+   * É a degradação PARCIAL: só algumas turmas perdendo o valor.
+   */
+  linhasSemChave: number;
   /** Contagem por veredito, como `resumirDecisoes` já devolve. */
   porVeredito: Record<string, number>;
 }
 
-export type MotivoDoSinal = 'nada-casou' | 'colisao-de-chave';
+export type MotivoDoSinal = 'nada-casou' | 'colisao-de-chave' | 'linha-sem-chave';
 
 export interface SinalDeCruzamento {
   /** `true` quando há motivo para ninguém escrever nada até alguém olhar. */
@@ -115,6 +141,16 @@ export function avaliarCruzamento(e: EntradaDoSinal): SinalDeCruzamento {
   const linhasPerdidas = Math.max(0, e.lidasDoRm - e.chavesUnicasDoRm);
   if (linhasPerdidas > 0) motivos.push('colisao-de-chave');
 
+  /*
+   * Motivo PRÓPRIO, e não somado em `lidasDoRm`.
+   *
+   * Somar produziria `colisao-de-chave` com uma explicação factualmente errada
+   * — "sumiram por colisão" — quando sumiram por outro motivo. E o conserto que
+   * cada um pede é diferente: colisão manda olhar as colunas da chave; linha
+   * sem chave manda olhar os DADOS daquelas turmas no RM.
+   */
+  if (e.linhasSemChave > 0) motivos.push('linha-sem-chave');
+
   return {
     suspeito: motivos.length > 0,
     motivos,
@@ -149,6 +185,14 @@ function explicar(
         `\`?? ''\` degrada`,
     );
   }
+  if (motivos.includes('linha-sem-chave')) {
+    partes.push(
+      `${e.linhasSemChave} linha(s) do RM foram descartadas por virem sem IDTURMADISC ou ` +
+        `IDHORARIOTURMA. Elas existem no RM, são falta lançada por alguém, e o cruzamento não ` +
+        `consegue enxergá-las — a projeção correspondente vai responder ESCREVER_NOVO e ` +
+        `escrever por cima`,
+    );
+  }
   return partes.join('. ');
 }
 
@@ -165,6 +209,7 @@ export function assuntoDoSinal(fluxo: string, motivo: MotivoDoSinal): string {
   const porMotivo: Record<MotivoDoSinal, string> = {
     'nada-casou': 'o RM tem dados e nada casou — a trava de escrita pode estar desligada',
     'colisao-de-chave': 'linhas do RM colidiram na mesma chave e sumiram do índice',
+    'linha-sem-chave': 'há faltas no RM que o cruzamento não consegue enxergar',
   };
   return `${fluxo}: ${porMotivo[motivo]}`;
 }
