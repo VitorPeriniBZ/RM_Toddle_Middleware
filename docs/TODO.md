@@ -8,6 +8,54 @@ Ver também `docs/AUDITORIA.md` (o que foi medido) e `docs/PLANO.md` (a ordem).
 
 ---
 
+## 0. RESOLVIDO — usuário do RM foi bloqueado por mim e liberado pelo usuário
+
+**Encerrado em 29/09. Fica registrado porque o dado operacional é útil.**
+
+```
+15:50:32  npm run canario -> as SEIS Sentenças conferem.
+15:51:0x  contraprova minha com RM_WS_PASS errada: 6 auth falhas seguidas.
+15:51:42  canário com a senha CORRETA -> HTTP 401 nas seis.
+15:54:4x  nova tentativa após 3 min -> 401 de novo.
+          [usuário desbloqueia o cadastro no RM]
+          npm run canario -> as seis conferem. Confirmado.
+```
+
+**Causa confirmada pelo desfecho:** seis autenticações falhas seguidas bloquearam
+o usuário da integração no RM. A senha do `.env` sempre esteve correta — provado
+pela leitura bem-sucedida às 15:50:32, antes das tentativas.
+
+**O erro de método foi meu**: para provar que o canário consegue falhar, usei
+credencial errada contra um sistema real. A contraprova certa é alterar o `.sql`
+local, que não toca o RM.
+
+### O que fica como pendência real
+
+**Quantas tentativas o RM tolera?** Não está documentado em lugar nenhum deste
+repositório, e agora sabe-se que 6 bastam para bloquear. O canário agendado fará
+**144 autenticações por dia** (uma por Sentença, de hora em hora). Se o RM
+contar tentativas falhas numa janela, uma indisponibilidade parcial poderia
+acumular falhas e bloquear o usuário sozinha — transformando o vigia em causa
+do incidente que ele deveria observar.
+
+Vale descobrir o limite e, se for baixo, considerar um disjuntor no canário:
+após N falhas de autenticação seguidas, parar de tentar e alertar, em vez de
+insistir de hora em hora.
+
+### §0.1 O canário deveria distinguir 401 de outras falhas
+
+Uma Sentença não verificada por **credencial recusada** é um incidente com dono
+e conserto claros; por timeout é outra coisa. Hoje as duas caem em
+`naoVerificadas` e produzem seis linhas idênticas quando o fato é UM: o usuário
+está bloqueado.
+
+Merece alerta próprio, com assunto estável (`Canário: o RM recusou a
+credencial`), emitido uma vez — e é o lugar natural para o disjuntor acima.
+
+Não implementado no P0-4: é achado desta sessão, não escopo do item.
+
+---
+
 ## 1. Criar os canais de aviso — BLOQUEIA a conclusão do P0-2
 
 **Dono: humano. O código está pronto; faltam as contas.**

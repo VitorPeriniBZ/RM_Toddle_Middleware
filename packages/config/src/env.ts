@@ -293,6 +293,28 @@ const envSchema = z.object({
    */
   VIGIA_INTERVALO_MS: z.coerce.number().int().min(60_000).default(900_000),
 
+  /*
+   * ─── CANÁRIO DE SENTENÇAS: DUAS CADÊNCIAS, PORQUE CUSTAM DIFERENTE ────────
+   *
+   * As Sentenças moram no RM e somem a cada cópia de base (13-15/08, 16/09 e
+   * 20/09/2026). O canário compara o que está no RM com o `.sql` do repositório
+   * — ver apps/worker/src/agenda/canarioDeSentencas.ts.
+   *
+   * RELEITURA: 6 `readRecord` do GlbConsSQLData, sem executar nada. Pega a
+   * Sentença apagada ou rebaixada pela cópia de base, que é o evento comum.
+   * Uma hora = 144 chamadas/dia. A cada ciclo do vigia seriam 576, 4x mais,
+   * para adiantar no máximo 45 min a detecção de um evento que não é
+   * sub-horário — contra um RM que este projeto já viu ficar mudo por horas.
+   *
+   * EXECUÇÃO: roda as seis. `TODDLE.NOTAS` não aceita janela e devolve o
+   * período inteiro, ~7 mil linhas por SOAP. Diária, de propósito.
+   *
+   * Piso de 5 min na releitura e de 1h na execução: abaixo disso não é
+   * vigilância, é carga.
+   */
+  CANARIO_RELEITURA_MS: z.coerce.number().int().min(300_000).default(3_600_000),
+  CANARIO_EXECUCAO_MS: z.coerce.number().int().min(3_600_000).default(86_400_000),
+
   /**
    * Guarda de desvio de contagem, em pontos percentuais. O sync é completo: se o
    * RM voltar a servir uma cópia ANTIGA da base — que já aconteceu em 13-15/08 —
