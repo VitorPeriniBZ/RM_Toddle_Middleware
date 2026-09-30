@@ -2,6 +2,43 @@
 
 Base: `docs/AUDITORIA.md` (FASE 1).
 
+## Decisão de orçamento: `noUncheckedIndexedAccess` fica DESLIGADA (P1-C, 30/09)
+
+Medido, não estimado — a flag foi ligada temporariamente só para contar:
+
+| escopo | erros |
+|---|---|
+| repositório inteiro | **253** |
+| `packages/domain` | 98 |
+| `packages/db` | 77 (repositórios e `.itest`, não tocam chave do RM) |
+| `apps/worker` | 62 — **29 deles em dois scripts one-off** que o P2 arquiva |
+| resíduo (`config`, `integrations`, `queues`, `api`) | 16 |
+
+Parcela significativa é **falso positivo**: `chaveCourse.ts:79` é
+`const [a,b,c] = partes` depois de `partes.length !== 3` — o TypeScript não
+estreita destructuring por checagem de `length`. Consertar isso é ruído.
+
+**E o argumento decisivo: a flag não pegaria nenhum dos dois defeitos reais.**
+`String(row.CODETAPA)` compila sob ela, e template literal com campo cru
+também. Os dois estão fora dos 253.
+
+### O critério que fica registrado
+
+> **O detector da classe que causou dano tem prioridade sobre defesa em
+> profundidade. Orçamento para uma coisa só → o detector.**
+
+A flag entrega higiene de tipos e profundidade em OUTRAS classes. Se entrar
+depois, é item próprio de higiene — não urgência, e com o custo já medido acima.
+
+### Nomeação das chaves inline: item próprio, junto do P1-E
+
+As 8 chaves inline são invisíveis para auditoria por token. Nomeá-las
+(`chaveProvaEtapa`, `chaveEtapaNota`, …) as tornaria pesquisáveis e testáveis —
+mas é refatoração em caminho de escrita, que a regra do P1-E cobre com rede.
+Vai junto de lá, não aqui.
+
+---
+
 ## Mapa do padrão `?? ''` no projeto — levantado no P1-A (30/09)
 
 O registrado era "o leitor de notas não foi auditado". A varredura mostrou que

@@ -32,6 +32,18 @@ jobs:
       - name: Camada de configuração intacta
         run: npm run checar:config
 
+      # O lint vem ANTES do typecheck de propósito: ele é barato e pesca a
+      # classe de defeito que o compilador NÃO pega — `String(row.X)` e
+      # template literal com campo cru do RM compilam sem reclamação, e foram
+      # dois defeitos reais em caminho de escrita irreversível (P1-B e P1-C).
+      #
+      # São DUAS regras, não um lint de estilo. O ESLint pleno com baseline é
+      # item separado: misturar as coisas faria centenas de achados cosméticos
+      # chegarem junto, e um lint assim é desligado — levando as duas travas
+      # junto.
+      - name: Lint (classe do acesso indexado cru)
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 

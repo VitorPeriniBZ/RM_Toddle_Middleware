@@ -1,5 +1,6 @@
 import { logger, tenantConfig } from '@rm-toddle/config';
 import { wsDataServerClient } from '@rm-toddle/integrations';
+import { chaveComposta } from './chaveComposta';
 import { chaveNaturalNotaAvaliacao } from './provaXml';
 import { canonizarNota } from './notaCanonica';
 
@@ -92,14 +93,45 @@ export class RmAssessmentTargets {
       )) {
         if (row.TIPOETAPA !== 'N') continue;
         if (!emEscopo.has(row.IDTURMADISC)) continue;
+        /*
+         * Lidos UMA vez e sem `String()`: `String(row.X)` de campo ausente
+         * produz a palavra "undefined", que é valor com cara de valor. Aqui a
+         * leitura fica crua e a validação é de `chaveComposta`, logo abaixo —
+         * um lugar só decide o que é componente válido.
+         */
         const prova: ProvaRm = {
           idTurmaDisc: row.IDTURMADISC,
-          codEtapa: String(row.CODETAPA),
-          codProva: String(row.CODPROVA),
+          codEtapa: row.CODETAPA,
+          codProva: row.CODPROVA,
           descricao: String(row.DESCRICAO ?? ''),
           valor: row.VALOR ?? null,
         };
-        const chave = `${prova.idTurmaDisc}|${prova.codEtapa}`;
+        /*
+         * A chave deixou de ser template literal cru. Antes, um `IDTURMADISC`
+         * ou `CODETAPA` ausente virava a palavra "undefined" na chave — e o
+         * consumidor (`provasDe`) devolve `?? []`, o que faz `proximoCodProva`
+         * voltar 1, a guarda anti-duplicata por descrição ficar vazia, e o
+         * sistema CRIAR uma avaliação que já existe, com CODPROVA colidindo.
+         *
+         * Falha ABERTA, no registro acadêmico. Ver `chaveComposta`.
+         */
+        let chave: string;
+        try {
+          chave = chaveComposta('provasPorEtapa', {
+            idTurmaDisc: prova.idTurmaDisc,
+            codEtapa: prova.codEtapa,
+          });
+        } catch (err) {
+          // Mesma disciplina do índice de notas: uma prova ilegível não pode
+          // custar o carregamento das outras 244.
+          semChave += 1;
+          logger.warn(
+            { erro: (err as Error).message.slice(0, 160) },
+            'Prova sem componente da chave — descartada. Ela existe no RM e o índice não vai ' +
+              'enxergá-la, então a criação de avaliação pode duplicar',
+          );
+          continue;
+        }
         const atual = provasPorEtapa.get(chave);
         if (atual) atual.push(prova);
         else provasPorEtapa.set(chave, [prova]);
@@ -114,10 +146,11 @@ export class RmAssessmentTargets {
       )) {
         if (row.TIPOETAPA !== 'N') continue;
         if (!emEscopo.has(row.IDTURMADISC)) continue;
+        // Idem: leitura crua, validação em `chaveNaturalNotaAvaliacao`.
         const nota: NotaAvaliacaoRm = {
           idTurmaDisc: row.IDTURMADISC,
-          codEtapa: String(row.CODETAPA),
-          codProva: String(row.CODPROVA),
+          codEtapa: row.CODETAPA,
+          codProva: row.CODPROVA,
           ra: row.RA,
           // Canônica JÁ NA LEITURA: o RM devolve "9.0000" e o Toddle "9".
           // Comparar os dois como texto marcava toda nota nossa como
@@ -164,7 +197,17 @@ export class RmAssessmentTargets {
   }
 
   provasDe(idTurmaDisc: string, codEtapa: string): ProvaRm[] {
-    return this.provasPorEtapa.get(`${idTurmaDisc}|${codEtapa}`) ?? [];
+    /*
+     * A MESMA função do produtor, e não um template literal paralelo: duas
+     * fórmulas para a mesma chave divergem no dia em que alguém melhora uma —
+     * é o motivo de `chaveNaturalDeFalta` chamar `chaveNaturalRm`.
+     *
+     * O `?? []` continua aqui e é falha ABERTA por natureza: quem consulta não
+     * distingue "esta etapa não tem prova" de "não consegui indexar". O que
+     * mudou é que o segundo caso não chega mais até aqui — o produtor recusa a
+     * chave incompleta na origem.
+     */
+    return this.provasPorEtapa.get(chaveComposta('provasDe', { idTurmaDisc, codEtapa })) ?? [];
   }
 
   /**
