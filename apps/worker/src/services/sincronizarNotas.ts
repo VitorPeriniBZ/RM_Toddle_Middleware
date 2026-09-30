@@ -1,4 +1,4 @@
-import { configVersion, env, logger, tenantConfig } from '@rm-toddle/config';
+import { alertar, configVersion, env, logger, tenantConfig } from '@rm-toddle/config';
 import {
   abrirRun,
   carregarProveniencia,
@@ -18,6 +18,8 @@ import { toddleClient, wsDataServerClient } from '@rm-toddle/integrations';
 // e estes serviços rodam em CLI que precisa encerrar. Ver importDoIndex.test.ts.
 import { FLOW } from '@rm-toddle/queues/src/fluxos';
 import {
+  assuntoDoSinal,
+  avaliarCruzamento,
   achataTermGrades,
   avaliarVolume,
   canonizarNota,
@@ -397,6 +399,52 @@ export async function sincronizarNotas(op: OpcoesSincronizacaoNotas): Promise<Re
     );
   }
   const resumoDecisoes = resumirDecisoes([...decisoes.values()]);
+
+  /*
+   * O mesmo sinal da frequência, pelo mesmo motivo — e aqui a consequência é
+   * outra: nota sobrescrita entra no boletim e no histórico.
+   * Ver packages/domain/src/sinalDeCruzamento.ts.
+   */
+  const sinal = avaliarCruzamento({
+    lidasDoRm: noRm.notas.length,
+    chavesUnicasDoRm: notasPorChave.size,
+    porVeredito: resumoDecisoes.porVeredito,
+  });
+
+  logger.info(
+    {
+      fluxo: 'notas',
+      lidasDoRm: noRm.notas.length,
+      chavesUnicasDoRm: notasPorChave.size,
+      porVeredito: resumoDecisoes.porVeredito,
+      casaram: sinal.casaram,
+      suspeito: sinal.suspeito,
+    },
+    'Cruzamento das notas: distribuição de vereditos',
+  );
+
+  if (sinal.suspeito) {
+    logger.error(
+      { fluxo: 'notas', motivos: sinal.motivos, porque: sinal.porque },
+      'CRUZAMENTO SUSPEITO — a proteção contra sobrescrever nota lançada por professor ' +
+        'pode estar desligada',
+    );
+    for (const motivo of sinal.motivos) {
+      await alertar({
+        assunto: assuntoDoSinal('Notas', motivo),
+        contexto: {
+          fluxo: 'notas',
+          lidasDoRm: noRm.notas.length,
+          chavesUnicasDoRm: notasPorChave.size,
+          casaram: sinal.casaram,
+          linhasPerdidas: sinal.linhasPerdidas > 0 ? sinal.linhasPerdidas : undefined,
+          porque: sinal.porque,
+          comoVer: 'npm run canario -- --executar',
+        },
+        repetirApos: 6 * 60 * 60 * 1_000,
+      });
+    }
+  }
 
   const liberados = projecao.projetados.filter((pr) => {
     const d = decisoes.get(pr.origemId);
