@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import {
+  alertar,
   configVersion,
   configVersionDetalhe,
   diagnosticoDoAmbiente,
@@ -13,6 +14,14 @@ import { pgPool, idMappingRepository, ENTITY_TYPES, type EntityType } from '@rm-
 import { toddleClient } from '@rm-toddle/integrations';
 import { autenticar } from './auth';
 import { exigirPapel } from './autorizacao';
+import {
+  assuntoDeDependenciaFora,
+  assuntoDeDependenciaVoltou,
+  avaliarProntidao,
+  comPrazo,
+  transicoes,
+  type Prontidao,
+} from './prontidao';
 import { registrarRotasDeSessao } from './rotas/sessao';
 import { registrarRotasDeAgenda } from './rotas/agenda';
 import { registrarRotasDeJobs } from './rotas/jobs';
@@ -129,6 +138,108 @@ function mensagemDe(erro: Error): string {
   return primeiro ? `${erro.name}: ${primeiro}` : erro.name || 'falha interna';
 }
 
+/**
+ * ─── A SONDA É PÚBLICA, ENTÃO ELA NÃO PODE SER UMA ALAVANCA ─────────────────
+ *
+ * `/health/ready` é anônima, e sem esta guarda cada requisição dispara duas
+ * checagens reais. Dois problemas, os dois apontados na revisão e confirmados
+ * no código:
+ *
+ *   1. `checarToddleComCache` guarda o resultado (inclusive falha), mas NÃO tem
+ *      single-flight: N requisições chegando antes de o cache popular iniciam N
+ *      escadas de retry de 5 tentativas cada, contra o Toddle.
+ *   2. `pgPool` tem `max: 10` e nenhum `connectionTimeoutMillis`
+ *      (packages/db/src/pool.ts). Um `SELECT 1` abandonado pela corrida do
+ *      prazo segura um client — e segura exatamente quando o banco já está mal.
+ *
+ * O cache resolve os dois pelo mesmo mecanismo: no máximo UMA checagem em voo,
+ * por mais que batam aqui. Cinco segundos é curto o bastante para um monitor de
+ * 30s nunca ver dado velho, e longo o bastante para uma enxurrada não virar
+ * carga.
+ *
+ * O que isto NÃO é: rate limit. Um limitador de verdade é o P1-5, e precisa
+ * resolver o `trustProxy` antes (docs/TODO.md §4.3). Isto é a guarda mínima
+ * para que a rota introduzida agora não seja pior que a ausência dela.
+ */
+let cacheDaProntidao: { em: number; resultado: Prontidao } | null = null;
+let prontidaoEmVoo: Promise<Prontidao> | null = null;
+const VALIDADE_DA_PRONTIDAO_MS = 5_000;
+
+/** Último estado conhecido por dependência. Alimenta o aviso de recuperação. */
+const estadoAnterior = new Map<string, 'fora' | 'ok'>();
+
+async function checarProntidao(): Promise<Prontidao> {
+  /*
+   * Cada checagem corre contra um prazo — ver `PRAZO_DA_CHECAGEM_MS`. Sem isto
+   * a rota levava 26s com o Toddle fora (medido), e monitor nenhum espera
+   * tanto: ele reportaria TIMEOUT em vez do 503 que diz QUAL dependência caiu.
+   */
+  const deps = await Promise.all([
+    comPrazo('postgres', () => checarDependencia('postgres', () => pgPool.query('SELECT 1'))),
+    comPrazo('toddle', () => checarToddleComCache()),
+  ]);
+
+  const prontidao = avaliarProntidao(deps);
+
+  /*
+   * ─── ALERTA POR TRANSIÇÃO, E POR DEPENDÊNCIA ─────────────────────────────
+   *
+   * O vigia (no worker) cobre fila, DLQ e runs. Ele NÃO cobre "a API não
+   * alcança o Postgres" — outro processo, outra rede, outro pool.
+   *
+   * POR DEPENDÊNCIA, não pelo conjunto: um assunto que carregue o conjunto
+   * inteiro tem 2^N−1 valores possíveis, e um Toddle intermitente com o
+   * Postgres fora dobraria as notificações porque o conjunto alterna.
+   *
+   * POR TRANSIÇÃO, e não a cada checagem: só o que MUDOU vira alerta. É o que
+   * permite o aviso de volta — sem ele o operador acorda às 02:00, abre o
+   * laptop às 02:05, encontra tudo verde e não sabe se consertou sozinho.
+   *
+   * 30 minutos de janela: mais curto que as 6h do vigia porque o plano de
+   * controle sem banco é mais urgente, e longo o bastante para uma sonda de 30s
+   * não virar 120 notificações por hora.
+   *
+   * `limitado` nunca vira alerta: conta como ok em `transicoes`, pela mesma
+   * razão que não derruba o 503.
+   */
+  for (const t of transicoes(estadoAnterior, deps)) {
+    const fora = t.para === 'fora';
+    void alertar({
+      assunto: fora ? assuntoDeDependenciaFora(t.nome) : assuntoDeDependenciaVoltou(t.nome),
+      contexto: {
+        componente: 'api',
+        dependencia: t.nome,
+        significado: fora
+          ? 'a API está no ar mas não consegue trabalhar'
+          : 'voltou a responder; o incidente anterior desta dependência está encerrado',
+        degradadas: prontidao.degradadas.length > 0 ? prontidao.degradadas.join(', ') : undefined,
+      },
+      repetirApos: 30 * 60 * 1_000,
+    });
+  }
+  for (const d of deps) estadoAnterior.set(d.nome, d.estado === 'falha' ? 'fora' : 'ok');
+
+  return prontidao;
+}
+
+/** Uma checagem em voo por vez, e resultado válido por alguns segundos. */
+async function prontidaoComCache(): Promise<Prontidao> {
+  const agora = Date.now();
+  if (cacheDaProntidao && agora - cacheDaProntidao.em < VALIDADE_DA_PRONTIDAO_MS) {
+    return cacheDaProntidao.resultado;
+  }
+  // Single-flight: quem chega durante uma checagem espera a MESMA, não abre outra.
+  prontidaoEmVoo ??= checarProntidao()
+    .then((r) => {
+      cacheDaProntidao = { em: Date.now(), resultado: r };
+      return r;
+    })
+    .finally(() => {
+      prontidaoEmVoo = null;
+    });
+  return prontidaoEmVoo;
+}
+
 export function construirApp() {
   const app = Fastify({ loggerInstance: logger });
 
@@ -222,7 +333,11 @@ export function construirApp() {
   // de sessão, que é onde a autenticação COMEÇA (ela valida o token do Google
   // por conta própria).
   app.addHook('onRequest', async (req, reply) => {
-    const publicas = ['/health', '/auth/config', '/auth/sessao', '/auth/sair'];
+    // `/health/ready` entra explicitamente: a comparação abaixo é por igualdade
+    // (ou com querystring), não por prefixo — `/health` NÃO cobre `/health/ready`,
+    // e sem esta linha a rota de prontidão exigiria sessão. Um monitor externo
+    // não tem sessão, e o sintoma seria um 401 lido como "a API caiu".
+    const publicas = ['/health', '/health/ready', '/auth/config', '/auth/sessao', '/auth/sair'];
     // `/auth/sair` é pública de propósito: ela lê o cookie por conta própria e
     // revoga por ele, porque sair da conta não pode falhar por falta de sessão.
     if (publicas.some((r) => req.url === r || req.url.startsWith(r + '?'))) return;
@@ -334,6 +449,22 @@ export function construirApp() {
       /** `true` = uma falha deste sistema não avisa ninguém. Detalhe em /config. */
       cegoParaAlertas: diagnosticoDoAmbiente().cego,
     };
+  });
+
+  /**
+   * PRONTIDÃO — "ele consegue trabalhar agora?". Ver apps/api/src/prontidao.ts
+   * para por que esta rota existe separada do `/health`, e por que o `/health`
+   * continua sempre 200.
+   *
+   * Pública, como o `/health`, e com corpo mínimo: nome e estado, nunca o texto
+   * do erro. Um monitor externo aponta para cá; o Coolify continua no `/health`.
+   */
+  app.get('/health/ready', async (_req, reply) => {
+    const prontidao = await prontidaoComCache();
+    return reply.code(prontidao.status).send({
+      pronto: prontidao.pronto,
+      dependencias: prontidao.dependencias,
+    });
   });
 
   /**

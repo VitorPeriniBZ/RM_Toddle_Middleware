@@ -32,7 +32,19 @@ export default defineWorkspace([
   {
     test: {
       name: 'unit',
-      include: ['packages/*/src/**/*.test.ts'],
+      /*
+       * `apps/` entrou aqui em 29/09/2026, e a ausência dele era o buraco de
+       * cobertura mais caro do projeto: apps/api, apps/worker e apps/web somavam
+       * 15.788 linhas e ZERO testes — rotas HTTP, autorização, o hook de CSRF e
+       * os processors de fila não tinham nenhuma asserção.
+       *
+       * A regra para o que entra aqui continua valendo: a suíte pura não fala
+       * com Postgres, Redis, RM nem Toddle. Teste de `apps` que precise de I/O
+       * é `.itest.ts` e mora na outra suíte. O que cabe aqui é a DECISÃO
+       * extraída — `avaliarProntidao` é o primeiro exemplo: recebe o estado das
+       * dependências já lido e devolve 200 ou 503, sem tocar em nada.
+       */
+      include: ['packages/*/src/**/*.test.ts', 'apps/*/src/**/*.test.ts'],
       environment: 'node',
       // ─── AMBIENTE MÍNIMO, E ISTO CONSERTA O CI ────────────────────────────
       //

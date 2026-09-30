@@ -8,12 +8,12 @@ Base: `docs/AUDITORIA.md` (FASE 1).
 |---|---|---|
 | P0-1 Congelar a chave natural em teste | **concluído** 29/09 | `520b9c2`, `d203c20` |
 | P0-2 Ligar o canal de alerta | **concluído** (código) 29/09 | `40462e1`, `+hardening` |
-| P0-3 `/health` 503 com dependência fora | pendente | |
+| P0-3 Readiness honesto (`/health/ready`) | **concluído** 29/09 | `c97316a`, +P0-3 |
 | P0-4 Canário de colunas da Sentença | pendente | |
 | P0-5 Alerta sobre distribuição de vereditos | pendente | |
 | P0-6 `?? ''` → falha alta, em sombra | pendente | |
 
-Suíte: 328 → 388 testes verdes. `typecheck` limpo. `checar:config` passa.
+Suíte: 328 → 417 testes verdes. `typecheck` limpo. `checar:config` passa.
 
 **P0-2 depende de ação humana para ficar completo de ponta a ponta**: as URLs de
 webhook e heartbeat são contas do usuário. Ver `docs/TODO.md` §1.
@@ -139,7 +139,7 @@ A última coluna é obrigatória em P0 e P1.
 |---|---|---|---|---|---|
 | **P0-1** | **Congelar a chave natural em teste.** Testes de caracterização que fixam a string de `chaveNaturalRm` exatamente como é hoje (ordem dos 5 segmentos, `Number(f.codColigada)`), mais um teste de que `chaveNaturalDeFalta` continua **chamando** `chaveNaturalRm` em vez de reimplementá-la. **Só CI, não toca produção.** | Crítico | S | P0 | Não se aplica — é rede para os itens seguintes. É o primeiro exatamente por isso: congela o comportamento antes que alguém o altere. |
 | **P0-2** | **Ligar o canal de alerta.** Definir `ALERTA_WEBHOOK_URL` e os 4 `HEARTBEAT_URL_*`; fazer o estado "desligado" **gritar**: `error` no boot do worker e da API, campo `alertas: 'ativo' \| 'DESLIGADO'` no `/health`, e `npm run alerta:testar`. O avaliador do heartbeat tem de ser **externo ao processo** (Healthchecks.io/Uptime Kuma) — o desenho de `heartbeat.ts` já é esse. | Crítico | S | P0 | **Alerta sintético com resposta observável**: `npm run alerta:testar` chega no canal; um teste agendado semanal, porque canal mudo há 7 dias é indistinguível de canal quebrado. Teste de aceite: matar o worker em homologação e cronometrar o alerta. |
-| **P0-3** | **`/health` devolver 503 quando uma dependência está fora.** `app.ts:294` sempre devolve 200. `limitado` continua 200 (decisão correta e documentada); `falha` vira 503. | Alto | S | P0 | O healthcheck do Coolify passa a falhar e o container reinicia — hoje nunca falha. Verificação: derrubar o Postgres em homologação e conferir `docker ps` marcando `unhealthy`. |
+| **P0-3** | **`/health/ready` NOVO, com 503 por dependência fora.** `/health` PERMANECE sempre 200 (liveness) e o healthcheck do Coolify não muda — ver "decisões negadas" §4.5. `limitado` não derruba prontidão. Cada checagem corre contra um prazo de 3s. | Alto | S | P0 | **Não é mais o reinício do container** (ver §4.5): a detecção é (a) alerta pelo canal do P0-2, com assunto estável e janela de 30 min, e (b) `/health/ready` devolvendo 503 para um monitor externo. Verificação feita: API no ar com Postgres e Toddle inalcançáveis → `/health` 200, `/health/ready` 503 em 3ms, um único alerta. |
 | **P0-4** | **Canário de colunas da Sentença.** Job agendado que executa a Sentença, confere o conjunto de colunas esperado (`ID_TURMADISC`, `ID_HORARIO_TURMA`, `DATA`, `RA`…) e alerta no **drift git↔RM** — incluindo o caso em que o restauro automático regride a Sentença sem erro. | Crítico | M | P0 | É ele próprio um detector, e é o **único que avisa antes** de um run começar a processar. Que ele quebrou se detecta pelo alerta sintético do P0-2. |
 | **P0-5** | **Alerta sobre a distribuição de vereditos.** Usar o `porVeredito` que já existe (`rmWriteDecision.ts:250`, presente em `sincronizarFrequencia.ts:320` e `:425`): alertar quando `ESCREVER_NOVO` passar de ~70% num fluxo com histórico, ou quando "faltas lidas do RM > 0 e chaves casadas = 0". | Crítico | S | P0 | Detector do modo de falha **original** — pega a proteção desligando em silêncio mesmo sem exceção nenhuma, inclusive quando a causa é a Sentença mudar sem commit. |
 | **P0-6** | **Trocar o `?? ''` por falha alta**, no **leitor** (`rmAttendanceSource.ts:210-212`), antes de qualquer veredito — run aborta inteiro, sem escrita parcial. Atrás de flag `STRICT_NATURAL_KEY` (default `false`), primeiro deploy em **modo sombra**. **Depende de P0-1, P0-2, P0-4 e P0-5 estarem prontos.** | Crítico | M | P0 | Job vermelho com erro explícito ("coluna `ID_TURMADISC` ausente na Sentença") → DLQ → webhook, **que só existe depois do P0-2**. Sem o canal, este item troca um silêncio por outro. |
@@ -319,6 +319,38 @@ outra razão (o limiter do BullMQ é por worker). Vira **P3-1: documentar**.
 e uma escolha consciente de contraste (ocre `#A67206` no lugar do amarelo da marca,
 porque amarelo puro sobre branco não alcança AA). Mexer nisso seria trocar algo
 correto por algo diferente. **O que entra no P1-8 é o que falta**, não o que existe.
+
+### 4.5 Fazer o `/health` devolver 503 — **NEGADO**, virou rota separada
+
+Proposto no esqueleto do P0-3 ("`/health` 503 quando dependência fora") e
+decidido pelo usuário depois de eu levantar a consequência.
+
+`/health` é o alvo do healthcheck do Coolify
+(`docker-compose.coolify.yml:183`), que **reinicia o container** quando ele
+falha. Fazer o `/health` cair junto com o Postgres criaria um crashloop que não
+conserta nada:
+
+1. reiniciar o processo não levanta banco de dados caído;
+2. a cópia de base do RM acontece periodicamente neste ambiente, e nela as
+   dependências ficam fora por minutos — seria crashloop autoinfligido, e
+   programado;
+3. quando o banco volta, N containers reiniciando em laço batem nele todos ao
+   mesmo tempo.
+
+**O que foi feito no lugar:** `/health` permanece liveness (sempre 200, "o
+processo está vivo"), e `/health/ready` nasce como readiness (503, "ele
+consegue trabalhar agora"). O Coolify continua apontando para `/health`; um
+monitor externo aponta para `/health/ready`.
+
+**Custo assumido, e ele é real:** o item deixa de entregar "o container reinicia
+sozinho", que era a detecção escrita na matriz original. A detecção migrou para
+o canal de alerta do P0-2 mais o 503 para monitor externo. A linha da matriz foi
+corrigida.
+
+**Fronteira, para não virar dogma:** reinício É a resposta certa quando o
+defeito é DO PROCESSO — vazamento de memória, event loop travado, deadlock
+interno. Nada disso é detectado hoje, e um liveness que só responde "o HTTP
+está de pé" não os pega. Escopo futuro.
 
 ### 4.4 Multi-tenant por processo — **não é defeito, apenas documentar**
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { alertar, limparJanelaDeAlerta } from './alerta';
+import { alertar, limparJanelaDeAlerta, type Entrega } from './alerta';
 import { FLUXOS_COM_HEARTBEAT, diagnosticar, type UrlsDeAviso } from './canalDeAviso';
 import { limparAvisosDeHeartbeat, pingHeartbeat } from './heartbeat';
 import { logger } from './logger';
@@ -294,24 +294,135 @@ describe('o retorno silencioso não volta', () => {
     expect(espiao).toHaveBeenCalledTimes(2);
   });
 
+});
+
+// ─── A JANELA CONTA SUCESSO, NÃO TENTATIVA ──────────────────────────────────
+
+describe('a supressão só vale depois que alguém foi avisado', () => {
   /**
-   * ─── O QUE NÃO DÁ PARA TESTAR AQUI, E POR QUÊ ────────────────────────────
+   * ─── O DEFEITO QUE ISTO PEGA ──────────────────────────────────────────────
    *
-   * `alertar()` mantém DOIS mapas de supressão: um do envio, um do log
-   * degradado. A separação existe para que um alerta que nunca teve canal não
-   * mexa na contabilidade de quem envia, e para que o caminho sem canal não
-   * povoe um mapa que antes ficava vazio.
+   * `alertar()` marcava `ultimoEnvio` ANTES do `fetch` e não desfazia em caso
+   * de falha. Um blip de rede na PRIMEIRA ocorrência de uma condição calava o
+   * assunto pela janela inteira — 6h, no caso dos achados do vigia.
    *
-   * Isso NÃO é observável nesta suíte, e a primeira versão deste arquivo tinha
-   * um teste que fingia observar: ele passava igual com os dois mapas fundidos
-   * num só — descoberto por mutação, não por leitura. O motivo é que
-   * `env.ALERTA_WEBHOOK_URL` é lido na importação do módulo e a suíte unit
-   * nunca o define; sem canal, o caminho de envio jamais executa, então não há
-   * como ver se a janela dele foi tocada.
+   * E a primeira ocorrência é o alerta que menos pode se perder: "62 jobs na
+   * DLQ" só é notícia na primeira vez. Nas seguintes já é história.
    *
-   * Preferi remover o teste a deixá-lo: um teste que não pode falhar dá a
-   * mesma sensação de cobertura de um que pode, e essa sensação é o que este
-   * projeto inteiro está tentando desmontar. A separação fica justificada no
-   * comentário de `alerta.ts` e coberta pela revisão, não por asserção falsa.
+   * A assimetria decide o desenho: reenviar um alerta que já chegou custa uma
+   * notificação repetida; suprimir um que nunca chegou custa o incidente.
+   *
+   * Estes testes só existem porque o transporte é injetável — sem isso o
+   * caminho de envio é inalcançável nesta suíte (ver a nota em `alertar`), e a
+   * regra ficaria sem teste. Foi uma regra sem teste que criou o defeito.
    */
+
+  const entregou = async (): Promise<Entrega> => ({ entregue: true, motivo: 'DESLIGADO' });
+  const recusou = async (): Promise<Entrega> => ({
+    entregue: false,
+    motivo: 'RECUSADO',
+    detalhe: 'HTTP 403',
+  });
+  const naoAlcancou = async (): Promise<Entrega> => ({
+    entregue: false,
+    motivo: 'INALCANCAVEL',
+    detalhe: 'fetch failed',
+  });
+
+  beforeEach(() => {
+    limparJanelaDeAlerta();
+    vi.restoreAllMocks();
+  });
+
+  it('entrega bem-sucedida devolve true e SUPRIME a repetição', async () => {
+    const primeira = await alertar({ assunto: 'Jobs parados na DLQ' }, entregou);
+    const segunda = await alertar({ assunto: 'Jobs parados na DLQ' }, entregou);
+
+    expect(primeira).toBe(true);
+    expect(segunda, 'chegou em alguém: repetir em seguida é ruído').toBe(false);
+  });
+
+  it('entrega RECUSADA não suprime: a próxima passada tenta de novo', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    const primeira = await alertar({ assunto: 'Jobs parados na DLQ' }, recusou);
+    let tentou = 0;
+    const contando = async (): Promise<Entrega> => {
+      tentou += 1;
+      return { entregue: true, motivo: 'DESLIGADO' };
+    };
+    const segunda = await alertar({ assunto: 'Jobs parados na DLQ' }, contando);
+
+    expect(primeira).toBe(false);
+    expect(
+      tentou,
+      'a falha anterior consumiu a janela: o alerta que ninguém recebeu foi silenciado, e a ' +
+        'primeira ocorrência de uma condição é justamente a que não pode se perder',
+    ).toBe(1);
+    expect(segunda).toBe(true);
+  });
+
+  it('canal INALCANÇÁVEL também não suprime', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await alertar({ assunto: 'Jobs parados na DLQ' }, naoAlcancou);
+    const depois = await alertar({ assunto: 'Jobs parados na DLQ' }, entregou);
+
+    expect(depois).toBe(true);
+  });
+
+  /**
+   * A contrapartida: se a falha não suprime o ENVIO, ela precisa suprimir o
+   * LOG — senão um canal morto vira ele mesmo a próxima tempestade de log.
+   */
+  it('mas o LOG da falha é estrangulado: canal morto não vira tempestade', async () => {
+    const espiao = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await alertar({ assunto: 'Jobs parados na DLQ' }, recusou);
+    await alertar({ assunto: 'Jobs parados na DLQ' }, recusou);
+    await alertar({ assunto: 'Jobs parados na DLQ' }, recusou);
+
+    expect(espiao).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a causa de não ter avisado vai para o log, e as três são distintas', () => {
+    /**
+     * Três causas, três consertos: `.env`, o canal, a rede. Um log que diz só
+     * "não avisei" manda quem lê procurar nos três lugares.
+     */
+    const casos: Array<[string, () => Promise<Entrega>, string]> = [
+      ['sem canal', async () => ({ entregue: false, motivo: 'DESLIGADO' }), 'ALERTA_WEBHOOK_URL'],
+      ['canal recusou', recusou, 'conserto é no canal'],
+      ['rede', naoAlcancou, 'não foi alcançado'],
+    ];
+
+    for (const [nome, entrega, trecho] of casos) {
+      it(nome, async () => {
+        const espiao = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+        await alertar({ assunto: `assunto de ${nome}` }, entrega);
+
+        const [, mensagem] = espiao.mock.calls[0] as [unknown, string];
+        expect(mensagem).toContain(trecho);
+      });
+    }
+  });
+
+  /**
+   * O conteúdo do alerta tem de sobreviver às TRÊS causas.
+   *
+   * Antes, só "sem canal" preservava o conteúdo; recusa e timeout logavam a
+   * mensagem do erro em `warn` e perdiam o alerta. Sobrava "não consegui
+   * avisar", sem dizer sobre o quê — que é meio caminho para o silêncio.
+   */
+  it('o conteúdo do alerta sobrevive à falha de entrega', async () => {
+    const espiao = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await alertar({ assunto: 'Jobs parados na DLQ', contexto: { total: 62 } }, recusou);
+
+    const [dados, mensagem] = espiao.mock.calls[0] as [Record<string, unknown>, string];
+    expect(dados.contexto).toEqual({ total: 62 });
+    expect(dados.detalhe).toBe('HTTP 403');
+    expect(mensagem).toContain('Jobs parados na DLQ');
+    expect(mensagem).toContain('total');
+  });
 });
