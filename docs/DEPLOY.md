@@ -62,7 +62,8 @@ três, e só.
 |---|---|---|
 | `CANARIO_RELEITURA_MS` | `3600000` (1h) | corpo das Sentenças conferido de hora em hora — 144 leituras/dia |
 | `CANARIO_EXECUCAO_MS` | `86400000` (24h) | execução completa 1×/dia (~70s medidos) |
-| `FALHA_ALTA_EM_COLUNA_AUSENTE` | `false` | **modo SOMBRA. NÃO ativar neste deploy** — ver §4 |
+| `FALHA_ALTA_COLUNA_AUSENTE_FREQUENCIA` | `false` | **modo SOMBRA. NÃO ativar neste deploy** — ver §4 |
+| `FALHA_ALTA_COLUNA_AUSENTE_NOTAS` | `false` | idem, para notas. **Relógio SEPARADO** — ver §4 |
 
 ### 2.2 Já existiam, e o P0 fez passarem a importar
 
@@ -79,7 +80,7 @@ mudou é que a ausência delas deixou de ser silenciosa: o boot grita, o
 | `HEARTBEAT_URL_NOTAS` | vazia | idem, notas (janela do vigia: **4h**) |
 | `HEARTBEAT_URL_FREQUENCIA` | vazia | idem, frequência |
 
-### `FALHA_ALTA_EM_COLUNA_AUSENTE` fica em `false`
+### As duas `FALHA_ALTA_COLUNA_AUSENTE_*` ficam em `false`
 
 `false` não é "desligado por preguiça": é o estado de sombra, e ele **já
 protege**. Com coluna ausente detectada, o run alerta e **não escreve** — a
@@ -88,6 +89,12 @@ lançamento de professor é irreversível e não escrever é atraso.
 
 `true` faz o run abortar com exceção. A diferença é entre "não escrevi e
 avisei" e "quebrei o job". Só ligar depois de §4.
+
+**São duas flags, e não uma, porque os relógios de observação são de ordens
+diferentes**: `FREQ_SYNC_CRON` roda 1×/dia e `NOTA_SYNC_CRON` 34×/dia. Sete
+observações levam sete dias na frequência e cinco horas nas notas. Um
+interruptor único obrigaria a ligar a frequência cedo demais ou a segurar as
+notas por uma semana sem motivo.
 
 ---
 
@@ -141,7 +148,9 @@ O relógio começa no **primeiro cron de frequência pós-deploy**, não agora.
 coluna ausente.** Sete dias cobrem uma cópia de base típica, que é o evento
 que o item existe para pegar.
 
-Linha de base medida contra o RM real em 29/09, antes do deploy:
+Linhas de base medidas contra o RM real, antes do deploy:
+
+**Frequência (29/09):**
 
 | medida | valor |
 |---|---|
@@ -150,6 +159,23 @@ Linha de base medida contra o RM real em 29/09, antes do deploy:
 | chaves com segmento vazio (810 + 223 faltas, duas janelas) | 0 |
 | `semChave` | 0 |
 | drift simulado (removendo `ID_TURMADISC`) | detectado |
+
+**Notas (30/09):**
+
+| medida | valor |
+|---|---|
+| result set da `TODDLE.NOTAS` | **11.890 linhas**, 23 colunas |
+| colunas da chave ausentes | 0 |
+| linhas sem `RA` / `ID_TURMADISC` / `CODETAPA` | 0 / 0 / 0 |
+| chaves únicas para 11.890 linhas | **11.890 — zero colisões** |
+| drift simulado (removendo `CODETAPA`) | detectado |
+
+> O comentário do código estimava "~7 mil linhas" para a `TODDLE.NOTAS`. São
+> **11.890**. O número importa para o custo do canário na camada de execução.
+
+**Os dois relógios são independentes.** O de notas começa no primeiro cron de
+notas pós-deploy; o de frequência, no primeiro cron de frequência. Não
+unificar os critérios sem decidir.
 
 **Ativar é decisão humana**, não automática. E ativar **reabre junto** a decisão
 do canário ser alerta-apenas — as duas andam juntas, e o gatilho está

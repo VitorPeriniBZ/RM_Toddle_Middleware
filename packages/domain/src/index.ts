@@ -33,5 +33,6 @@ export * from './chaveCourse';
 export * from './notaCanonica';
 export * from './resolvedorCourse';
 export * from './rmWriteDecision';
+export * from './colunasDaChave';
 export * from './sinalDeCruzamento';
 export * from './volumeGuard';

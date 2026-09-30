@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { alertar, env, logger, rmSoapConfigurado, tenantConfig } from '@rm-toddle/config';
 import { wsConsultaSqlClient, type ConsultaRow } from '@rm-toddle/integrations';
 import { chaveNaturalRm } from './attendanceProjection';
+import { colunasAusentesNoResultSet, explicarColunasAusentes } from './colunasDaChave';
 import type { EstadoNoRm } from './rmWriteDecision';
 
 /**
@@ -125,7 +126,7 @@ function classificaAutor(autor: string | undefined): { integracao: boolean; hash
 }
 
 /**
- * ─── AS COLUNAS SEM AS QUAIS A CHAVE NÃO EXISTE ─────────────────────────────
+ * As colunas sem as quais a chave da FREQUÊNCIA não existe.
  *
  * Não é a lista de tudo que a Sentença devolve: é só o que compõe a chave
  * natural, que é onde a ausência causa dano silencioso. Uma `JUSTIFICATIVA`
@@ -142,52 +143,15 @@ const COLUNAS_DA_CHAVE: ReadonlyArray<readonly string[]> = [
 ];
 
 /**
- * Quais colunas da chave NÃO existem no result set.
+ * Quais colunas da chave da frequência não existem no result set.
  *
- * ─── COLUNA AUSENTE NÃO É VALOR VAZIO, E CONFUNDIR AS DUAS FOI O DEFEITO ────
- *
- * O `?? ''` tratava as duas do mesmo jeito, e elas pedem reações opostas:
- *
- *   coluna ausente do RESULT SET  a Sentença mudou. Vale para TODAS as linhas.
- *                                 É drift, e o run inteiro está comprometido.
- *   valor vazio numa LINHA        aquele registro é que está incompleto. Vale
- *                                 para uma linha. Descarta-se a linha, como já
- *                                 se faz com `DATA` ilegível.
- *
- * A distinção é observável: olha-se as CHAVES do objeto de linha, não os
- * valores. Uma coluna que existe e vem nula continua existindo.
- *
- * Pura, e recebe as linhas já lidas — dá para testar sem RM.
+ * A lógica mora em `colunasDaChave.ts` e é COMPARTILHADA com o leitor de
+ * notas: duas cópias de uma regra sutil divergem no dia em que alguém melhora
+ * uma delas, que é o mesmo motivo de `chaveNaturalDeFalta` chamar
+ * `chaveNaturalRm` em vez de reimplementá-la.
  */
 export function colunasDaChaveAusentes(rows: readonly ConsultaRow[]): string[] {
-  // Sem linha nenhuma não há result set para inspecionar, e "janela sem aula" é
-  // estado legítimo. Acusar drift aqui seria alarme por fim de semana.
-  if (rows.length === 0) return [];
-
-  /*
-   * ─── A UNIÃO DE TODAS AS LINHAS, E NÃO A PRIMEIRA ────────────────────────
-   *
-   * A versão anterior olhava só `rows[0]`, supondo que o result set tem schema
-   * fixo. Não tem, neste transporte: o dataset chega como XML no formato
-   * `<NewDataSet><Resultado>…`, e a serialização do .NET OMITE o elemento
-   * quando o valor é DBNull. Uma linha com `ID_TURMADISC` nulo simplesmente
-   * não traz a tag — e `linhasDoDataset.test.ts:31` já documenta um
-   * `<Resultado>` com um campo só.
-   *
-   * Com amostra de uma linha, dois erros simétricos:
-   *   coluna nula na linha 0 e presente no resto  -> acusa drift que não existe
-   *                                                  (em ESTRITO, aborta o run)
-   *   coluna presente na 0 e nula na 400          -> não acusa drift que existe
-   *
-   * A união custa 698 × 23 iterações na janela medida — ruído de perfil, não de
-   * relógio. Uma coluna só é "ausente" quando falta em TODAS as linhas, que é a
-   * assinatura de a Sentença ter deixado de declará-la.
-   */
-  const presentes = new Set<string>();
-  for (const row of rows) for (const k of Object.keys(row)) presentes.add(k.toLowerCase());
-  return COLUNAS_DA_CHAVE.filter(
-    (variantes) => !variantes.some((v) => presentes.has(v.toLowerCase())),
-  ).map((variantes) => variantes[0]);
+  return colunasAusentesNoResultSet(rows, COLUNAS_DA_CHAVE);
 }
 
 /**
@@ -244,15 +208,12 @@ export async function fetchFrequenciaFromRm(
    */
   const ausentes = colunasDaChaveAusentes(rows);
   if (ausentes.length > 0) {
-    const estrito = env.FALHA_ALTA_EM_COLUNA_AUSENTE === 'true';
-    const explicacao =
-      `A Sentença ${cfg.rm.sentencas.frequencia} devolveu um result set SEM as colunas ` +
-      `${ausentes.join(', ')}, que compõem a chave natural. Sem elas a chave sai com ` +
-      `segmento vazio, não casa com nada, TUDO vira ESCREVER_NOVO e a proteção contra ` +
-      `sobrescrever lançamento de professor fica desligada — sem erro e sem DLQ. ` +
-      `Causa provável: cópia de base apagou a Sentença e o restauro automático recolocou ` +
-      `uma versão do repositório mais antiga que a que estava no RM. Confira com ` +
-      `\`npm run canario -- --executar\`.`;
+    const estrito = env.FALHA_ALTA_COLUNA_AUSENTE_FREQUENCIA === 'true';
+    const explicacao = explicarColunasAusentes({
+      fluxo: 'frequência',
+      sentenca: cfg.rm.sentencas.frequencia ?? '(sem código)',
+      ausentes,
+    });
 
     logger.error({ ausentes, estrito, sentenca: cfg.rm.sentencas.frequencia }, explicacao);
     await alertar({

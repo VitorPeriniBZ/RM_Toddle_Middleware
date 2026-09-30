@@ -2,6 +2,45 @@
 
 Base: `docs/AUDITORIA.md` (FASE 1).
 
+## Mapa do padrão `?? ''` no projeto — levantado no P1-A (30/09)
+
+O registrado era "o leitor de notas não foi auditado". A varredura mostrou que
+o padrão aparece em **38 lugares** no `packages/domain`, e que a maioria é
+inofensiva. O que separa o inofensivo do perigoso é uma pergunta só:
+**o valor alimenta a chave natural de um caminho que escreve no RM?**
+
+O RM é o registro acadêmico oficial. Escrita lá é irreversível — a proveniência
+só guarda o que NÓS criamos, então o valor do professor não tem backup.
+Escrita no Toddle é recuperável: o RM continua sendo a fonte.
+
+| fonte | `?? ''` | alimenta a chave? | destino da escrita | risco | estado |
+|---|---:|---|---|---|---|
+| `rmAttendanceSource` | 6 | **SIM** (`idTurmaDisc`, `idHorarioTurma`) | **RM** (falta no diário) | **irreversível** | **corrigido no P0-6** |
+| `rmGradeSource` | 7 | **SIM** (`codEtapa`) | **RM** (nota no boletim) | **irreversível** | **corrigido no P1-A** |
+| `rmTeacherSource` | 10 | não — rótulos de turma, disciplina, segmento, nome | Toddle | baixo | follow-up |
+| `rmGuardianSource` | 2 | não — nome do aluno, parentesco | Toddle | baixo | follow-up |
+| `rmAssessmentTargets` | 1 | não — `descricao` da avaliação | RM (via `sincronizarAvaliacoes`) | **a verificar** | follow-up |
+| `rmGradeTargets` | 1 | não — dentro do helper `ehSim` | — | nenhum | ok |
+| `rmWriteDecision` | 1 | não — normalização dentro de `hashValor` | — | nenhum, é correto |
+
+### Follow-ups, por classe de risco
+
+1. **`rmAssessmentTargets` / `sincronizarAvaliacoes`** — é o TERCEIRO caminho
+   que chama `wsDataServerClient`, junto com frequência e notas. A única
+   ocorrência é `descricao`, que não parece compor chave, mas o arquivo **não
+   foi auditado** com o mesmo rigor. `sincronizarAvaliacoes` também passa
+   `linhasSemChave` implícito e usa `alvos.notasPorChave`, cuja origem está
+   fora do escopo do leitor. **Prioridade: alta** — mesmo destino de escrita.
+2. **`reconciliarTurmas`** — quarto caminho que escreve no RM, não varrido
+   aqui. **Prioridade: média.**
+3. **`rmTeacherSource` e `rmGuardianSource`** — escrita no Toddle, recuperável.
+   As 12 ocorrências são rótulos; um rótulo vazio empobrece a tela, não destrói
+   registro. **Prioridade: baixa.**
+
+Nenhum deles entrou neste PR, por decisão de escopo: o P1-A conserta notas.
+
+---
+
 ## Consolidação em `main` — 30/09/2026
 
 **O bloco P0 + o hotfix P1-0 estão em `main` e no remoto. NÃO estão em
@@ -187,7 +226,7 @@ A última coluna é obrigatória em P0 e P1.
 | **P0-3** | **`/health/ready` NOVO, com 503 por dependência fora.** `/health` PERMANECE sempre 200 (liveness) e o healthcheck do Coolify não muda — ver "decisões negadas" §4.5. `limitado` não derruba prontidão. Cada checagem corre contra um prazo de 3s. | Alto | S | P0 | **Não é mais o reinício do container** (ver §4.5): a detecção é (a) alerta pelo canal do P0-2, com assunto estável e janela de 30 min, e (b) `/health/ready` devolvendo 503 para um monitor externo. Verificação feita: API no ar com Postgres e Toddle inalcançáveis → `/health` 200, `/health/ready` 503 em 3ms, um único alerta. |
 | **P0-4** | **Canário de Sentenças — AGENDAR o que já existe.** A exploração derrubou as premissas do item: `conferir()` já faz as três camadas (corpo vs `.sql` caractere a caractere, execução com `colunasAusentes`, volume), o manifesto já existe, e `INFORMATION_SCHEMA` é a ferramenta errada (Sentença é query salva, não tabela). Faltava só agendar e alertar. **M → S.** Cadência: corpo de hora em hora, execução 1×/dia — ver abaixo. | Crítico | ~~M~~ **S** | P0 | É ele próprio um detector, e o **único que avisa antes** de um run começar a processar. Que ele quebrou se detecta pelo alerta sintético do P0-2 e por `npm run canario` (saída 0 confere / 1 divergente / 2 não verificada). |
 | **P0-5** | **Sinal de cruzamento.** NÃO virou limiar de porcentagem: numa primeira execução 100% de `ESCREVER_NOVO` é o certo, e um limiar confundiria "primeira vez" com "a trava desligou". O discriminador é a CONTRADIÇÃO — "o RM tem N linhas e ZERO casou" — mais um segundo sinal aritmético e independente: linhas lidas vs chaves únicas (colisão faz linha sumir do índice sem mexer na distribuição). Ligado em frequência e notas. | Crítico | S | P0 | É ele próprio o detector, e é o único que pega o modo de falha **original**: a proteção desligando sem exceção, sem DLQ e com o relatório bonito. A distribuição vai para o log em TODA passada, suspeita ou não — é o que constrói a baseline que hoje não existe. |
-| **P0-6** | **Trocar o `?? ''` por falha alta**, no **leitor**. A execução separou o que o `?? ''` confundia: **coluna ausente do result set** (drift da Sentença, vale para todas as linhas → detectada UMA vez antes do laço, aborta o run) × **valor vazio numa linha** (registro incompleto → descarta a linha, como `DATA` ilegível já fazia). Flag `FALHA_ALTA_EM_COLUNA_AUSENTE`, default `false` = **sombra**. | Crítico | M | P0 | Em sombra: `error` no log + alerta com assunto estável, e o run segue. Em estrito: run abortado com a coluna nomeada → job vermelho → DLQ → webhook. **Medido no result set real (29/09): 698 linhas, 23 colunas, nenhuma coluna da chave ausente — a sombra está silenciosa hoje.** |
+| **P0-6** | **Trocar o `?? ''` por falha alta**, no **leitor**. A execução separou o que o `?? ''` confundia: **coluna ausente do result set** (drift da Sentença, vale para todas as linhas → detectada UMA vez antes do laço, aborta o run) × **valor vazio numa linha** (registro incompleto → descarta a linha, como `DATA` ilegível já fazia). Flag `FALHA_ALTA_COLUNA_AUSENTE_FREQUENCIA` (renomeada no P1-A, quando notas ganhou a sua), default `false` = **sombra**. | Crítico | M | P0 | Em sombra: `error` no log + alerta com assunto estável, e o run segue. Em estrito: run abortado com a coluna nomeada → job vermelho → DLQ → webhook. **Medido no result set real (29/09): 698 linhas, 23 colunas, nenhuma coluna da chave ausente — a sombra está silenciosa hoje.** |
 
 ### P1 — as barreiras que faltam
 
@@ -355,7 +394,8 @@ registrada com o gatilho para não virar permanente por esquecimento.
 
 ### Estado da sombra do P0-6 (29/09)
 
-`FALHA_ALTA_EM_COLUNA_AUSENTE=false`. **O estrito NÃO foi ativado.**
+`FALHA_ALTA_COLUNA_AUSENTE_FREQUENCIA=false` e `FALHA_ALTA_COLUNA_AUSENTE_NOTAS=false`.
+**Nenhum dos dois estritos foi ativado, e os relógios são independentes.**
 
 Linha de base medida contra o RM real, no mesmo dia:
 

@@ -330,7 +330,26 @@ const envSchema = z.object({
    * `true` = ESTRITO: o run aborta INTEIRO, antes de qualquer veredito. Ligar
    * só depois de um período de sombra limpo.
    */
-  FALHA_ALTA_EM_COLUNA_AUSENTE: z.enum(['true', 'false']).default('false'),
+  FALHA_ALTA_COLUNA_AUSENTE_FREQUENCIA: z.enum(['true', 'false']).default('false'),
+
+  /*
+   * ─── NOTAS TEM FLAG PRÓPRIA, E ISSO NÃO É SIMETRIA DECORATIVA ────────────
+   *
+   * O critério de ativação é "N observações do cron sem alerta". As cadências
+   * são de ordens diferentes:
+   *
+   *   FREQ_SYNC_CRON   `0 23 * * *`          1 observação por dia
+   *   NOTA_SYNC_CRON   `15,45 6-22 * * *`    34 observações por dia
+   *
+   * Sete observações levam SETE DIAS na frequência e CINCO HORAS nas notas.
+   * Um interruptor único obrigaria a escolher entre ligar a frequência cedo
+   * demais ou segurar as notas por uma semana sem motivo — e as duas opções
+   * fazem um dos relógios mentir sobre o que foi observado.
+   *
+   * Domínios de risco diferentes, com evidências acumuladas em ritmos
+   * diferentes, merecem interruptores diferentes.
+   */
+  FALHA_ALTA_COLUNA_AUSENTE_NOTAS: z.enum(['true', 'false']).default('false'),
 
   CANARIO_RELEITURA_MS: z.coerce.number().int().min(300_000).default(3_600_000),
   CANARIO_EXECUCAO_MS: z.coerce.number().int().min(3_600_000).default(86_400_000),
