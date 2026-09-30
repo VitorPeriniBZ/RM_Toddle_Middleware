@@ -427,3 +427,72 @@ Nenhum depende de Postgres. Todos entram no CI que já existe.
 8. **P2** — frontend: estados de erro/carregando faltantes, media queries, `aria-*`.
 9. **P3** — arquivar scripts one-off.
 10. **Removido do plano** — migração de CSRF (seção 7).
+
+---
+
+## 9. A classe do acesso indexado cru — mapeada no P1-C (30/09)
+
+### O mapa das 8 chaves inline nos caminhos de escrita
+
+| # | local | papel | risco |
+|---|---|---|---|
+| 1 | `rmAssessmentTargets:102` | **produtor** — `row.IDTURMADISC` cru + `String(row.CODETAPA)` | **classe (a)** — falha ABERTA |
+| 2 | `rmGradeTargets:87` | **produtor** — `` `${idTurmaDisc}|${row.CODETAPA}` `` cru | fail-safe **por acidente** |
+| 3 | `rmAssessmentTargets:167` | consumidor (`provasDe`) | — |
+| 4 | `rmGradeTargets:119` | consumidor | — |
+| 5 | `gradeProjection:322` | consumidor do índice de (2) | — |
+| 6 | `provaXml:150` | produtor a partir de dado já projetado | baixo |
+| 7-8 | `sincronizarAvaliacoes:619,642` | produtores a partir de dado já projetado | baixo |
+
+As duas produtoras cruas foram consertadas. As seis restantes recebem dado já
+tipado ou são consumidoras.
+
+### O REGISTRO CENTRAL: o consumidor do miss é o elo que ninguém auditou
+
+Duas chaves, **mesma classe de defeito**, **consequências opostas** — e a
+diferença nunca esteve escrita em lugar nenhum:
+
+| | mecanismo | desfecho |
+|---|---|---|
+| **falha ABERTA** | `provasPorEtapa.get(chave) ?? []` | lista vazia → `proximoCodProva` volta 1 → guarda anti-duplicata vazia → o sistema **CRIA** uma avaliação que já existe, com `CODPROVA` colidindo |
+| **fail-safe** | `ctx.etapasRm.get(chave)` sem default | `gradeProjection` recusa com `ETAPA_NAO_GRAVAVEL` → a nota não é escrita |
+
+O segundo é fail-safe **por acidente**, não por projeto. É propriedade que
+morre no dia em que um consumidor novo escrever `?? algumPadrão`.
+
+`map.get(...) ?? []` passa a ter estatuto de **token de busca**, ao lado de
+`?? ''` e `String(indexado)`. A varredura foi feita: só duas ocorrências no
+repositório, e a segunda (`reconciliarTurmas:152`) é `(get ?? 0) + 1`, o idioma
+correto de acumulador.
+
+### Perfil de irreversibilidade distinto: a avaliação fantasma
+
+Os três caminhos fechados até aqui tinham o mesmo dano — **sobrescrever** valor
+lançado por professor. A chave da prova tem outro:
+
+O sistema não altera um valor: ele **cria um registro novo** no acadêmico, uma
+avaliação com `CODPROVA` colidindo com uma existente. Remover avaliação no RM é
+operação manual e dolorosa; e enquanto ela existir, a média da etapa é composta
+com uma prova que ninguém lançou.
+
+### Por que a auditoria manual errou a fronteira, e o typecheck acertou
+
+O mapa do P1-A varreu o token `?? ''` e achou 38 ocorrências. A chave da prova
+não tem token: é um template literal montado inline, 15 linhas acima do ponto
+que eu auditei, sem nome.
+
+Ligar `noUncheckedIndexedAccess` — mesmo sem manter a flag — produziu a lista
+que a leitura não produziria. **A lição não é "chaves são mais numerosas que as
+nomeadas"** (foi a minha primeira formulação, e ela é vaga): é que
+**consumidores de miss são o elo não auditado**, e que um detector mecânico
+encontra o que a varredura por token não alcança.
+
+### O que a flag NÃO pegaria
+
+Medido: `noUncheckedIndexedAccess` dá 253 erros no repositório — e **nenhum dos
+dois defeitos reais está entre eles**. `String(row.CODETAPA)` compila sob a
+flag (`String` aceita `undefined`), e interpolar em template literal também.
+
+A flag é higiene de tipos e profundidade FORA da classe que causou dano. O
+detector DA classe é a regra de lint. Ver a decisão de orçamento em
+`docs/PLANO.md`.

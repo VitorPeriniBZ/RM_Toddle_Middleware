@@ -1,4 +1,5 @@
 import { logger, tenantConfig } from '@rm-toddle/config';
+import { chaveComposta } from './chaveComposta';
 import { wsDataServerClient } from '@rm-toddle/integrations';
 import type { EtapaNotaRm } from './gradeProjection';
 
@@ -84,9 +85,25 @@ export class RmGradeTargets {
           continue;
         }
 
-        etapas.set(`${idTurmaDisc}|${row.CODETAPA}`, {
+        /*
+         * A chave usava `row.CODETAPA` CRU enquanto o corpo do objeto, três
+         * linhas abaixo, já fazia `String(row.CODETAPA)`. Campo ausente
+         * produzia "undefined" na chave.
+         *
+         * Hoje este caminho é fail-safe: o consumidor é
+         * `ctx.etapasRm.get(...)` SEM default, e `gradeProjection` recusa com
+         * ETAPA_NAO_GRAVAVEL — a nota não é escrita. A rede está congelada em
+         * `gradeProjection.test.ts` ("etapasRm vazio -> ETAPA_NAO_GRAVAVEL").
+         *
+         * Mas isso é fail-safe POR ACIDENTE, não por projeto: basta um
+         * consumidor futuro escrever `?? algoPadrão` para a mesma chave
+         * degradada virar falha ABERTA, como já é no índice de provas. A
+         * guarda tira a propriedade da sorte e a põe no produtor.
+         */
+        etapas.set(chaveComposta('etapasDeNota', { idTurmaDisc, codEtapa: row.CODETAPA }), {
           idTurmaDisc,
-          codEtapa: String(row.CODETAPA),
+          // Cru: a validação é de `chaveComposta`, na linha da chave acima.
+          codEtapa: row.CODETAPA,
           dtInicio,
           dtFim,
           permiteDigitacao: true,
@@ -116,7 +133,8 @@ export class RmGradeTargets {
 
   /** O `AULASDADAS` que o RM já tem, para ecoar se o SaveRecord exigir. */
   aulasDadasDe(idTurmaDisc: string, codEtapa: string): string | null {
-    return this.etapas.get(`${idTurmaDisc}|${codEtapa}`)?.aulasDadas ?? null;
+    // Mesma função do produtor, pelo mesmo motivo de `provasDe`.
+    return this.etapas.get(chaveComposta('etapasDeNota', { idTurmaDisc, codEtapa }))?.aulasDadas ?? null;
   }
 
   /** Vigências distintas encontradas, para o relatório do ensaio. */
