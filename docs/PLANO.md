@@ -2,6 +2,51 @@
 
 Base: `docs/AUDITORIA.md` (FASE 1).
 
+## Consolidação em `main` — 30/09/2026
+
+**O bloco P0 + o hotfix P1-0 estão em `main` e no remoto. NÃO estão em
+produção** — o deploy é manual. Ver `docs/DEPLOY.md`.
+
+### Topologia encontrada, antes de alterá-la
+
+As sete branches eram uma **cadeia linear**: cada uma foi criada sobre a ponta
+da anterior, não a partir de `main`. Verificado com `git merge-base
+--is-ancestor` em todos os sete pares consecutivos.
+
+```
+827c2ac (main)  →  p0-1  →  p0-2  →  p0-3  →  p0-4  →  p0-5  →  p0-6  →  p1-0
+                                                                        16 commits
+                                                                        0 merges
+```
+
+Consequência: **não houve integração divergente**. Os `--no-ff` existem para
+marcar a fronteira de cada item no histórico de `main`, não para combinar
+trabalhos paralelos — e por isso não houve conflito nenhum para resolver.
+
+### Estado integrado verificado em `main`, não por branch
+
+| verificação | resultado |
+|---|---|
+| `npm run typecheck` | limpo |
+| `npm test` | **510 verdes**, 32 arquivos |
+| `npm run checar:config` | passa |
+| `npm run alerta:testar` | saída 1 — sem canal é estado declarado, não defeito |
+| `npm run canario` | saída 0, as seis Sentenças conferem (contra o RM real) |
+| `/health` com dependências fora | **200** em 3ms |
+| `/health/ready` com dependências fora | **503** em 6ms, corpo por dependência |
+
+Nenhuma migration foi adicionada: o schema não mudou, e o rollback é só de
+código (`827c2ac`).
+
+### A sombra do P0-6 ainda NÃO começou a contar
+
+O relógio parte do **primeiro cron de frequência (23h) pós-deploy**, que roda
+no WORKER. Merge não é deploy. Critério de ativação do estrito inalterado: 7
+observações limpas **+ decisão humana** — e ativar reabre junto a revisão do
+alerta-apenas do canário.
+
+---
+
 ## Progresso da execução (FASE 3)
 
 | Item | Estado | Commits |

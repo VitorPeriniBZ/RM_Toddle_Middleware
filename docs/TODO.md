@@ -74,6 +74,22 @@ boletim e no histórico. Vale o mesmo tratamento.
 
 ---
 
+## 0.3 Pendências do humano, em ordem de urgência (30/09)
+
+O bloco P0 está em `main` e no remoto. Nada disso roda até o deploy.
+
+| # | o quê | por que agora | quem |
+|---|---|---|---|
+| 1 | **`ALERTA_WEBHOOK_URL` no Coolify, ANTES do deploy** | subir o código novo sem canal põe um sistema que sabe gritar onde ninguém escuta. `ntfy.sh/<tópico-aleatório>` basta | humano |
+| 2 | **Deploy manual de API e worker** | o cron que conta a sombra do P0-6 roda no WORKER; só API não inicia o relógio. Ver `docs/DEPLOY.md` | humano |
+| 3 | **Matar o launchd local** | ~1 GB/dia contra um Redis morto desde 16/09. Independente do deploy | humano |
+| 4 | **Responder: desktop de secretaria ou uso móvel?** | decide o tamanho do P1-G. Zero media queries hoje; se o uso é desktop, o item encolhe para três correções pontuais | humano |
+| 5 | **`HEARTBEAT_URL_*` (as quatro)** | cobrem o processo MORTO. O webhook sozinho já cobre os dois modos com o processo vivo | humano |
+| 6 | **Chave do `gemini` no conselho** | falhou em 5 consultas seguidas; o conselho segue com 2-3 de 4 | humano |
+| 7 | **Janela de bloqueio do RM** | quantas tentativas, em que janela. Vira documentação no RUNBOOK (P2-2), não bloqueia nada — o P1-0 já é seguro em qualquer hipótese | humano |
+
+---
+
 ## 1. Criar os canais de aviso — BLOQUEIA a conclusão do P0-2
 
 **Dono: humano. O código está pronto; faltam as contas.**
