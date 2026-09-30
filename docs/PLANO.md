@@ -23,21 +23,75 @@ Escrita no Toddle é recuperável: o RM continua sendo a fonte.
 | `rmGradeTargets` | 1 | não — dentro do helper `ehSim` | — | nenhum | ok |
 | `rmWriteDecision` | 1 | não — normalização dentro de `hashValor` | — | nenhum, é correto |
 
+### Correção do mapa, feita no P1-B (30/09)
+
+Duas linhas da tabela acima estavam erradas, e a verificação as derrubou:
+
+**`reconciliarTurmas` NÃO escreve no RM.** Eu o listei como caminho de escrita
+por ele *importar* `wsDataServerClient`. Tem **zero** `saveRecord`: usa só
+`readView`, e o próprio cabeçalho do arquivo explica por quê — *"detectar a
+deriva, não corrigi-la"*, porque o Toddle não tem DELETE de turma e uma turma
+criada por engano não se desfaz. O `String(r.CODTURMA ?? '')` dele alimenta
+`chaveCourse`, que **já lança** em segmento vazio, com mensagem nomeando o
+campo e 13 testes. Nada a consertar.
+
+**São TRÊS caminhos de escrita irreversível, não quatro:**
+
+| caminho | DataServer | estado |
+|---|---|---|
+| `sincronizarFrequencia` | `EduFrequenciaDiariaWSData` | fechado no P0-6 |
+| `sincronizarNotas` | `EduNotasData` | fechado no P1-A |
+| `sincronizarAvaliacoes` | `EduProvasData` + `EduNotasData` | **fechado no P1-B** |
+
+### `sincronizarAvaliacoes` — um `?? ''` pior que o `?? ''`
+
+A ocorrência que o mapa marcava como "risco a verificar" era `DESCRICAO`, um
+rótulo. Mas a auditoria achou outra coisa, mais grave e de outra família.
+
+Este caminho monta a chave a partir de `readView`, cujo tipo é
+`DataServerRow = Record<string, string>`. Sem `noUncheckedIndexedAccess` — que
+este projeto não liga —, o índice **mente**: o TypeScript promete `string` até
+para chave inexistente. Em runtime, `String(row.CODETAPA)` de um campo ausente
+devolve **`"undefined"`**.
+
+Pior que `''` por um motivo específico: `1|undefined|1|N|1714|RA` tem cara de
+chave válida num log, e qualquer guarda de "está vazio?" a deixa passar.
+
+**Consertado com `throw`, sem flag nem sombra — e a diferença é justificada:**
+os outros dois ganharam período de sombra porque o gatilho é recorrente (a
+Sentença some a cada cópia de base). Aqui **não há Sentença**: o schema do
+DataServer é do produto TOTVS. E foi medido — 245 linhas de `SProvas`, 3.507 de
+`SNotas`, **zero** componentes ausentes ou vazios. Sombra existe para reunir
+evidência; aqui ela já está reunida.
+
+`chaveCourse` já lançava assim desde antes. Seguir um padrão existente vale
+mais que inventar um terceiro.
+
+### O terceiro caminho ganhou o sinal que o P0-5 deixou de fora
+
+`avaliarCruzamento` estava em frequência e notas. Avaliações ficou sem, com a
+justificativa de que `alvos.notasPorChave` tinha origem fora daquele escopo. A
+origem foi auditada aqui, então o caminho que escreve em `EduProvasData` e
+`EduNotasData` deixou de ser o único sem checagem cruzada — e ganhou também a
+trava `naoEscreveu: 'cruzamento-suspeito'`.
+
 ### Follow-ups, por classe de risco
 
-1. **`rmAssessmentTargets` / `sincronizarAvaliacoes`** — é o TERCEIRO caminho
-   que chama `wsDataServerClient`, junto com frequência e notas. A única
-   ocorrência é `descricao`, que não parece compor chave, mas o arquivo **não
-   foi auditado** com o mesmo rigor. `sincronizarAvaliacoes` também passa
-   `linhasSemChave` implícito e usa `alvos.notasPorChave`, cuja origem está
-   fora do escopo do leitor. **Prioridade: alta** — mesmo destino de escrita.
-2. **`reconciliarTurmas`** — quarto caminho que escreve no RM, não varrido
-   aqui. **Prioridade: média.**
+1. ~~`rmAssessmentTargets` / `sincronizarAvaliacoes`~~ — **fechado no P1-B.**
+2. ~~`reconciliarTurmas`~~ — **não é caminho de escrita.** Verificado: zero
+   `saveRecord`, e `chaveCourse` já lança em segmento vazio.
 3. **`rmTeacherSource` e `rmGuardianSource`** — escrita no Toddle, recuperável.
    As 12 ocorrências são rótulos; um rótulo vazio empobrece a tela, não destrói
-   registro. **Prioridade: baixa.**
+   registro. **Prioridade: baixa, e é a única que resta.**
+4. **`noUncheckedIndexedAccess` desligado no `tsconfig.json`** — achado do
+   P1-B. É a causa-raiz do `String(undefined)`: o índice de
+   `Record<string, string>` promete `string` para chave que não existe. Ligá-lo
+   acharia a classe inteira de uma vez, em vez de caso a caso. **Custo: alto** —
+   35 mil linhas, e o compilador passaria a exigir guarda em todo acesso
+   indexado. Item próprio, não follow-up deste.
 
-Nenhum deles entrou neste PR, por decisão de escopo: o P1-A conserta notas.
+**Os três caminhos de escrita irreversível estão fechados.** O que resta é de
+classe de risco menor.
 
 ---
 
