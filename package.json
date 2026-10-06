@@ -64,6 +64,8 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/rate-limit": "^11.2.0",
     "@types/mssql": "^9.1.5",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
