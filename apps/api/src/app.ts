@@ -1,5 +1,13 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
+import {
+  LIMITE_GLOBAL,
+  SALTOS_CONFIAVEIS,
+  isentaDeLimite,
+  limiteParaRota,
+} from './limitesDaApi';
 import cookie from '@fastify/cookie';
 import {
   alertar,
@@ -241,7 +249,23 @@ async function prontidaoComCache(): Promise<Prontidao> {
 }
 
 export function construirApp() {
-  const app = Fastify({ loggerInstance: logger });
+  const app = Fastify({
+    loggerInstance: logger,
+    /*
+     * ─── UM SALTO, E NUNCA `true` ──────────────────────────────────────────
+     *
+     * `true` faria o `req.ip` sair da entrada MAIS À ESQUERDA do
+     * `X-Forwarded-For` — que é controlada por quem chama, porque os dois
+     * proxies da frente ANEXAM em vez de substituir. Ver o cabeçalho de
+     * `limitesDaApi.ts`: com `true`, forjar o XFF de outra pessoa esgotaria a
+     * cota DELA.
+     *
+     * `1` confia só no nginx, o único par direto desta API e o único salto que
+     * este repositório controla. Faz `X-Forwarded-Proto` funcionar (sem ele a
+     * API se vê como `http`) e deixa o `req.ip` constante e não forjável.
+     */
+    trustProxy: SALTOS_CONFIAVEIS,
+  });
 
   /*
    * CORS por ALLOWLIST, nunca "*". A UI roda em outra origem (Vite na 5173) e
@@ -257,6 +281,86 @@ export function construirApp() {
   // O cookie de sessão precisa ser lido em toda requisição (`autenticar`) e
   // escrito no login. Registrado ANTES do hook de autenticação.
   void app.register(cookie);
+
+  /*
+   * `helmet` com os defaults, e uma exceção deliberada: `contentSecurityPolicy`
+   * fica DESLIGADA aqui porque esta aplicação **não serve HTML** — ela é só
+   * JSON, e quem serve a tela é o nginx do `web`. Uma CSP numa API JSON não
+   * protege nada e só produz header morto; a CSP que importa é a do `web`, e
+   * ela é item próprio.
+   *
+   * O resto entra: `nosniff`, `frameguard`, `hsts`, `referrerPolicy`. Nenhum
+   * deles conflita com o CORS por allowlist nem com o cookie de sessão — e a
+   * allowlist NÃO pode regredir, é o que impede qualquer site de usar a sessão
+   * de quem está logado.
+   */
+  void app.register(helmet, {
+    contentSecurityPolicy: false,
+    /*
+     * ─── CORP DESLIGADA, E ISTO NÃO É AFROUXAR ────────────────────────────
+     *
+     * O default do helmet é `cross-origin-resource-policy: same-origin`, e ele
+     * quebraria o desenvolvimento: a UI roda no Vite, em `localhost:5173`, e a
+     * API em `3333` — origens DIFERENTES. Em produção as duas são a mesma
+     * origem (o nginx serve `/api` no mesmo domínio), então o header não
+     * protegeria nada lá e só derrubaria o fluxo aqui.
+     *
+     * Quem controla quem pode ler esta API é o CORS por allowlist, logo
+     * abaixo, com `credentials: true`. Essa allowlist é a proteção e NÃO pode
+     * regredir — CORP seria uma segunda tranca na porta errada.
+     */
+    crossOriginResourcePolicy: false,
+  });
+
+  /*
+   * ─── O LIMITADOR, E POR QUE O BALDE É ÚNICO ───────────────────────────────
+   *
+   * `keyGenerator` devolve uma constante de propósito. O `req.ip`, mesmo com
+   * `trustProxy: 1`, é o IP do proxy interno — igual para todo mundo. Deixar o
+   * default (que usa `req.ip`) daria o mesmo resultado por acidente; escrever a
+   * constante deixa a decisão VISÍVEL, e é ela que impede alguém de "melhorar"
+   * para `req.ip` achando que isso separa clientes. Não separa, e no dia em que
+   * o XFF for confiado separaria errado.
+   *
+   * O teto por rota vem de `limitesDaApi.ts`, aplicado no `onRoute` abaixo.
+   */
+  void app.register(rateLimit, {
+    global: true,
+    max: LIMITE_GLOBAL.max,
+    timeWindow: LIMITE_GLOBAL.timeWindow,
+    keyGenerator: () => 'global',
+    // O corpo do 429 diz o que fazer, não só que falhou.
+    errorResponseBuilder: (_req, ctx) => ({
+      statusCode: 429,
+      error: 'Too Many Requests',
+      message:
+        `Limite de ${ctx.max} chamadas por janela atingido. Tente de novo em ` +
+        `${Math.ceil(ctx.ttl / 1000)}s. Este limite é GLOBAL, não por usuário — ` +
+        'ver docs/RUNBOOK.md §4.1.',
+    }),
+  });
+
+  /*
+   * Teto próprio por rota, decidido em UM lugar.
+   *
+   * Via `onRoute` e não espalhado pelos arquivos de rota: política de limite
+   * que mora junto de cada handler é política que diverge — e aqui ela precisa
+   * ser lida inteira para fazer sentido (qual rota custa o quê).
+   */
+  app.addHook('onRoute', (opcoes) => {
+    const metodos = Array.isArray(opcoes.method) ? opcoes.method : [opcoes.method];
+    if (isentaDeLimite(opcoes.url)) {
+      opcoes.config = { ...opcoes.config, rateLimit: false };
+      return;
+    }
+    for (const metodo of metodos) {
+      const limite = limiteParaRota(metodo, opcoes.url);
+      if (limite) {
+        opcoes.config = { ...opcoes.config, rateLimit: limite };
+        return;
+      }
+    }
+  });
 
   void app.register(cors, {
     origin: origensPermitidas,
