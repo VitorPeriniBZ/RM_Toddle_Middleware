@@ -193,9 +193,10 @@ processar. Por isso o `GET` devolve `filasPausadas` e a tela mostra em vermelho.
 **A ordem recomendada** continua a mesma, com o passo 5 promovido:
 
 1. **Exportar antes da cópia** (`--gravar`) — leitura pura, risco zero.
-2. **Executar depois da cópia** — pelo botão *Executar as seis*. Foi a
-   ausência disto que transformou a perda em dias, não a ausência do recadastro.
-3. **Carregar pelo botão** — grava e prova, na mesma ação.
+2. **Criar e executar depois da cópia** — pelo botão *Criar e Executar*, que
+   grava o que estiver faltando e só então executa as seis. Foi a ausência
+   disto que transformou a perda em dias, não a ausência do recadastro.
+3. **Carregar pelo card** — mesma gravação, com motivo para a auditoria.
 4. **Recadastrar à mão pela tela do RM** — continua valendo como recurso quando
    a API estiver fora, com o manifesto ao lado.
 
