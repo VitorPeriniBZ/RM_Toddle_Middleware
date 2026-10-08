@@ -90,10 +90,27 @@ export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
     void carregar();
   }, []);
 
-  async function conferirTudo(): Promise<void> {
+  /**
+   * Cria o que falta e só então executa — nessa ordem, e as duas coisas.
+   *
+   * O botão antes só executava. Com 4 das 6 ausentes do RM, ele dizia
+   * "Executar as seis" e executava duas: as quatro que faltavam não têm o que
+   * executar, e a tela terminava verde do lado de quem sobrou. Criar antes é o
+   * que faz o rótulo ser verdade.
+   *
+   * A carga só é disparada quando há o que criar. Ela é idempotente (o que já
+   * confere não é reenviado), mas pausa as filas enquanto roda — e pausar as
+   * filas para não gravar nada é custo sem contrapartida.
+   */
+  async function criarEExecutar(): Promise<void> {
     setCarregando(true);
     setErroLocal(null);
     try {
+      if ((dados?.ausentes ?? 0) + (dados?.divergentes ?? 0) > 0) {
+        setCarga(await api.restaurarSentencas('criar e executar pelo Plano de Controle'));
+      }
+      // Vale o que a execução diz agora, não o que a carga respondeu: o
+      // timeout de gravação é indistinguível de falha, e só a releitura decide.
       setDados(await api.conferirSentencas());
     } catch (e) {
       setErroLocal(e instanceof ApiError ? e.message : String(e));
@@ -139,14 +156,14 @@ export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
         </div>
         <div style={s.linha}>
           <button style={s.botao} onClick={() => void carregar()} disabled={carregando}>
-            {carregando ? 'Lendo…' : 'Reler'}
+            {carregando ? 'Lendo…' : 'Atualizar'}
           </button>
-          {/* Nomeado pelo que faz. A versão anterior dizia "Conferir de
-              verdade", o que declarava a outra checagem como de mentira — e a
-              diferença entre as duas não é seriedade, é escopo: uma lê o
-              cadastro, a outra executa a Sentença contra o RM. */}
-          <button style={s.botao} onClick={() => void conferirTudo()} disabled={carregando}>
-            Executar as seis
+          {/* Nomeado pelo que faz, e agora faz as duas coisas. "Conferir de
+              verdade" declarava a outra checagem como de mentira; "Executar as
+              seis" prometia seis e entregava quantas existissem. Este grava o
+              que falta e executa — e o rótulo diz as duas. */}
+          <button style={s.botao} onClick={() => void criarEExecutar()} disabled={carregando}>
+            {carregando ? 'Criando e executando…' : 'Criar e Executar'}
           </button>
         </div>
       </div>
@@ -171,7 +188,7 @@ export function Sentencas({ aoErrar }: { aoErrar: (e: unknown) => void }) {
         <div style={s.aviso('atencao')}>
           Foi lido o <strong>cadastro</strong>: o corpo bate com o <code>.sql</code> e as flags de
           segurança conferem. Isso ainda não diz que elas executam nem que devolvem dado — para
-          isso, <em>Executar as seis</em>. É esse passo que teria encurtado as duas perdas.
+          isso, <em>Criar e Executar</em>. É esse passo que teria encurtado as duas perdas.
         </div>
       )}
 
