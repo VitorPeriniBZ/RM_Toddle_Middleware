@@ -5,3 +5,6 @@ dist/
 .idea/
 .DS_Store
 backups/
+# Logs compactados e de forense: têm dado pessoal de aluno e passam do limite de 100 MB do GitHub.
+logs/*.gz
+logs/forense/

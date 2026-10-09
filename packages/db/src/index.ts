@@ -11,3 +11,4 @@ export * from './accessRepository';
 export * from './auditRepository';
 export * from './mappingProposalRepository';
 export * from './sessaoRepository';
+export * from './continuoRepository';

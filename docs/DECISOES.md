@@ -433,11 +433,14 @@ até as 3h para ser corrigido antes de sair.
 
 O caminho incremental fica **provado e não implementado**: `wsDataServer.readView`
 aceita filtro `RECMODIFIEDON >` server-side, testado com controle (217 / 75 / 12 / 0
-registros para cortes de 2025-01-01 / 2026-01-01 / 2026-05-01 / 2026-08-01). As
-Sentenças do `wsConsultaSQL` NÃO trazem coluna de auditoria — só o DataServer.
+registros para cortes de 2025-01-01 / 2026-01-01 / 2026-05-01 / 2026-08-01). ~~As
+Sentenças do `wsConsultaSQL` NÃO trazem coluna de auditoria — só o DataServer.~~
+**Desatualizado em 09/10/2026:** `TODDLE.STUDENTS`, `TODDLE.FREQ` e `TODDLE.NOTAS`
+já devolvem `RECMODIFIEDON`.
 
 Quando os professores começarem a lançar no Toddle pela D1, o volume muda e isto
-deve ser reavaliado.
+deve ser reavaliado. **Reavaliado em 09/10/2026 — ver D11**, que implementa o
+caminho incremental como DETECTOR, não como sync incremental.
 
 ## Rate limit do Toddle — janela de 300s
 
@@ -768,6 +771,128 @@ congelado dentro de um `.sql` envelhece no dia seguinte.
 
 `ASSESSMENT` continua com `IDTURMADISC` no prefixo. Mesmo problema, mesma
 solução, não feito aqui.
+
+---
+
+## D11 — Tempo quase real por DETECTOR de mudança, não por sync incremental
+
+**09/10/2026.** Pedido do Vitor, textual:
+
+> "ajustei algo no totvs, no mesmo segundo altera no toddle, e a mesma coisa
+> visse versa, se por exemplo, adicionar uma nota a um aluno no toddle e vai
+> direto para o totvs, sem ter que aguardar"
+
+### O que foi medido antes de decidir
+
+**Nenhuma das pontas avisa.** O Toddle não tem webhook, evento, stream nem
+conector (coleção pública atual com 140 requests, roadmap, Edlink — 09/10). O
+RM, no CloudTOTVS, só alcança fora por Fórmula Visual com gatilho "Após Salvar" +
+"Executar Requisição REST" — a atividade existe e já é usada na EAV (126 fórmulas,
+versão 12.1.2510), mas depende de a TOTVS liberar saída HTTPS e do admin do RM
+criar fórmula e gatilho. Sem push, "no mesmo segundo" não existe; o que existe é
+perguntar barato e com frequência.
+
+**Os filtros baratos que existem** (todos testados em 09/10/2026):
+
+| origem | filtro | granularidade | custo sem mudança |
+|---|---|---|---|
+| Toddle — nota | `GET /progress-summary?fromDate=` | **com hora** (não documentado) | 1 chamada por currículo, ~0,5 s |
+| Toddle — frequência | `GET /attendance?modifiedSince=` | **só dia** (hora → 400) | 1 chamada, ~0,5 s |
+| RM — cadastros | `ReadView` com `RECMODIFIEDON >` | segundo | 5 consultas, 0,3–0,7 s cada |
+
+`/term-grades`, `/assignments`, `/student-assignments`, `/students`, `/staff`,
+`/courses` e `/enrollments` não têm filtro por modificação.
+
+### A decisão: o detector pergunta; quem escreve continua sendo o fluxo
+
+Cada detector (`packages/queues/src/detectores.ts`) pergunta "mudou?" no seu
+intervalo e, quando sim, **enfileira o mesmo job da agenda**. Não existe segundo
+caminho de escrita: proveniência, pendência, teto de volume, aprovação,
+`JANELA_INCOMPATIVEL`, conferência por releitura e `job_run` são os mesmos.
+
+A alternativa — sync incremental de verdade, processando só a linha que mudou —
+foi descartada porque **quebra guardas que só existem sobre o conjunto**:
+`avaliarCruzamento` ("o RM tem N e nada casou") e o `pctDoEscopo` do volume
+perdem o sentido numa passada de uma nota só; a renovação de
+`last_seen_in_scope_at` dos alunos exige o roster inteiro. Reescrever esses
+guardas para escopo parcial seria refazer a proteção do registro acadêmico para
+ganhar segundos — e o detector já leva a latência a 1–2 minutos sem tocar neles.
+
+**Custo de rodar o fluxo inteiro por mudança:** o de nota lê ~28 mil notas do RM
+(40–58 s em produção). Hoje ele já faz isso **34 vezes por dia**, mudando ou não.
+Com o detector, só quando há nota nova; a varredura agendada pode ficar mais
+espaçada. Na prática o RM passa a ser consultado MENOS, não mais.
+
+### O que impede o detector de virar problema
+
+- **Nasce desligado** (migration 022, mesma regra da 016). Ligar é pela tela, com
+  auditoria; e a tela recusa ligar se nenhum fluxo que ele dispara estiver ligado
+  na agenda — interruptor que não faz nada é armadilha.
+- **No máximo um rodando e um esperando por fluxo** (`decidirDisparo`): um job
+  esperando absorve o pedido, porque ainda vai ler o estado novo; um rodando
+  não, porque pode ter lido antes da mudança.
+- **Cota do Toddle:** os detectores de nota e frequência gastam ~6% da cota
+  compartilhada com uma volta por minuto, e tudo passa pelo `limitadorDeTaxa`.
+  A tela mostra o uso da cota ao lado dos detectores.
+- **Recusa de credencial do RM trava TODOS os detectores** (`travaDoRm.ts`), não
+  só o de cadastros: os detectores do Toddle disparam fluxos que leem o RM, e com
+  a senha expirada cada nota publicada seria uma recusa — seis bloqueiam o
+  usuário (29/09/2026). A trava é gravada por qualquer job ou sonda que veja a
+  recusa, cresce a cada recusa seguida (30 min, 2 h, 8 h, teto 24 h) e cai na
+  hora quando qualquer leitura do RM dá certo, ou quando alguém clica
+  "Retomar". Job disparado por detector não é retentado na recusa
+  (`UnrecoverableError`); job da agenda segue com as 3 tentativas de sempre,
+  porque DLQ, heartbeat e vigia dependem delas. Outras falhas esperam em dobro
+  até 15 min (cópia de base).
+- **Ritmo por fluxo** (`RITMO_POR_FLUXO`): notas e frequência no máximo uma
+  passada a cada 3 min, alunos a cada 5, turmas a cada 30 — uma rajada de
+  publicações vira uma passada só. **Professores esperam 30 min** depois da
+  mudança: criar staff é irreversível, e a agenda dava horas para alguém
+  perceber um e-mail digitado errado. A passada esperando aparece na agenda, e
+  "Sincronizar agora" a antecipa em vez de recusar.
+- **Pessoa só conta se for aluno do de-para.** O filtro do RM não aceita
+  subconsulta ("Instruções SQL proibidas", medido em 09/10), então a mudança em
+  `PPESSOA` vira RA por um `SALUNO ... CODPESSOA IN (...)` e é cruzada com o
+  de-para — responsável financeiro e funcionário não disparam o fluxo de alunos.
+- **Ligar zera a memória**, e a primeira volta é linha de base: religar depois
+  de semanas não despeja semanas de mudança de uma vez.
+- **A janela do detector de cadastros parte da última volta bem-sucedida**, não
+  de "agora menos a folga": intervalo longo, falhas e pausas não abrem buraco.
+- **"Parado" é acusado**: ligado, no horário e sem sondar há mais que o
+  intervalo + 3 min aparece em vermelho na tela, em vez de "ligado" verde.
+
+### O que ele NÃO cobre — a varredura continua sendo a garantia
+
+- **Nota salva e não publicada** não aparece no `/progress-summary`; segue pela
+  varredura (que lê `/student-assignments`).
+- **Editar uma nota já publicada:** não se sabe se muda `published_at`. Se não
+  mudar, a edição escapa do filtro. Pergunta aberta para o Toddle.
+- **Frequência além da primeira página:** a ordem do `/attendance` é quase
+  decrescente por modificação (28 pares decrescentes × 4 crescentes em 400). O
+  `totalCount` cobre registro NOVO fora da página; edição de registro antigo fora
+  dela depende da ordem.
+- **RM:** o detector vê o que atualiza `RECMODIFIEDON` — tela, DataServer e os
+  processos do RM que carimbam a coluna. Não vê UPDATE feito por SQL que não a
+  carimbe, nem mudança cujo carimbo caia fora da folga (`CONTINUO_FOLGA_MIN`,
+  10 min) por diferença de relógio; o log avisa quando o RM aparece à frente do
+  nosso relógio.
+
+Em todos esses casos o dado chega pela varredura agendada seguinte, como chegava
+antes. O detector encurta a espera; ele nunca é a única via.
+
+### Próximo passo, se segundos importarem
+
+Fórmula Visual "Após Salvar" + "Executar Requisição REST" no RM, chamando uma rota
+do middleware com segredo compartilhado (payload só com entidade e chave; o
+middleware relê pelo ReadView). Depende de: chamado na TOTVS Cloud para saída
+HTTPS até `toddlerm.escolaamericana.com.br`, e o admin do RM criar fórmula e
+gatilho. A chamada roda DENTRO do salvamento, então precisa de timeout curto — e o
+detector fica como rede de segurança, porque a fórmula não dispara em SQL direto
+nem em cópia de base.
+
+Do lado do Toddle, só o próprio Toddle muda o quadro. Perguntas a mandar: existe
+webhook ou stream de eventos? `modifiedSince` aceita hora? Editar nota publicada
+atualiza `published_at`? Qual é a cota real?
 
 ---
 

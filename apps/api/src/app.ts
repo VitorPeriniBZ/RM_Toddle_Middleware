@@ -36,6 +36,7 @@ import { registrarRotasDeJobs } from './rotas/jobs';
 import { registrarRotasDeVinculos } from './rotas/vinculos';
 import { registrarRotasDeAcessos } from './rotas/acessos';
 import { registrarRotasDeSentencas } from './rotas/sentencas';
+import { registrarRotasDeContinuo } from './rotas/continuo';
 
 /** Config da escola atendida por este processo. Ver packages/config/src/tenantConfig.ts. */
 const cfg = tenantConfig;
@@ -713,6 +714,7 @@ export function construirApp() {
   void app.register(registrarRotasDeVinculos);
   void app.register(registrarRotasDeAcessos);
   void app.register(registrarRotasDeSentencas);
+  void app.register(registrarRotasDeContinuo);
 
   return app;
 }

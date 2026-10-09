@@ -37,3 +37,4 @@ export * from './chaveComposta';
 export * from './colunasDaChave';
 export * from './sinalDeCruzamento';
 export * from './volumeGuard';
+export * from './deteccaoDeMudanca';

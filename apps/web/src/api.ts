@@ -159,6 +159,8 @@ export interface FluxoNaTela {
   proximosDisparos: string[];
   ultimoRun: RunResumo | null;
   ultimoSucessoEm: string | null;
+  /** Passada pedida por um detector, esperando o ritmo do fluxo. */
+  passadaAgendadaPara?: string | null;
 }
 
 export interface Painel {
@@ -299,6 +301,20 @@ export const api = {
     }>(`/agenda/${encodeURIComponent(flowKey)}`, 'PUT', mudanca),
   auditoria: (limite = 40) => pedir<{ eventos: EventoDeAuditoria[] }>(`/auditoria?limite=${limite}`),
 
+  // ─── Tempo quase real ─────────────────────────────────────────────────────
+  continuo: () => pedir<PainelContinuo>('/continuo'),
+  salvarContinuo: (
+    chave: string,
+    mudanca: {
+      ativo?: boolean; intervaloSegundos?: number; horaInicio?: number; horaFim?: number; retomar?: boolean; motivo?: string;
+    },
+  ) =>
+    pedir<{ antes: LinhaDoDetector; depois: LinhaDoDetector; aplicacao: string }>(
+      `/continuo/${encodeURIComponent(chave)}`,
+      'PUT',
+      mudanca,
+    ),
+
   // ─── Acessos ──────────────────────────────────────────────────────────────
   acessos: () => pedir<PainelDeAcessos>('/acessos'),
   conceder: (userIdentityId: string, papel: Papel, motivo?: string) =>
@@ -426,6 +442,8 @@ export interface JobTerminado {
   retorno: unknown;
   erro: string | null;
   manual: boolean;
+  /** Quem pediu: o botão, a agenda ou um detector de mudança. */
+  origem: 'manual' | 'continuo' | 'agenda';
 }
 
 export interface FluxoDeJobs {
@@ -447,4 +465,67 @@ export interface PainelDeJobs {
   fluxos: FluxoDeJobs[];
   dlq: { total: number; recentes: Array<{ jobId?: string; jobName: string; failedAt: string; failedReason: string }> };
   retencao: { concluidosNoRedisHoras: number; falhosNoRedisDias: number; duravelEm: string };
+}
+
+/** ─── Tempo quase real ───────────────────────────────────────────────────── */
+
+export type SituacaoDoDetector =
+  | 'sem-linha'
+  | 'desligado'
+  | 'pausado'
+  | 'fora-do-horario'
+  | 'com-erro'
+  | 'parado'
+  | 'ativo';
+
+/** A linha de `fluxo_continuo`: intenção e o que o worker observou. */
+export interface LinhaDoDetector {
+  chave: string;
+  ativo: boolean;
+  intervaloSegundos: number;
+  horaInicio: number;
+  horaFim: number;
+  timezone: string;
+  atualizadoPor: string | null;
+  atualizadoEm: string;
+  ultimaSondagemEm: string | null;
+  ultimaMudancaEm: string | null;
+  ultimoDisparo: { desfechos: Record<string, string>; resumo: string; inicios?: Record<string, string> } | null;
+  ultimoDisparoEm: string | null;
+  ultimoErro: string | null;
+  ultimoErroEm: string | null;
+  falhasSeguidas: number;
+  pausadoAte: string | null;
+  contadores: { dia?: string; sondagens?: number; mudancas?: number; disparos?: number };
+}
+
+export interface DetectorNaTela {
+  chave: string;
+  rotulo: string;
+  direcao: string;
+  pergunta: string;
+  custoPorVolta: string;
+  avisoAoLigar: string;
+  padrao: { intervaloSegundos: number; horaInicio: number; horaFim: number };
+  fluxos: Array<{ key: string; rotulo: string; ligado: boolean }>;
+  situacao: SituacaoDoDetector;
+  explicacao: string;
+  janela: string | null;
+  linha: LinhaDoDetector | null;
+}
+
+export interface EstadoDaCota {
+  ativo: boolean;
+  capacidade: number;
+  janelaSegundos: number;
+  disponiveis: number;
+  cooldownSegundos: number;
+}
+
+export interface PainelContinuo {
+  agora: string;
+  cota: EstadoDaCota | null;
+  /** O RM recusou a credencial: todos os detectores esperam até `ate`. */
+  travaDoRm: { ate: string; recusas: number; motivo: string } | null;
+  detectores: DetectorNaTela[];
 }

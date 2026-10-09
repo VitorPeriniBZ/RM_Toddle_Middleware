@@ -370,6 +370,34 @@ Você não precisa saber o seu `subject` de cor: entre na tela, receba o 403 —
 
 **Alerta ativo.** `ALERTA_WEBHOOK_URL` (Slack, Discord, ntfy) recebe: job que esgotou as tentativas e caiu na DLQ, fluxo ligado sem run bem-sucedido dentro da janela, e run preso em `executing`. É **complementar** ao heartbeat, não substituto: o heartbeat é um terceiro reclamando do silêncio e cobre este processo morto; o webhook cobre o que o silêncio não pega — job morrendo com o worker vivo, que foi o caso dos 62 registros na DLQ por sete dias.
 
+## Tempo quase real (detectores de mudança)
+
+A agenda roda a varredura completa em horários fixos. Os **detectores** encurtam
+a espera: perguntam "mudou algo?" de minuto em minuto e, quando sim, enfileiram o
+**mesmo job** da agenda — com os mesmos guardas de escrita. Eles não escrevem em
+lugar nenhum. Ver **D11** em `docs/DECISOES.md`.
+
+| detector | direção | pergunta | dispara |
+|---|---|---|---|
+| Notas | Toddle → TOTVS | `/progress-summary?fromDate=` (nota **publicada**) | Notas |
+| Frequência | Toddle → TOTVS | `/attendance?modifiedSince=` (1ª página + total) | Frequência |
+| Cadastros | TOTVS → Toddle | `ReadView` com `RECMODIFIEDON >` em 5 DataServers | Alunos, Professores, Turmas |
+
+- **Nascem desligados.** Liga-se na aba Agenda, seção "Tempo quase real", com
+  auditoria. Só dispara fluxo que esteja **ligado na agenda**.
+- Latência típica: **1–2 min** do lançamento até o job começar (intervalo de 1 min
+  + duração da passada). Não é "no mesmo segundo": nenhuma das pontas tem push.
+- Custo: ~6% da cota do Toddle com os dois detectores do Toddle a 1 volta/min; o
+  de cadastros faz 5 consultas leves ao RM por volta (padrão: a cada 5 min).
+- Diagnóstico sem ligar nada: `npm run continuo:sondar` (só lê; aceita
+  `-- notas --desde "2026-09-01 00:00:00"` para ver lançamentos antigos passando
+  pelo filtro).
+- Recusa de credencial do RM **trava todos os detectores** (pausa crescente: 30 min,
+  2 h, 8 h) — seis recusas bloqueiam o usuário no RM. Cai sozinha quando uma
+  leitura do RM dá certo, ou pelo botão "Retomar" da tela.
+- Ritmo: notas e frequência no máximo 1 passada a cada 3 min; alunos a cada 5;
+  **professores esperam 30 min** após a mudança (criar staff é irreversível).
+
 ## Fluxo 1 — passo a passo (alunos)
 
 1. `students.extract` percorre `GET /StudentContexts` com `page`/`pageSize` até `hasNext = false`.

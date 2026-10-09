@@ -15,6 +15,7 @@ import {
   ESTADOS_NAO_TERMINAIS,
   acharFluxo,
   avisarAgendaMudou,
+  eDisparoAgendadoDoDetector,
   execucoesEmVoo,
   getQueue,
   type JobEmVoo,
@@ -87,6 +88,7 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
      * erro vermelho. Um botão que só serve para produzir recusa é ruído.
      */
     const emVooPorFluxo = new Map<string, { quantidade: number; desde: string | null }>();
+    const agendadaPorFluxo = new Map<string, string>();
     await Promise.all(
       FLUXOS_EM_ORDEM.map(async (fluxo) => {
         const fila = getQueue(fluxo.fila);
@@ -99,9 +101,18 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
             repeatJobKey: (j as { repeatJobKey?: string | null }).repeatJobKey ?? null,
           })),
         );
+        // A passada que um detector deixou esperando o ritmo do fluxo ainda não
+        // começou: vai à parte, para o botão poder antecipá-la.
+        for (const x of comEstado) {
+          if (eDisparoAgendadoDoDetector({ id: x.job.id, estado: x.estado, repeatJobKey: x.repeatJobKey })) {
+            agendadaPorFluxo.set(fluxo.key, new Date(x.job.timestamp + (x.job.opts.delay ?? 0)).toISOString());
+          }
+        }
         // O marcador do próximo cron é `delayed` permanente e NÃO é trabalho.
         const emVoo = comEstado.filter(
-          (x) => execucoesEmVoo([{ estado: x.estado, repeatJobKey: x.repeatJobKey }]).length > 0,
+          (x) =>
+            !eDisparoAgendadoDoDetector({ id: x.job.id, estado: x.estado, repeatJobKey: x.repeatJobKey }) &&
+            execucoesEmVoo([{ estado: x.estado, repeatJobKey: x.repeatJobKey }]).length > 0,
         );
         if (emVoo.length === 0) return;
         const inicios = emVoo.map((x) => x.job.processedOn ?? x.job.timestamp).filter(Boolean);
@@ -194,6 +205,8 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
         avisoAoExecutarAgora: fluxo.avisoAoExecutarAgora,
         /** `null` = nada rodando. Preenchido = o botão de rodar agora fica travado. */
         execucaoEmVoo: emVooPorFluxo.get(fluxo.key) ?? null,
+        /** Passada pedida por um detector, esperando o ritmo do fluxo. */
+        passadaAgendadaPara: agendadaPorFluxo.get(fluxo.key) ?? null,
         janelaSemSucessoHoras: fluxo.janelaSemSucessoHoras,
         desejado: linha,
         observado: obs,
@@ -435,14 +448,40 @@ export const registrarRotasDeAgenda: FastifyPluginAsync = async (app) => {
       const naFila = await fila.getJobs([...ESTADOS_NAO_TERMINAIS]);
       // `getState()` em vez de inferir por `opts.delay` ou pelo prefixo do id:
       // o estado real é o que a regra precisa, e são poucos jobs por fila.
-      const emVoo = execucoesEmVoo(
-        await Promise.all(
-          naFila.map(async (j) => ({
-            estado: (await j.getState()) as JobEmVoo['estado'],
-            repeatJobKey: (j as { repeatJobKey?: string | null }).repeatJobKey ?? null,
-          })),
-        ),
+      const comEstado = await Promise.all(
+        naFila.map(async (j) => ({
+          job: j,
+          id: j.id ?? null,
+          estado: (await j.getState()) as JobEmVoo['estado'],
+          repeatJobKey: (j as { repeatJobKey?: string | null }).repeatJobKey ?? null,
+        })),
       );
+      const agendadas = comEstado.filter((x) => eDisparoAgendadoDoDetector(x));
+      const emVoo = execucoesEmVoo(comEstado.filter((x) => !eDisparoAgendadoDoDetector(x)));
+
+      // Só uma passada AGENDADA por detector, nada rodando: antecipa ela em vez
+      // de criar outra. Duas passadas seguidas leriam o mesmo estado à toa.
+      if (emVoo.length === 0 && agendadas.length > 0) {
+        for (const x of agendadas) await x.job.promote();
+        await registrarEvento(pgPool, {
+          ator: atorDaRequisicao(req),
+          acao: 'fluxo.executado.manualmente',
+          entidade: 'flow_schedule',
+          entidadeId: fluxo.key,
+          depois: { antecipou: agendadas.map((x) => x.id), fila: fluxo.fila, job: fluxo.job },
+          motivo: req.body?.motivo ?? undefined,
+          resultado: 'ok',
+        });
+        return {
+          enfileirado: true,
+          jobId: agendadas[0].id,
+          fila: fluxo.fila,
+          aplicacao:
+            'havia uma passada pedida por um detector, esperando o ritmo do fluxo — ela foi ' +
+            'antecipada para agora. Acompanhe na aba Jobs',
+        };
+      }
+
       if (emVoo.length > 0) {
         return reply.code(409).send({
           erro: 'já existe uma execução deste fluxo na fila',

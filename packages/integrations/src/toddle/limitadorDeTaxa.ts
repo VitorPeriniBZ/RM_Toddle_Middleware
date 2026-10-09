@@ -295,3 +295,48 @@ export async function cooldownRestanteMs(): Promise<number> {
     return 0;
   }
 }
+
+/** O saldo da cota compartilhada, como a tela mostra. */
+export interface EstadoDaCota {
+  ativo: boolean;
+  capacidade: number;
+  janelaSegundos: number;
+  /** Chamadas que caberiam agora sem esperar. Estimativa — ver o cabeçalho. */
+  disponiveis: number;
+  /** Quanto falta do castigo de um 429, em segundos. `0` = sem castigo. */
+  cooldownSegundos: number;
+}
+
+/**
+ * Lê o balde SEM gastar token — o mesmo reabastecimento do script Lua, feito
+ * aqui do lado de fora.
+ *
+ * Existe para a tela responder "o tempo quase real está apertando a cota?" com
+ * um número, em vez de alguém descobrir pelo 429. `null` quando o Redis não
+ * responde: a tela diz "sem leitura" em vez de inventar cota cheia.
+ */
+export async function estadoDaCotaDoToddle(): Promise<EstadoDaCota | null> {
+  const capacidade = env.TODDLE_RATE_LIMIT_MAX;
+  const janelaMs = env.TODDLE_RATE_LIMIT_JANELA_S * 1_000;
+  if (!env.TODDLE_RATE_LIMIT_ATIVO) {
+    return { ativo: false, capacidade, janelaSegundos: janelaMs / 1_000, disponiveis: capacidade, cooldownSegundos: 0 };
+  }
+  try {
+    const [dados, pttl] = await Promise.all([
+      comSocketVivo(() => redis().hmget(chaveDoBalde(), 'tokens', 'em')),
+      comSocketVivo(() => redis().pttl(chaveDoCooldown())),
+    ]);
+    const tokens = dados[0] === null ? capacidade : Number(dados[0]);
+    const em = dados[1] === null ? Date.now() : Number(dados[1]);
+    const agora = Math.min(capacidade, tokens + (Date.now() - em) * (capacidade / janelaMs));
+    return {
+      ativo: true,
+      capacidade,
+      janelaSegundos: janelaMs / 1_000,
+      disponiveis: Math.max(0, Math.floor(agora)),
+      cooldownSegundos: pttl > 0 ? Math.ceil(pttl / 1_000) : 0,
+    };
+  } catch {
+    return null;
+  }
+}
