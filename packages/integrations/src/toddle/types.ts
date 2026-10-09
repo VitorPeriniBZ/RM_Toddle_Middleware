@@ -485,3 +485,34 @@ export interface ToddleStudentAssignmentsResponse {
     pageInfo?: { hasNextPage?: boolean; endCursor?: string };
   };
 }
+
+/**
+ * Uma nota publicada, como o `GET /progress-summary` devolve.
+ *
+ * snake_case, diferente do resto da API — é como a rota responde. Medido em
+ * 09/10/2026 com `ratingType=AssignmentRatings`: `published_at` e `updated_at`
+ * vêm SEM fuso (`"2026-09-09 19:59:07.753454"`), e o filtro `fromDate` aceita o
+ * mesmo formato COM hora — não documentado, mas testado: `fromDate` às 19:59
+ * devolveu exatamente as 3 notas posteriores de 5.
+ */
+export interface ToddleNotaPublicada {
+  id: string;
+  class_id?: string | null;
+  class_sourced_id?: string | null;
+  class_title?: string | null;
+  student_id?: string | null;
+  assignment_id?: string | null;
+  term_id?: string | null;
+  published_at?: string | null;
+  updated_at?: string | null;
+  value?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ToddleProgressSummaryResponse {
+  response?: {
+    totalCount?: number;
+    edges?: ToddleNotaPublicada[];
+    pageInfo?: ToddlePageInfo;
+  };
+}

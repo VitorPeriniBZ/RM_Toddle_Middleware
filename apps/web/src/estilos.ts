@@ -27,6 +27,7 @@ import type { CSSProperties } from 'react';
 const PALETA = {
   oliva: '#A9A52B', // institucional da marca-mãe
   verde: '#408F38',
+  verdeFloresta: '#284200', // profundidade do verde — texto verde que passa AA
   vermelho: '#AB2A25',
   ocre: '#A67206',
   creme: '#F0EEE6',
@@ -48,6 +49,11 @@ const comAlfa = (hex: string, alfa: number): string =>
 export const cor = {
   ruim: PALETA.vermelho,
   bom: PALETA.verde,
+  /**
+   * Verde para TEXTO pequeno sobre fundo claro. O #408F38 dá 4,0:1 no branco,
+   * abaixo do AA (4,5:1) — serve para borda e traço, não para letra de 14px.
+   */
+  bomTexto: PALETA.verdeFloresta,
   atencao: PALETA.ocre,
   fundoRuim: comAlfa(PALETA.vermelho, 0.08),
   fundoAtencao: comAlfa(PALETA.ocre, 0.1),
@@ -73,8 +79,20 @@ export const s = {
   h2: { fontSize: '1.05rem', marginTop: '1.6rem' } as CSSProperties,
   h3: { fontSize: '.98rem', margin: 0 } as CSSProperties,
 
-  abas: { display: 'flex', gap: '.4rem', borderBottom: `1px solid ${cor.borda}`, marginTop: '1rem' } as CSSProperties,
+  // Rola na horizontal em vez de quebrar: com sete abas, o celular cortava
+  // "Sentenças" para fora da tela e partia "De-para" em duas linhas.
+  abas: {
+    display: 'flex',
+    gap: '.4rem',
+    borderBottom: `1px solid ${cor.borda}`,
+    marginTop: '1rem',
+    overflowX: 'auto',
+    overflowY: 'hidden',
+    scrollbarWidth: 'none',
+  } as CSSProperties,
   aba: (ativa: boolean): CSSProperties => ({
+    flex: 'none',
+    whiteSpace: 'nowrap',
     padding: '.45rem .9rem',
     border: `1px solid ${ativa ? cor.borda : 'transparent'}`,
     borderBottom: ativa ? `1px solid ${PALETA.branco}` : `1px solid ${cor.borda}`,
@@ -230,4 +248,49 @@ export function desde(iso: string | null | undefined): string {
   const h = Math.floor(min / 60);
   if (h < 48) return `há ${h}h`;
   return `há ${Math.floor(h / 24)} dias`;
+}
+
+/**
+ * Texto que veio do RM ou do Toddle, legível.
+ *
+ * A mensagem do RM chega com entidades XML cruas — "Usuário ou Senha
+ * inválidos!&#xD; O usuário…" — e a DLQ mostrava isso literalmente. Não é
+ * estética: uma mensagem de erro que parece corrompida é lida como "o sistema
+ * quebrou" em vez de "a senha expirou", que é o que ela diz.
+ */
+export function textoLimpo(t: string | null | undefined): string {
+  if (!t) return '';
+  return t
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * "há 12 s" / "há 3 min" — com segundos, porque é a escala do tempo quase real.
+ * `agoraMs` vem de fora para a tela poder corrigir pelo relógio do servidor.
+ */
+export function haQuanto(iso: string | null | undefined, agoraMs = Date.now()): string {
+  if (!iso) return 'nunca';
+  const seg = Math.max(0, Math.floor((agoraMs - new Date(iso).getTime()) / 1_000));
+  if (seg < 5) return 'agora';
+  if (seg < 60) return `há ${seg} s`;
+  const min = Math.floor(seg / 60);
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `há ${h}h`;
+  return `há ${Math.floor(h / 24)} dias`;
+}
+
+/** "1 min", "30 s", "1 h" — o intervalo como alguém fala. */
+export function intervaloLegivel(segundos: number): string {
+  if (segundos < 60) return `${segundos} s`;
+  if (segundos < 3600) return `${Math.round(segundos / 60)} min`;
+  return `${Math.round(segundos / 3600)} h`;
 }

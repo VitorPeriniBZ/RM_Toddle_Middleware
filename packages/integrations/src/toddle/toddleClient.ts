@@ -17,6 +17,8 @@ import {
   ToddleAssignment,
   ToddleAssignmentsResponse,
   ToddleAttendanceListResponse,
+  ToddleNotaPublicada,
+  ToddleProgressSummaryResponse,
   ToddleStudent,
   ToddleStudentResponse,
   ToddleStudentAssignment,
@@ -590,6 +592,82 @@ export class ToddleClient {
     }
 
     return registros;
+  }
+
+  /**
+   * UMA página do `/attendance`, sem paginar — é a pergunta "mudou?" do detector
+   * de frequência, não a leitura do fluxo.
+   *
+   * Devolve também o `totalCount`: com `modifiedSince` fixo, ele cresce quando
+   * aparece registro novo mesmo que a linha nova não caia na primeira página. A
+   * ordem medida em 09/10/2026 é QUASE decrescente por modificação (28 pares
+   * decrescentes contra 4 crescentes em 400 registros), e o total cobre o que
+   * a ordem imperfeita deixaria escapar.
+   *
+   * `modifiedSince` aceita só DIA — com hora a API devolve 400 ("Expected
+   * format: YYYY-MM-DD").
+   */
+  async sondarFrequencia(filtros: {
+    modifiedSince: string;
+    courseIds: string[];
+    count?: number;
+  }): Promise<{ totalCount: number; registros: ToddleAttendance[] }> {
+    const params: Record<string, string | number> = {
+      count: filtros.count ?? 100,
+      modifiedSince: filtros.modifiedSince,
+    };
+    if (filtros.courseIds.length) params.courseIds = JSON.stringify(filtros.courseIds);
+    const { data } = await this.withRetry('GET /attendance (sonda)', () =>
+      this.http.get<ToddleAttendanceListResponse>('/public/v2/attendance', { params }),
+    );
+    return {
+      totalCount: Number(data?.response?.totalCount ?? 0),
+      registros: data?.response?.edges ?? [],
+    };
+  }
+
+  /**
+   * Notas PUBLICADAS a partir de um instante — a pergunta "mudou?" do detector
+   * de nota.
+   *
+   * `GET /progress-summary` filtra por `published_at` com `fromDate`, e aceita
+   * HORA (`YYYY-MM-DD HH:MM:SS`) — não documentado, testado em 09/10/2026. É o
+   * único filtro incremental de nota que a API tem: `/term-grades`,
+   * `/assignments` e `/student-assignments` não aceitam nenhum.
+   *
+   * A ordem é crescente por `published_at` (o cursor é `{published_at, id}`),
+   * então parar no teto de páginas devolve o PREFIXO mais antigo, e quem chama
+   * avança a marca só até o que leu. A volta seguinte continua dali.
+   *
+   * Nota salva e não publicada NÃO aparece aqui. Ela segue pela varredura
+   * agendada, que lê `/student-assignments`.
+   */
+  async listarNotasPublicadas(filtros: {
+    curriculumProgramId: string;
+    fromDate: string;
+    ratingType?: string;
+    maxPaginas?: number;
+  }): Promise<{ notas: ToddleNotaPublicada[]; completo: boolean }> {
+    const notas: ToddleNotaPublicada[] = [];
+    const maxPaginas = filtros.maxPaginas ?? 5;
+    let cursor: string | undefined;
+    for (let pagina = 0; pagina < maxPaginas; pagina += 1) {
+      const params: Record<string, string | number> = {
+        curriculumProgramId: filtros.curriculumProgramId,
+        ratingType: filtros.ratingType ?? 'AssignmentRatings',
+        fromDate: filtros.fromDate,
+        count: 1_000,
+      };
+      if (cursor) params.cursor = cursor;
+      const { data } = await this.withRetry('GET /progress-summary', () =>
+        this.http.get<ToddleProgressSummaryResponse>('/public/v2/progress-summary', { params }),
+      );
+      notas.push(...(data?.response?.edges ?? []));
+      const info = data?.response?.pageInfo;
+      if (!info?.hasNextPage || !info?.endCursor) return { notas, completo: true };
+      cursor = info.endCursor;
+    }
+    return { notas, completo: false };
   }
 
   /** Códigos de chamada configurados (Present, Absent, Late, …) por currículo/ano. */

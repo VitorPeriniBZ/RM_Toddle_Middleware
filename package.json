@@ -45,6 +45,7 @@
     "aprovar": "tsx apps/worker/src/scripts/aprovar.ts",
     "conceder": "tsx apps/worker/src/scripts/conceder.ts",
     "agenda": "tsx apps/worker/src/scripts/agenda.ts",
+    "continuo:sondar": "tsx apps/worker/src/scripts/sondarContinuo.ts",
     "lancar:falta": "tsx apps/worker/src/scripts/lancarUmaFalta.ts",
     "escrever:frequencia": "tsx apps/worker/src/scripts/escreverFrequencia.ts",
     "escrever:notas": "tsx apps/worker/src/scripts/escreverNotas.ts",

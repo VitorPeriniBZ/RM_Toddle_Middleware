@@ -169,3 +169,38 @@ h3 {
 .eav-header :focus-visible {
   outline-color: var(--eav-branco);
 }
+
+/**
+ * Tempo quase real: o ponto que pulsa enquanto o detector está sondando.
+ *
+ * É o ÚNICO movimento da tela, e por isso significa uma coisa só: "isto está
+ * vivo agora". Parado, desligado ou com erro, o ponto fica estático — um
+ * indicador que pulsa sempre deixaria de dizer qualquer coisa.
+ */
+.eav-pulso {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.eav-pulso.vivo {
+  animation: eav-pulsar 1.8s ease-out infinite;
+}
+@keyframes eav-pulsar {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); }
+  70% { box-shadow: 0 0 0 0.45rem color-mix(in srgb, currentColor 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eav-pulso.vivo { animation: none; }
+}
+
+/* Três detectores lado a lado no desktop, empilhados no celular. */
+.eav-grade-detectores {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.8rem;
+}

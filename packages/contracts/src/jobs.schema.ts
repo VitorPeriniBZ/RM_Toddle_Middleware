@@ -8,7 +8,8 @@ import { z } from 'zod';
 
 /** Job "students.extract" — dispara a varredura completa do RM. */
 export const studentExtractJobSchema = z.object({
-  trigger: z.enum(['manual', 'cron']).default('manual'),
+  // `continuo` = disparado por um detector de mudança (packages/queues/src/detectores.ts).
+  trigger: z.enum(['manual', 'cron', 'continuo']).default('manual'),
 });
 export type StudentExtractJob = z.infer<typeof studentExtractJobSchema>;
 

@@ -496,6 +496,36 @@ const envSchema = z.object({
   // valor que sabemos passar. Quem descobrir o numero real, corrija aqui.
   TODDLE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(250),
   TODDLE_RATE_LIMIT_JANELA_S: z.coerce.number().int().positive().default(300),
+
+  // --- TEMPO QUASE REAL: detectores de mudança ------------------------------
+  //
+  // Liga/desliga, intervalo e horário de cada detector moram na tabela
+  // `fluxo_continuo` (migration 022) e mudam pela tela, como a agenda (D8). O
+  // que fica aqui é o que NÃO é decisão de operação: fuso e folgas medidas.
+  // Ver apps/worker/src/continuo/ e a D11 em docs/DECISOES.md.
+  /**
+   * Fuso do relógio do servidor do RM. O `RECMODIFIEDON` vem SEM fuso, na hora
+   * local do servidor, e o filtro do detector de cadastro é montado nesse
+   * relógio. Nome IANA, nunca offset fixo — mesma regra da `flow_schedule`.
+   */
+  CONTINUO_RM_FUSO: z.string().default('America/Sao_Paulo'),
+  /**
+   * Quanto cada consulta do detector se sobrepõe à anterior, em minutos.
+   *
+   * Cobre diferença de relógio entre este servidor e as duas pontas, e escrita
+   * que o RM grava com carimbo um pouco antes de ficar visível. Repetir linha é
+   * barato (a memória de impressões descarta); perder linha não é.
+   */
+  CONTINUO_FOLGA_MIN: z.coerce.number().int().min(1).max(120).default(10),
+  /**
+   * Pausa do detector de cadastro depois de o RM recusar a credencial.
+   *
+   * O RM BLOQUEIA o usuário da integração depois de ~6 recusas seguidas (medido
+   * em 29/09/2026). Um detector de minuto em minuto chegaria lá em seis
+   * minutos — e derrubaria junto todos os jobs agendados. Pausar é o que impede
+   * o vigia de virar a causa do incidente.
+   */
+  CONTINUO_PAUSA_CREDENCIAL_MIN: z.coerce.number().int().min(5).max(24 * 60).default(30),
   /**
    * Recusar nota cuja etapa esteja com `SETAPAS.DISPONIVELALUNOS='N'`?
    *

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type FluxoNaTela, type Painel, type PreviaDeCron } from '../api';
-import { cor, desde, quando, s } from '../estilos';
+import { cor, desde, quando, s, textoLimpo } from '../estilos';
+import { TempoReal } from './TempoReal';
 
 /**
  * O PAINEL: desejado × observado, e os controles.
@@ -151,6 +152,17 @@ export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
         </button>
       </div>
 
+      {/* Duas camadas, e a tela diz qual é qual: os detectores encurtam a
+          espera; a agenda é a varredura completa que garante. Sem o título, os
+          dois blocos pareciam a mesma coisa configurada duas vezes. */}
+      <TempoReal aoErrar={aoErrar} />
+
+      <h2 style={{ ...s.h2, marginBottom: 0 }}>Agenda — varredura completa</h2>
+      <div style={s.fraco}>
+        Passa por tudo nos horários abaixo, mudou ou não. É a garantia: o que um detector deixar
+        escapar, a próxima varredura leva.
+      </div>
+
       {painel.fluxos.map((f) => (
         <CartaoDoFluxo
           key={f.flowKey}
@@ -192,7 +204,9 @@ export function Agenda({ aoErrar }: { aoErrar: (e: unknown) => void }) {
                 <tr key={r.jobId ?? i}>
                   <td style={{ ...s.td, ...s.mono, whiteSpace: 'nowrap' }}>{r.jobName}</td>
                   <td style={{ ...s.td, whiteSpace: 'nowrap' }}>{quando(r.failedAt)}</td>
-                  <td style={{ ...s.td, fontSize: '.8rem' }}>{r.failedReason.slice(0, 200)}</td>
+                  <td style={{ ...s.td, fontSize: '.8rem' }} title={textoLimpo(r.failedReason)}>
+                    {textoLimpo(r.failedReason).slice(0, 200)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -328,6 +342,12 @@ function CartaoDoFluxo({
           <span>
             <span style={s.dadoRotulo}>próximo </span>
             {quando(fluxo.observado.proximoDisparoEm)}
+          </span>
+        )}
+        {fluxo.passadaAgendadaPara && (
+          <span title="Um detector de mudança pediu esta passada; ela espera o ritmo do fluxo. 'Sincronizar agora' a antecipa.">
+            <span style={s.dadoRotulo}>pedida por detector </span>
+            <strong style={{ color: cor.bomTexto }}>começa {quando(fluxo.passadaAgendadaPara)}</strong>
           </span>
         )}
         {fluxo.ultimoRun && (

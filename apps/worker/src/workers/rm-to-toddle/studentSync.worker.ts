@@ -6,6 +6,8 @@ import { closeAllQueues } from '@rm-toddle/queues';
 import { manterAgendamento } from '../../agenda/reconciliar';
 import { ligarCanario } from '../../agenda/canarioDeSentencas';
 import { ligarVigia } from '../../agenda/vigia';
+import { ligarDetectores } from '../../continuo/detectores';
+import { comTravaDoRm } from '../../continuo/travaNosJobs';
 import { pgPool, registrarEvento } from '@rm-toddle/db';
 import { closeRmSqlPool, observarRestauroAutomatico } from '@rm-toddle/integrations';
 import {
@@ -45,7 +47,7 @@ function esgotouTentativas(job: Job | undefined): boolean {
  */
 const worker = new Worker(
   QUEUE.RM_TO_TODDLE_STUDENTS,
-  async (job: Job) => {
+  comTravaDoRm(async (job: Job) => {
     switch (job.name) {
       case STUDENT_JOB.EXTRACT:
         return processStudentExtract(job);
@@ -54,7 +56,7 @@ const worker = new Worker(
       default:
         throw new Error(`Job desconhecido na fila de alunos: ${job.name}`);
     }
-  },
+  }),
   {
     connection: redisConnection,
     concurrency: 1,
@@ -77,14 +79,14 @@ const worker = new Worker(
  */
 const staffWorker = new Worker(
   QUEUE.RM_TO_TODDLE_STAFF,
-  async (job: Job) => {
+  comTravaDoRm(async (job: Job) => {
     switch (job.name) {
       case STAFF_JOB.SYNC:
         return processStaffSync(job);
       default:
         throw new Error(`Job desconhecido na fila de professores: ${job.name}`);
     }
-  },
+  }),
   { connection: redisConnection, concurrency: 1 },
 );
 
@@ -103,14 +105,14 @@ const staffWorker = new Worker(
  */
 const termGradesWorker = new Worker(
   QUEUE.TODDLE_TO_RM_TERM_GRADES,
-  async (job: Job) => {
+  comTravaDoRm(async (job: Job) => {
     switch (job.name) {
       case TERM_GRADE_JOB.SYNC:
         return processTermGradesSync(job);
       default:
         throw new Error(`Job desconhecido na fila de notas: ${job.name}`);
     }
-  },
+  }),
   { connection: redisConnection, concurrency: 1 },
 );
 
@@ -127,14 +129,14 @@ const termGradesWorker = new Worker(
  */
 const coursesWorker = new Worker(
   QUEUE.RM_TO_TODDLE_COURSES,
-  async (job: Job) => {
+  comTravaDoRm(async (job: Job) => {
     switch (job.name) {
       case COURSE_JOB.SYNC:
         return processCourseSync(job);
       default:
         throw new Error(`Job desconhecido na fila de turmas: ${job.name}`);
     }
-  },
+  }),
   { connection: redisConnection, concurrency: 1 },
 );
 
@@ -149,14 +151,14 @@ const coursesWorker = new Worker(
  */
 const attendanceWorker = new Worker(
   QUEUE.TODDLE_TO_RM_ATTENDANCE,
-  async (job: Job) => {
+  comTravaDoRm(async (job: Job) => {
     switch (job.name) {
       case ATTENDANCE_JOB.SYNC:
         return processAttendanceSync(job);
       default:
         throw new Error(`Job desconhecido na fila de frequência: ${job.name}`);
     }
-  },
+  }),
   { connection: redisConnection, concurrency: 1 },
 );
 
@@ -268,6 +270,16 @@ conferirCanalDeAviso('worker');
 const pararCanario = ligarCanario();
 
 /*
+ * TEMPO QUASE REAL. Ver apps/worker/src/continuo/detectores.ts.
+ *
+ * Os detectores perguntam "mudou algo?" a cada minuto e, quando sim, enfileiram
+ * o MESMO job que o cron enfileiraria. Cada um obedece a própria linha em
+ * `fluxo_continuo`, e todas nascem desligadas: subir este processo não liga
+ * nada que alguém não tenha ligado pela tela.
+ */
+const pararDetectores = ligarDetectores();
+
+/*
  * A TRILHA DO QUE O MIDDLEWARE ESCREVEU NO RM SOZINHO.
  *
  * O restauro automático de Sentença acontece lá embaixo, dentro do cliente do
@@ -342,12 +354,20 @@ async function shutdown(signal: string): Promise<void> {
     // encerramento gracioso vira `kill -9` depois do stop_grace_period.
     pararVigia();
     pararCanario();
+    // O sinal de parada dos detectores sai AGORA (é síncrono), mas a espera pela
+    // volta em curso corre em PARALELO com o fechamento dos workers: esperá-la
+    // antes comeria o prazo de parada do container, e um job de nota de 40–58 s
+    // no meio de uma escrita no RM levaria `kill -9`. Um detector que ainda
+    // enfileire no meio do encerramento deixa o job no Redis para a próxima
+    // subida — o que é inofensivo.
+    const detectoresParados = pararDetectores();
     await pararAgendamento();
     // TODOS os workers, e a lista precisa crescer junto com eles: um worker
     // esquecido aqui é um job morto no meio de uma escrita no Toddle ou no RM
     // quando o container reinicia — que é exatamente o estado ambíguo que o
     // `SaveRecord` sem resposta já produz sozinho.
     await Promise.all([
+      detectoresParados,
       worker.close(),
       staffWorker.close(),
       termGradesWorker.close(),

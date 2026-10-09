@@ -7,3 +7,6 @@ export * from './fluxos';
 export * from './schedulers';
 export * from './execucaoEmVoo';
 export * from './progresso';
+export * from './detectores';
+export * from './continuo';
+export * from './travaDoRm';

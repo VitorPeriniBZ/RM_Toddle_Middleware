@@ -6,6 +6,7 @@ import {
   execucoesEmVoo,
   getQueue,
   lerProgresso,
+  PREFIXO_DO_DISPARO_CONTINUO,
   resumoDaDlq,
   type ProgressoDeJob,
 } from '@rm-toddle/queues';
@@ -76,6 +77,12 @@ interface JobTerminado {
   erro: string | null;
   /** `true` quando veio do botão "Sincronizar agora". */
   manual: boolean;
+  /**
+   * De onde veio o disparo. `manual` continua existindo por compatibilidade;
+   * `origem` é o que a tela usa, porque agora são três: o botão, a agenda e
+   * um detector de mudança ("tempo quase real").
+   */
+  origem: 'manual' | 'continuo' | 'agenda';
 }
 
 /**
@@ -106,6 +113,13 @@ interface RunNoGrafico {
   lotes?: { feitos: number; total: number };
   /** Só em `preso`: há quanto tempo nenhum lote reporta. */
   semNoticiaHaMs?: number;
+}
+
+/** O prefixo do id diz quem pediu: ver `api/rotas/agenda.ts` e `queues/detectores.ts`. */
+function origemDoJob(id: string): JobTerminado['origem'] {
+  if (id.startsWith('manual:')) return 'manual';
+  if (id.startsWith(PREFIXO_DO_DISPARO_CONTINUO)) return 'continuo';
+  return 'agenda';
 }
 
 /** O mínimo de runs para um gráfico dizer alguma coisa sobre tendência. */
@@ -166,6 +180,7 @@ export const registrarRotasDeJobs: FastifyPluginAsync = async (app) => {
             retorno: j.returnvalue ?? null,
             erro: j.failedReason ?? null,
             manual: String(j.id ?? '').startsWith('manual:'),
+            origem: origemDoJob(String(j.id ?? '')),
           }))
           .sort((a, b) => (b.terminadoEm ?? '').localeCompare(a.terminadoEm ?? ''))
           .slice(0, 10);

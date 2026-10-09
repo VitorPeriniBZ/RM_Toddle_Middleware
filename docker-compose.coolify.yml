@@ -63,6 +63,11 @@
 #   AGENDA_RECONCILIA_MS       60000  piso do poll que aplica a agenda no Redis
 #   AGENDA_INTERVALO_MIN_MINUTOS  15  menor intervalo que a tela aceita salvar
 #   VIGIA_INTERVALO_MS         900000
+#   CONTINUO_RM_FUSO           America/Sao_Paulo  relógio do servidor do RM
+#   CONTINUO_FOLGA_MIN         10   sobreposição entre consultas dos detectores
+#   CONTINUO_PAUSA_CREDENCIAL_MIN  30  pausa após o RM recusar a credencial
+#     O liga/desliga dos detectores de "tempo quase real" NÃO é variável: mora
+#     na tabela `fluxo_continuo` e muda pela tela, como a agenda. Nasce desligado.
 #
 # (C) Opcionais no Zod, mas o sync não funciona sem elas:
 #   RM_WS_BASEURL         https://escolaamericana143994.rm.cloudtotvs.com.br:1951

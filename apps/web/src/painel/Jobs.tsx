@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type PainelDeJobs, type FluxoDeJobs, type JobTerminado, type RunNoGrafico } from '../api';
-import { cor, quando, s } from '../estilos';
+import { cor, quando, s, textoLimpo } from '../estilos';
 
 /**
  * A aba JOBS: o que está rodando agora, e o que rodou antes.
@@ -231,7 +231,12 @@ function Terminados({ jobs }: { jobs: JobTerminado[] }) {
               </td>
               <td style={{ ...s.td, width: 110, whiteSpace: 'nowrap' }}>
                 {quando(j.terminadoEm)}
-                {j.manual && <span style={s.fraco}> · manual</span>}
+                {j.origem === 'manual' && <span style={s.fraco}> · manual</span>}
+                {j.origem === 'continuo' && (
+                  <span style={{ ...s.fraco, color: cor.bomTexto }} title="disparado por um detector de mudança (tempo quase real)">
+                    {' '}· ao vivo
+                  </span>
+                )}
               </td>
               <td style={{ ...s.td, width: 70, whiteSpace: 'nowrap' }}>
                 {j.duracaoMs === null ? '—' : duracao(j.duracaoMs)}
@@ -240,8 +245,11 @@ function Terminados({ jobs }: { jobs: JobTerminado[] }) {
                   Sem ele, `{desligado:true}` seria invisível. Quebra em qualquer
                   ponto: é JSON, não tem espaço onde quebrar sozinho, e sem isto
                   ele empurra a largura do cartão para fora da tela. */}
-              <td style={{ ...s.td, ...s.mono, fontSize: '.78rem', wordBreak: 'break-word' }}>
-                {j.erro ?? resumoDoRetorno(j.retorno)}
+              <td
+                style={{ ...s.td, fontSize: '.82rem', wordBreak: 'break-word', color: j.erro ? cor.ruim : cor.texto }}
+                title={j.erro ? textoLimpo(j.erro) : JSON.stringify(j.retorno ?? null, null, 2)}
+              >
+                {j.erro ? textoLimpo(j.erro).slice(0, 220) : resumoDoRetorno(j.retorno)}
               </td>
             </tr>
           ))}
@@ -251,16 +259,75 @@ function Terminados({ jobs }: { jobs: JobTerminado[] }) {
   );
 }
 
-/** O retorno em uma linha, com tradução do caso que mais confunde. */
+/**
+ * O retorno em uma linha, em português de quem opera.
+ *
+ * Era o JSON cru — `{"created":0,"updated":0,"inalterados":50,...}` — em fonte
+ * mono, linha após linha. Correto, e ilegível: a pergunta "este lote fez
+ * alguma coisa?" exigia ler cinco chaves para descobrir que não. O JSON inteiro
+ * continua a um passar de mouse (`title`), para quem precisa dele.
+ */
+const NAO_ESCREVEU: Record<string, string> = {
+  'nada-a-escrever': 'nada a escrever',
+  'precisa-aprovacao': 'parou: precisa de aprovação (npm run aprovar)',
+  'recusado-pelo-teto': 'recusado pelo teto de volume — investigar',
+  'cruzamento-suspeito': 'não escreveu: cruzamento suspeito',
+  ensaio: 'ensaio — nada enviado',
+  desligado: 'via desligada',
+};
+
 function resumoDoRetorno(v: unknown): string {
   if (v === null || v === undefined) return '—';
-  if (typeof v === 'object') {
-    const o = v as Record<string, unknown>;
-    if (o.desligado === true) return 'rodou e não tocou no RM — a via está desligada (NOTA_SYNC_ATIVO=false)';
-    if (typeof o.naoEscreveu === 'string') return `não escreveu: ${o.naoEscreveu}`;
+  if (typeof v !== 'object') return String(v).slice(0, 160);
+  const o = v as Record<string, unknown>;
+  const n = (k: string): number => (typeof o[k] === 'number' ? (o[k] as number) : 0);
+  const partes = (pares: Array<[number, string, string]>): string =>
+    pares.filter(([x]) => x > 0).map(([x, um, varios]) => `${x} ${x === 1 ? um : varios}`).join(' · ');
+
+  if (o.desligado === true) return 'rodou e não tocou no RM — a via está desligada no ambiente (…_SYNC_ATIVO=false)';
+  if (typeof o.naoEscreveu === 'string') return NAO_ESCREVEU[o.naoEscreveu] ?? `não escreveu: ${o.naoEscreveu}`;
+
+  // Lote de alunos.
+  if ('inalterados' in o || ('created' in o && 'updated' in o)) {
+    const txt = partes([
+      [n('created'), 'criado', 'criados'],
+      [n('updated'), 'atualizado', 'atualizados'],
+      [n('unarchived'), 'reativado', 'reativados'],
+      [n('failed'), 'falhou', 'falharam'],
+    ]);
+    const iguais = n('inalterados');
+    return [txt, iguais ? `${iguais} sem mudança` : ''].filter(Boolean).join(' · ') || 'nada a fazer';
   }
-  const txt = typeof v === 'string' ? v : JSON.stringify(v);
-  return txt.length > 120 ? `${txt.slice(0, 120)}…` : txt;
+  // Extract de alunos.
+  if ('uniqueStudents' in o) {
+    return `${n('uniqueStudents')} alunos lidos do RM · ${n('batches')} lote(s)`;
+  }
+  // Professores.
+  if ('pulados_sem_email' in o || 'vinculados' in o) {
+    return (
+      partes([
+        [n('criados'), 'professor criado', 'professores criados'],
+        [n('vinculados'), 'vínculo novo', 'vínculos novos'],
+        [n('mapeados'), 'mapeado', 'mapeados'],
+      ]) || 'nada novo'
+    ) + (n('pulados_sem_email') ? ` · ${n('pulados_sem_email')} sem e-mail no RM` : '');
+  }
+  // Turmas (só leitura).
+  if ('lidasDoRm' in o && 'mapeadasAtivas' in o) {
+    return `${n('lidasDoRm')} turma-disciplina lidas do RM · ${n('mapeadasAtivas')} mapeadas`;
+  }
+  // Nota escrita.
+  if ('notasEnviadas' in o) {
+    const div = n('divergentes') + n('recusadas');
+    return `${n('notasEnviadas')} nota(s) enviada(s) · ${n('conferidas')} conferida(s)${div ? ` · ${div} com problema` : ''}`;
+  }
+  // Frequência escrita.
+  if ('escritas' in o && 'recusadas' in o) {
+    return `${n('escritas')} linha(s) de frequência escrita(s)${n('recusadas') ? ` · ${n('recusadas')} recusada(s)` : ''}`;
+  }
+
+  const txt = JSON.stringify(v);
+  return txt.length > 140 ? `${txt.slice(0, 140)}…` : txt;
 }
 
 /**
