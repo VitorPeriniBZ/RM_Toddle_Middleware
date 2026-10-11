@@ -1,7 +1,9 @@
 # Transcrição do áudio: `djan_bateria.m4a` (4min42s)
 
 Transcrito com Whisper (`large-v3` e `large-v3-turbo`, rodando localmente) e
-revisado comparando as duas saídas. São duas pessoas conversando: quem passa
+revisado comparando as duas saídas. Os trechos que viram afirmação no site
+(00:08, 00:26 e 01:29) foram transcritos de novo isoladamente, sem nenhuma dica
+de contexto para o modelo, para não induzir palavras. São duas pessoas conversando: quem passa
 o briefing e quem vai fazer o site. As falas curtas de resposta aparecem com
 travessão (—). Trechos entre colchetes são interpretação de áudio pouco claro,
 e `[?]` marca palavra incerta.
@@ -17,7 +19,12 @@ autorizado da Moura, ele é o único aqui da Grande Vitória.
 **[00:17]** O atendimento dele é 24 horas. Inclusive ele gosta de fixar esse
 negócio: finais de semana e feriados, que ele realmente atende.
 
-**[00:26]** O forte dele é a Moura e a Heliar.
+**[00:26]** O forte dele é a Moura e a [Heliar?].
+
+> Trecho pouco nítido. Sem dica de contexto, os modelos escrevem "a Moura L.A."
+> na maioria das tentativas; em 2 de 18 sai "Eliá"/"Eliar", que é como
+> "Heliar" costuma ser pronunciado. É a leitura mais provável, mas vale ouvir
+> o áudio em 00:26 para confirmar.
 
 **[00:30]** Mas ele atende um cacareco de negócio, por isso que eu tenho que
 estar com ele também.
