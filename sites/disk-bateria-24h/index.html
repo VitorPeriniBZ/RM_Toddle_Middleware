@@ -17,11 +17,11 @@
   "@type": "AutoPartsStore",
   "name": "Disk Bateria 24h",
   "description": "Venda, entrega e instalação de baterias 24 horas. Único revendedor autorizado Moura da Grande Vitória.",
-  "telephone": "+55-27-3324-4040",
+  "telephone": ["+55-27-99902-4816", "+55-27-3324-4040"],
   "email": "diskbateria24hs@hotmail.com",
   "address": {
     "@type": "PostalAddress",
-    "streetAddress": "Av. Aloísio Simões, 625",
+    "streetAddress": "Rua Aloísio Simões, 625",
     "addressLocality": "Vitória",
     "addressRegion": "ES",
     "addressCountry": "BR"
@@ -171,7 +171,7 @@
   .hero-fixo { display: flex; align-items: center; gap: 14px; margin-top: 30px; color: #BDBDC2; font-size: 15px; }
   .hero-fixo a { font-family: var(--font-display); font-weight: 900; font-size: 36px; color: var(--white); text-decoration: none; letter-spacing: 1px; line-height: 1; }
   .hero-fixo a:hover { color: var(--yellow); }
-  .hero-fixo svg { width: 34px; height: 34px; color: var(--red); flex: none; }
+  .hero-fixo svg { width: 34px; height: 34px; color: var(--whats); flex: none; }
 
   .live { display: inline-flex; align-items: center; margin-top: 16px; font-size: 15px; color: #CFCFD3; }
 
@@ -393,7 +393,6 @@
     font-family: var(--font-display); font-weight: 900; font-size: 14px; border: 2px solid var(--white);
   }
   @keyframes ring { 0% { transform: scale(1); opacity: .6; } 100% { transform: scale(1.7); opacity: 0; } }
-  .float-call { display: none; }
 
   /* ---------- Revelar ao rolar ---------- */
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
@@ -439,11 +438,6 @@
     .pay { padding: 22px; }
     .float-whats { right: 14px; bottom: 14px; }
     .float-whats .label { display: none; }
-    .float-call {
-      display: grid; place-items: center; position: fixed; left: 14px; bottom: 14px; z-index: 60;
-      width: 58px; height: 58px; border-radius: 50%; background: var(--red); color: var(--white); box-shadow: 0 10px 26px rgba(229,36,33,.45);
-    }
-    .float-call svg { width: 26px; height: 26px; }
     .map, .map iframe { min-height: 320px; }
   }
 
@@ -495,8 +489,7 @@
   <div class="wrap">
     <span><span class="status-dot" aria-hidden="true"></span><span>Aberto agora · 24h, inclusive fins de semana e feriados</span></span>
     <span class="topbar-phones">
-      <a data-tel="fixo" href="tel:+552733244040">(27) 3324-4040</a>
-      <a class="hide-sm" data-tel="celular" href="tel:+5527999819396">(27) 99981-9396</a>
+      <a data-wa="Olá! Vim pelo site da Disk Bateria 24h." href="https://wa.me/5527999024816">WhatsApp <span data-numero>(27) 99902-4816</span></a>
     </span>
   </div>
 </div>
@@ -515,7 +508,7 @@
       <a href="#como-funciona">Como funciona</a>
       <a href="#onde-estamos">Onde estamos</a>
     </nav>
-    <a class="btn btn-whats" data-wa="Olá! Vim pelo site da Disk Bateria 24h e quero falar com um especialista." href="https://wa.me/5527999819396">
+    <a class="btn btn-whats" data-wa="Olá! Vim pelo site da Disk Bateria 24h e quero falar com um especialista." href="https://wa.me/5527999024816">
       <svg aria-hidden="true"><use href="#i-whats"/></svg> Chamar no Whats
     </a>
     <button class="menu-toggle" id="menu-toggle" aria-expanded="false" aria-controls="nav" aria-label="Abrir menu">
@@ -537,18 +530,18 @@
         <h1><span class="line">Bateria arriou?</span> <span class="line red">A gente chega.</span> <span class="line big24">24 horas.</span></h1>
         <p class="hero-lead">Entrega e instalação no local, <strong>de dia, de madrugada, no fim de semana e no feriado</strong>. Atendemos Vitória, Vila Velha, Cariacica, Serra e Viana.</p>
         <div class="hero-ctas">
-          <a class="btn btn-whats" data-wa="Olá! Vim pelo site e quero falar com um especialista em baterias." href="https://wa.me/5527999819396">
+          <a class="btn btn-whats" data-wa="Olá! Vim pelo site e quero falar com um especialista em baterias." href="https://wa.me/5527999024816">
             <svg aria-hidden="true"><use href="#i-whats"/></svg> Fale com o especialista
           </a>
-          <a class="btn btn-ghost" data-wa="Olá! Quero agendar a troca da bateria. Meu veículo é: " href="https://wa.me/5527999819396">
+          <a class="btn btn-ghost" data-wa="Olá! Quero agendar a troca da bateria. Meu veículo é: " href="https://wa.me/5527999024816">
             Agende sua troca
           </a>
         </div>
         <div class="hero-fixo">
-          <svg aria-hidden="true"><use href="#i-phone"/></svg>
+          <svg aria-hidden="true"><use href="#i-whats"/></svg>
           <div>
-            Ou ligue no fixo de sempre
-            <div><a data-tel="fixo" href="tel:+552733244040">3324-4040</a></div>
+            WhatsApp 24 horas
+            <div><a data-wa="Olá! Vim pelo site da Disk Bateria 24h e preciso de atendimento." data-numero href="https://wa.me/5527999024816">(27) 99902-4816</a></div>
           </div>
         </div>
         <p class="live"><span class="status-dot" aria-hidden="true"></span><span data-status>Aberto agora.</span></p>
@@ -574,7 +567,7 @@
           <path class="bolt" d="M176 98 132 166h28l-12 54 46-76h-28l16-46z" stroke="#1B1B1D" stroke-width="6" stroke-linejoin="round" paint-order="stroke"/>
         </svg>
 
-        <a class="balloon" data-wa="Olá! Preciso de atendimento 24h. Estou em: " href="https://wa.me/5527999819396" aria-label="Atendimento 24 horas: chamar no WhatsApp">
+        <a class="balloon" data-wa="Olá! Preciso de atendimento 24h. Estou em: " href="https://wa.me/5527999024816" aria-label="Atendimento 24 horas: chamar no WhatsApp">
           <span class="balloon-cta" aria-hidden="true">Clique no 24h<span>↘</span></span>
           <svg viewBox="0 0 150 250" aria-hidden="true">
             <path d="M75 172 C 60 200, 92 220, 70 250" fill="none" stroke="#BDBDC2" stroke-width="2"/>
@@ -652,37 +645,37 @@
         <p>Não é só carro. Se anda, navega ou precisa ficar ligado, a gente tem a bateria certa e instala.</p>
       </div>
       <div class="types">
-        <a class="type-card reveal" data-wa="Olá! Preciso de bateria para CARRO. Modelo/ano: " href="https://wa.me/5527999819396">
+        <a class="type-card reveal" data-wa="Olá! Preciso de bateria para CARRO. Modelo/ano: " href="https://wa.me/5527999024816">
           <span class="ico"><svg aria-hidden="true"><use href="#i-car"/></svg></span>
           <h3>Carros</h3>
           <p>Passeio, SUV e utilitários. Inclusive AGM, para carros com start-stop.</p>
           <span class="go">Pedir orçamento <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
         </a>
-        <a class="type-card reveal" data-wa="Olá! Preciso de bateria para MOTO. Modelo/ano: " href="https://wa.me/5527999819396">
+        <a class="type-card reveal" data-wa="Olá! Preciso de bateria para MOTO. Modelo/ano: " href="https://wa.me/5527999024816">
           <span class="ico"><svg aria-hidden="true"><use href="#i-moto"/></svg></span>
           <h3>Motos</h3>
           <p>Da scooter à big trail, com bateria selada ou ventilada.</p>
           <span class="go">Pedir orçamento <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
         </a>
-        <a class="type-card reveal" data-wa="Olá! Preciso de bateria para CAMINHÃO/ÔNIBUS. Veículo: " href="https://wa.me/5527999819396">
+        <a class="type-card reveal" data-wa="Olá! Preciso de bateria para CAMINHÃO/ÔNIBUS. Veículo: " href="https://wa.me/5527999024816">
           <span class="ico"><svg aria-hidden="true"><use href="#i-truck"/></svg></span>
           <h3>Caminhões e ônibus</h3>
           <p>Baterias de alta capacidade para frota e veículo pesado.</p>
           <span class="go">Pedir orçamento <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
         </a>
-        <a class="type-card reveal" data-wa="Olá! Preciso de bateria NÁUTICA (lancha/barco/jet-ski). Embarcação: " href="https://wa.me/5527999819396">
+        <a class="type-card reveal" data-wa="Olá! Preciso de bateria NÁUTICA (lancha/barco/jet-ski). Embarcação: " href="https://wa.me/5527999024816">
           <span class="ico"><svg aria-hidden="true"><use href="#i-boat"/></svg></span>
           <h3>Náutica</h3>
           <p>Lancha, barco, navio e jet-ski. Partida e serviço a bordo.</p>
           <span class="go">Pedir orçamento <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
         </a>
-        <a class="type-card reveal" data-wa="Olá! Preciso de bateria ESTACIONÁRIA / NO-BREAK. Uso: " href="https://wa.me/5527999819396">
+        <a class="type-card reveal" data-wa="Olá! Preciso de bateria ESTACIONÁRIA / NO-BREAK. Uso: " href="https://wa.me/5527999024816">
           <span class="ico"><svg aria-hidden="true"><use href="#i-plug"/></svg></span>
           <h3>Estacionárias</h3>
           <p>No-break, energia solar, alarme, portão e telecom.</p>
           <span class="go">Pedir orçamento <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
         </a>
-        <a class="type-card reveal" data-wa="Olá! Preciso de bateria TRACIONÁRIA (empilhadeira/máquina). Equipamento: " href="https://wa.me/5527999819396">
+        <a class="type-card reveal" data-wa="Olá! Preciso de bateria TRACIONÁRIA (empilhadeira/máquina). Equipamento: " href="https://wa.me/5527999024816">
           <span class="ico"><svg aria-hidden="true"><use href="#i-forklift"/></svg></span>
           <h3>Tracionárias</h3>
           <p>Empilhadeiras, paleteiras e máquinas elétricas.</p>
@@ -706,7 +699,7 @@
           <li><svg aria-hidden="true"><use href="#i-check"/></svg> Teste e instalação na hora, onde você estiver</li>
         </ul>
         <div class="hero-ctas">
-          <a class="btn btn-dark" data-wa="Olá! Quero uma bateria MOURA. Meu veículo é: " href="https://wa.me/5527999819396">Quero uma Moura</a>
+          <a class="btn btn-dark" data-wa="Olá! Quero uma bateria MOURA. Meu veículo é: " href="https://wa.me/5527999024816">Quero uma Moura</a>
         </div>
       </div>
       <div class="moura-art reveal">
@@ -730,7 +723,7 @@
         <span class="eyebrow">Check-up elétrico</span>
         <h2>Seu carro está gerando?</h2>
         <p>Às vezes o problema não é a bateria. Antes de trocar, a gente testa o sistema elétrico inteiro e mostra o resultado. Você só paga pelo que precisa.</p>
-        <a class="btn btn-red" data-wa="Olá! Quero fazer o CHECK-UP ELÉTRICO do meu veículo. Veículo: " href="https://wa.me/5527999819396">
+        <a class="btn btn-red" data-wa="Olá! Quero fazer o CHECK-UP ELÉTRICO do meu veículo. Veículo: " href="https://wa.me/5527999024816">
           <svg aria-hidden="true"><use href="#i-gauge"/></svg> Agendar check-up
         </a>
       </div>
@@ -770,7 +763,7 @@
       <div class="steps">
         <div class="step reveal">
           <h3>Chame a gente</h3>
-          <p>Pelo WhatsApp ou no 3324-4040. Diga o veículo e onde ele está.</p>
+          <p>Pelo WhatsApp <span data-numero>(27) 99902-4816</span>. Diga o veículo e onde ele está.</p>
         </div>
         <div class="step reveal">
           <h3>Vamos até você</h3>
@@ -789,7 +782,7 @@
             <span>No cartão de crédito. Bateria nova sem apertar o orçamento.</span>
           </div>
         </div>
-        <a class="btn btn-whats" data-wa="Olá! Quero um orçamento de bateria em 10x sem juros. Meu veículo é: " href="https://wa.me/5527999819396">
+        <a class="btn btn-whats" data-wa="Olá! Quero um orçamento de bateria em 10x sem juros. Meu veículo é: " href="https://wa.me/5527999024816">
           <svg aria-hidden="true"><use href="#i-whats"/></svg> Pedir orçamento
         </a>
       </div>
@@ -832,7 +825,7 @@
         <div class="address-big">
           <svg aria-hidden="true"><use href="#i-pin"/></svg>
           <div>
-            <strong>Av. Aloísio Simões, 625</strong>
+            <strong>Rua Aloísio Simões, 625</strong>
             <span>Bento Ferreira · Vitória · ES</span>
           </div>
         </div>
@@ -851,14 +844,14 @@
           </ul>
         </div>
         <div class="hero-ctas" style="margin-top:0">
-          <a class="btn btn-dark" href="https://www.google.com/maps/dir/?api=1&destination=Av.+Alo%C3%ADsio+Sim%C3%B5es%2C+625+-+Bento+Ferreira%2C+Vit%C3%B3ria+-+ES" target="_blank" rel="noopener">
+          <a class="btn btn-dark" href="https://www.google.com/maps/dir/?api=1&destination=Rua+Alo%C3%ADsio+Sim%C3%B5es%2C+625+-+Bento+Ferreira%2C+Vit%C3%B3ria+-+ES" target="_blank" rel="noopener">
             <svg aria-hidden="true"><use href="#i-pin"/></svg> Como chegar
           </a>
         </div>
       </div>
       <div class="map reveal">
-        <iframe title="Mapa: Disk Bateria 24h, Av. Aloísio Simões, 625, Bento Ferreira, Vitória" loading="lazy" referrerpolicy="no-referrer-when-downgrade"
-          src="https://maps.google.com/maps?q=Av.%20Alo%C3%ADsio%20Sim%C3%B5es%2C%20625%20-%20Bento%20Ferreira%2C%20Vit%C3%B3ria%20-%20ES&z=16&output=embed"></iframe>
+        <iframe title="Mapa: Disk Bateria 24h, Rua Aloísio Simões, 625, Bento Ferreira, Vitória" loading="lazy" referrerpolicy="no-referrer-when-downgrade"
+          src="https://maps.google.com/maps?q=Rua%20Alo%C3%ADsio%20Sim%C3%B5es%2C%20625%20-%20Bento%20Ferreira%2C%20Vit%C3%B3ria%20-%20ES&z=16&output=embed"></iframe>
       </div>
     </div>
   </section>
@@ -866,11 +859,11 @@
   <!-- Chamada final -->
   <section class="section final" id="contato">
     <div class="wrap">
-      <h2>Bateria arriou? Liga:</h2>
-      <a class="slogan" data-tel="fixo" href="tel:+552733244040">3324-4040</a>
-      <p>Ou chama no WhatsApp. A qualquer hora, qualquer dia.</p>
+      <h2>Bateria arriou? Chama no Whats:</h2>
+      <a class="slogan" data-wa="Olá! Preciso de uma bateria agora. Estou em: " data-numero href="https://wa.me/5527999024816">99902-4816</a>
+      <p>A qualquer hora, qualquer dia. Inclusive fins de semana e feriados.</p>
       <div class="hero-ctas">
-        <a class="btn btn-dark" data-wa="Olá! Preciso de uma bateria agora. Estou em: " href="https://wa.me/5527999819396">
+        <a class="btn btn-dark" data-wa="Olá! Preciso de uma bateria agora. Estou em: " href="https://wa.me/5527999024816">
           <svg aria-hidden="true"><use href="#i-whats"/></svg> Chamar no WhatsApp
         </a>
       </div>
@@ -896,13 +889,13 @@
         <h3>Telefones</h3>
         <ul class="phone-list" id="lista-telefones">
           <!-- Preenchida pelo script a partir de CONFIG; isto é o conteúdo sem JS. -->
+          <li class="is-whats"><a href="https://wa.me/5527999024816"><svg aria-hidden="true"><use href="#i-whats"/></svg><span><small>WhatsApp</small>(27) 99902-4816</span></a></li>
           <li><a href="tel:+552733244040"><svg aria-hidden="true"><use href="#i-phone"/></svg><span><small>Fixo</small>(27) 3324-4040</span></a></li>
-          <li class="is-whats"><a href="https://wa.me/5527999819396"><svg aria-hidden="true"><use href="#i-whats"/></svg><span><small>WhatsApp</small>(27) 99981-9396</span></a></li>
         </ul>
       </div>
       <div>
         <h3>Endereço</h3>
-        <p style="margin-top:0">Av. Aloísio Simões, 625<br>Bento Ferreira, Vitória · ES</p>
+        <p style="margin-top:0">Rua Aloísio Simões, 625<br>Bento Ferreira, Vitória · ES</p>
         <p><strong style="color:#fff">Atendimento 24 horas</strong><br>Segunda a domingo, inclusive feriados</p>
       </div>
     </div>
@@ -914,26 +907,20 @@
 </footer>
 
 <!-- WhatsApp flutuante: acompanha a rolagem da página -->
-<a class="float-whats" id="float-whats" data-wa="Olá! Vim pelo site da Disk Bateria 24h e preciso de atendimento." href="https://wa.me/5527999819396" aria-label="Chamar no WhatsApp, atendimento 24 horas">
+<a class="float-whats" id="float-whats" data-wa="Olá! Vim pelo site da Disk Bateria 24h e preciso de atendimento." href="https://wa.me/5527999024816" aria-label="Chamar no WhatsApp, atendimento 24 horas">
   <span class="label">Bateria arriou? Chama aqui!</span>
   <span class="bubble"><svg aria-hidden="true"><use href="#i-whats"/></svg><span class="tag24">24h</span></span>
-</a>
-<a class="float-call" data-tel="fixo" href="tel:+552733244040" aria-label="Ligar para 3324-4040">
-  <svg aria-hidden="true"><use href="#i-phone"/></svg>
 </a>
 
 <script>
   /*
    * Telefones do site. Mudou um número? Troque só aqui.
    *
-   * celularPrincipal: o briefing pede o celular terminado em 4816 como principal,
-   *   mas o número completo ainda não veio. Enquanto estiver vazio, os botões de
-   *   WhatsApp usam o celularSecundario. Preenchido, ele vira o número de todos os
-   *   botões e aparece primeiro na lista de telefones.
+   * whatsapp: o número principal, usado em todos os botões e chamadas.
+   * fixo: aparece só na lista de telefones do rodapé.
    */
   const CONFIG = {
-    celularPrincipal: '',             // ex.: '27 9xxxx-4816'
-    celularSecundario: '27 99981-9396',
+    whatsapp: '27 99902-4816',
     fixo: '27 3324-4040',
   };
 
@@ -944,26 +931,23 @@
       ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`
       : `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   };
-  const celularWhats = CONFIG.celularPrincipal || CONFIG.celularSecundario;
-  const linkWhats = (msg) => `https://wa.me/55${digitos(celularWhats)}?text=${encodeURIComponent(msg)}`;
+  const linkWhats = (msg) => `https://wa.me/55${digitos(CONFIG.whatsapp)}?text=${encodeURIComponent(msg)}`;
 
   document.querySelectorAll('[data-wa]').forEach((a) => {
     a.href = linkWhats(a.dataset.wa);
     a.target = '_blank';
     a.rel = 'noopener';
   });
-  document.querySelectorAll('[data-tel]').forEach((a) => {
-    const n = a.dataset.tel === 'fixo' ? CONFIG.fixo : celularWhats;
-    a.href = `tel:+55${digitos(n)}`;
-    if (!a.querySelector('svg')) a.textContent = a.classList.contains('slogan') || a.closest('.hero-fixo') ? formatar(n).slice(5) : formatar(n);
+  // Onde o número do WhatsApp aparece escrito (a chamada final mostra sem o DDD)
+  document.querySelectorAll('[data-numero]').forEach((el) => {
+    el.textContent = el.classList.contains('slogan') ? formatar(CONFIG.whatsapp).slice(5) : formatar(CONFIG.whatsapp);
   });
 
   // Lista de telefones do rodapé
   const telefones = [
-    CONFIG.celularPrincipal && { tipo: 'WhatsApp principal', n: CONFIG.celularPrincipal, whats: true },
-    { tipo: CONFIG.celularPrincipal ? 'WhatsApp / celular' : 'WhatsApp', n: CONFIG.celularSecundario, whats: !CONFIG.celularPrincipal },
+    { tipo: 'WhatsApp', n: CONFIG.whatsapp, whats: true },
     { tipo: 'Fixo', n: CONFIG.fixo },
-  ].filter(Boolean);
+  ];
   document.getElementById('lista-telefones').innerHTML = telefones.map((t) => `
     <li class="${t.whats ? 'is-whats' : ''}">
       <a href="${t.whats ? linkWhats('Olá! Vim pelo site da Disk Bateria 24h.') : 'tel:+55' + digitos(t.n)}"${t.whats ? ' target="_blank" rel="noopener"' : ''}>
