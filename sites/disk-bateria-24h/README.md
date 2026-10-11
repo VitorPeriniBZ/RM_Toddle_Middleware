@@ -6,8 +6,9 @@ ar hoje (diskbateria24hs.com.br). A ideia, como diz o áudio, é mostrar pronto
 para o cliente e ajustar em cima, em vez de criar do zero com ele.
 
 É um arquivo só: [`index.html`](index.html). Abre direto no navegador, sem
-build e sem servidor. Fontes vêm do Google Fonts e o mapa é o embed do Google
-Maps; o resto é HTML/CSS/JS dentro do arquivo.
+build e sem servidor. Tudo vai dentro do arquivo, inclusive as fontes (Barlow e
+Barlow Condensed, licença OFL) e a foto da Moura, então ele abre igual mesmo
+sem internet. Só o mapa depende de conexão (é o embed do Google Maps).
 
 ## O que o briefing pediu → onde está no site
 
